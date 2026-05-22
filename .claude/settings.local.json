@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(npx vue-cli-service:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080)",
+      "Bash(venv/Scripts/python -c ':*)",
+      "Bash(\"venv/Scripts/python\" reset_db.py)",
+      "Read(//d/myWork/研究生/competition/字节全栈挑战赛/WeAgent/backend/**)",
+      "Bash(ps -o lstart= -p 47408)",
+      "Bash(ps -o lstart= -p 6332)",
+      "Bash(kill -9 47408 6332)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 47408)",
+      "Bash(taskkill //F //PID 6332)",
+      "Bash(tasklist //FI \"PID eq 47408\")"
+    ]
+  }
+}

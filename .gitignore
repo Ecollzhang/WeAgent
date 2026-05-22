@@ -1,0 +1,53 @@
+# ===== 环境 =====
+.env
+backend/.env
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# ===== Python 依赖 =====
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# ===== Node 依赖 =====
+frontend/node_modules/
+frontend/dist/
+
+# ===== 日志 =====
+*.log
+backend/*.log
+flask_output.log
+server.log
+
+# ===== 上传文件 =====
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== 数据库 =====
+*.db
+*.sqlite
+backend/*.db
+backend/*.sqlite
+
+# ===== 迁移备份 =====
+backend/migrations/versions/*.pyc
+
+# ===== pytest / coverage =====
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,38 @@
+from app.models import BaseModel, db
+
+
+class Conversation(BaseModel):
+    """Conversation/Dialog model."""
+    __tablename__ = 'conversations'
+
+    title = db.Column(db.String(200), nullable=False, default='New Conversation')
+    type = db.Column(db.Enum('single', 'group', name='conversation_type'),
+                     nullable=False, default='single')
+    owner_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+
+    # Relationships
+    participants = db.relationship('ConversationParticipant', backref='conversation',
+                                   lazy='joined', cascade='all, delete-orphan')
+    messages = db.relationship('Message', backref='conversation',
+                               lazy='dynamic', cascade='all, delete-orphan',
+                               order_by='Message.created_at')
+
+
+class ConversationParticipant(BaseModel):
+    """Conversation participant model."""
+    __tablename__ = 'conversation_participants'
+
+    conversation_id = db.Column(db.String(36), db.ForeignKey('conversations.id'),
+                                nullable=False)
+    participant_type = db.Column(db.Enum('user', 'agent', name='participant_type'),
+                                 nullable=False)
+    participant_id = db.Column(db.String(36), nullable=False)
+    participant_name = db.Column(db.String(200), default='')
+    participant_avatar = db.Column(db.String(500), default='')
+    participant_color = db.Column(db.String(20), default='')
+    joined_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    __table_args__ = (
+        db.UniqueConstraint('conversation_id', 'participant_type', 'participant_id',
+                            name='uq_conversation_participant'),
+    )
