@@ -51,3 +51,6 @@ backend/migrations/versions/*.pyc
 .pytest_cache/
 .coverage
 htmlcov/
+
+# ===== docs =====
+docs/archive-registry.md
