@@ -56,12 +56,15 @@ class CliStreamingAdaptersTest(unittest.TestCase):
             events = list(CodexAdapter().stream(request))
 
         command = popen.call_args.args[0]
+        kwargs = popen.call_args.kwargs
         self.assertEqual("codex", command[0])
         self.assertEqual(["codex", "exec", "--json", "--cd"], command[:4])
         self.assertIn("--sandbox", command)
         self.assertIn("workspace-write", command)
         self.assertIn("--skip-git-repo-check", command)
         self.assertEqual("build it", command[-1])
+        self.assertEqual("utf-8", kwargs["encoding"])
+        self.assertEqual("replace", kwargs["errors"])
         self.assertEqual(["agent.started", "message.delta", "message.completed"], [event["type"] for event in events])
 
     def test_claude_streams_jsonl_events_with_expected_command(self):
@@ -89,6 +92,7 @@ class CliStreamingAdaptersTest(unittest.TestCase):
                 "-p",
                 "--output-format",
                 "stream-json",
+                "--verbose",
                 "--include-partial-messages",
                 "--permission-mode",
                 "plan",
@@ -97,6 +101,8 @@ class CliStreamingAdaptersTest(unittest.TestCase):
             command,
         )
         self.assertEqual(str(Path("E:/workspace")), kwargs["cwd"])
+        self.assertEqual("utf-8", kwargs["encoding"])
+        self.assertEqual("replace", kwargs["errors"])
         self.assertEqual(["agent.started", "message.delta", "message.completed"], [event["type"] for event in events])
 
     def test_cli_errors_become_agent_failed_events(self):

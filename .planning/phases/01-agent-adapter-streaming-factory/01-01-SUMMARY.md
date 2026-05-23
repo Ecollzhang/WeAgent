@@ -37,6 +37,7 @@ metrics:
 - Added `AgentAdapterFactory` with registered `mock`, `claude`, `codex`, and `opencode` providers.
 - Added deterministic `MockAdapter` streaming events.
 - Implemented Codex and Claude Code CLI streaming adapters with JSONL parsing and `agent.failed` fallback events.
+- Verified real Claude Code streaming; Claude Code 2.1.150 requires `--verbose` with `--output-format stream-json`.
 - Added provider normalizers for text deltas, completions, tool events, artifacts, and failures.
 
 ## Deferred

@@ -16,6 +16,7 @@ class ClaudeAdapter(BaseAgentAdapter):
             "-p",
             "--output-format",
             "stream-json",
+            "--verbose",
             "--include-partial-messages",
             "--permission-mode",
             "plan",
@@ -30,6 +31,8 @@ class ClaudeAdapter(BaseAgentAdapter):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except FileNotFoundError as exc:
             yield make_event("agent.failed", request, error=str(exc))

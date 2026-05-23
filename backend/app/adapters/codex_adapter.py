@@ -30,6 +30,8 @@ class CodexAdapter(BaseAgentAdapter):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except FileNotFoundError as exc:
             yield make_event("agent.failed", request, error=str(exc))

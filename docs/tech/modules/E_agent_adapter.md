@@ -125,6 +125,7 @@ for line in process.stdout:
 ```bash
 claude -p \
   --output-format stream-json \
+  --verbose \
   --include-partial-messages \
   --permission-mode plan \
   "<user_prompt>"
@@ -196,4 +197,3 @@ Mock 不只是测试用，它也是 Demo 风险控制。
 - [D Orchestrator 编排层](./D_orchestrator.md)
 - [F Runtime 与 Sandbox 层](./F_runtime_sandbox.md)
 - [事件协议附录](../appendices/event_protocol_reference.md)
-
