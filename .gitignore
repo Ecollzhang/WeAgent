@@ -10,6 +10,7 @@ backend/venv/
 backend/__pycache__/
 backend/**/__pycache__/
 *.pyc
+*.pyc*
 *.pyo
 *.egg-info/
 dist/
@@ -55,3 +56,5 @@ htmlcov/
 # ===== docs =====
 docs/archive-registry.md
 docs/ai-collab/
+.planning/*.lock
+.pycache_verify/

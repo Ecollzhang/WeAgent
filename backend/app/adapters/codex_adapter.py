@@ -1,47 +1,65 @@
+import json
+import subprocess
+
 from app.adapters.base_adapter import BaseAgentAdapter
+from app.adapters.normalizers import normalize_codex_event
+from app.adapters.types import make_event, resolve_workspace_path
 
 
 class CodexAdapter(BaseAgentAdapter):
-    """Adapter for Codex AI agent.
+    """Adapter for Codex CLI JSONL streaming."""
 
-    Currently returns mock responses. Will be connected to actual Codex API.
-    """
+    def stream(self, request):
+        workspace_path = request.workspace_path or resolve_workspace_path()
+        command = [
+            "codex",
+            "exec",
+            "--json",
+            "--cd",
+            str(workspace_path),
+            "--sandbox",
+            "workspace-write",
+            "--skip-git-repo-check",
+            request.prompt,
+        ]
 
-    def send_prompt(self, prompt, context=None):
-        """Send prompt to Codex and return response."""
-        context = context or {}
-        agent_name = context.get('agent_name', 'Codex')
-
-        prompt_lower = prompt.lower()
-
-        if 'hello' in prompt_lower or 'hi' in prompt_lower:
-            return f"Hi! I'm **{agent_name}**, specialized in code generation and completion."
-
-        if 'python' in prompt_lower or '代码' in prompt_lower:
-            return (
-                f"Here's optimized Python code for your request:\n\n"
-                f"```python\n"
-                f"from functools import lru_cache\n\n"
-                f"@lru_cache(maxsize=None)\n"
-                f"def fibonacci(n: int) -> int:\n"
-                f"    \"\"\"Compute nth Fibonacci number efficiently using memoization.\"\"\"\n"
-                f"    if n < 2:\n"
-                f"        return n\n"
-                f"    return fibonacci(n - 1) + fibonacci(n - 2)\n\n"
-                f"# Generate first 20 Fibonacci numbers\n"
-                f"fib_sequence = [fibonacci(i) for i in range(20)]\n"
-                f"print(fib_sequence)\n"
-                f"```\n\n"
-                f"This implementation uses **memoization** for O(n) complexity. "
-                f"The `@lru_cache` decorator automatically caches results."
+        yield make_event("agent.started", request)
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
+        except FileNotFoundError as exc:
+            yield make_event("agent.failed", request, error=str(exc))
+            return
 
-        return (
-            f"**{agent_name}** received your request.\n\n"
-            f"I'm analyzing the code requirements. I specialize in:\n"
-            f"- Code completion and suggestions\n"
-            f"- Multi-language support (Python, JS, TS, Go, Rust)\n"
-            f"- Performance optimization\n"
-            f"- Test generation\n\n"
-            f"I'll prepare the best solution for you!"
-        )
+        yield from self._stream_process_events(process, request)
+
+    def _stream_process_events(self, process, request):
+        for line in process.stdout or []:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw_event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                yield make_event(
+                    "agent.failed",
+                    request,
+                    error=f"Invalid JSON from Codex CLI: {exc}",
+                )
+                return
+
+            for event in normalize_codex_event(raw_event, request):
+                yield event
+
+        return_code = process.wait()
+        if return_code:
+            stderr = process.stderr.read() if process.stderr else ""
+            yield make_event(
+                "agent.failed",
+                request,
+                error=stderr or f"Codex CLI exited with code {return_code}",
+            )

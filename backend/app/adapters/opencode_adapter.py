@@ -1,4 +1,5 @@
 from app.adapters.base_adapter import BaseAgentAdapter
+from app.adapters.types import make_event
 
 
 class OpenCodeAdapter(BaseAgentAdapter):
@@ -6,6 +7,15 @@ class OpenCodeAdapter(BaseAgentAdapter):
 
     Currently returns mock responses. Will be connected to actual OpenCode API.
     """
+
+    def stream(self, request):
+        content = self.send_prompt(
+            request.prompt,
+            {"agent_name": request.agent_name or "OpenCode"},
+        )
+        yield make_event("agent.started", request)
+        yield make_event("message.delta", request, content=content, text=content)
+        yield make_event("message.completed", request, content=content, finalText=content)
 
     def send_prompt(self, prompt, context=None):
         """Send prompt to OpenCode and return response."""
