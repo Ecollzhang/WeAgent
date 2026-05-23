@@ -16,3 +16,4 @@ REQ-06: Add focused tests for factory lookup, mock streaming, event normalizatio
 
 REQ-07: Document runtime assumptions, CLI commands, failure modes, and the future SDK upgrade path.
 
+REQ-08: Update the primary frontend SSE consumer so `message.delta`, `message.completed`, and `agent.failed` events can render an in-progress agent response instead of waiting for a fully persisted message.
