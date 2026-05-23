@@ -10,6 +10,11 @@ def normalize_codex_event(raw, request):
     if raw_type in ("message_completed", "agent_message", "final_answer"):
         return [_message_completed(request, raw.get("content") or raw.get("message") or raw.get("text", ""))]
 
+    if raw_type == "item.completed":
+        item = raw.get("item") or {}
+        if item.get("type") == "agent_message":
+            return [_message_completed(request, item.get("text", ""))]
+
     if raw_type == "tool_call":
         return [
             make_event(

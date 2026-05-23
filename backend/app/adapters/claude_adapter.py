@@ -34,7 +34,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                 encoding="utf-8",
                 errors="replace",
             )
-        except FileNotFoundError as exc:
+        except OSError as exc:
             yield make_event("agent.failed", request, error=str(exc))
             return
 

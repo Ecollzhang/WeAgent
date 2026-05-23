@@ -24,6 +24,13 @@ class AdapterNormalizerTest(unittest.TestCase):
         completed_events = normalize_codex_event(
             {"type": "message_completed", "content": "hello world"}, self.request
         )
+        item_completed_events = normalize_codex_event(
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "from codex"},
+            },
+            self.request,
+        )
 
         self.assertEqual("message.delta", delta_events[0]["type"])
         self.assertEqual("hello", delta_events[0]["content"])
@@ -31,6 +38,8 @@ class AdapterNormalizerTest(unittest.TestCase):
         self.assertEqual("message.completed", completed_events[0]["type"])
         self.assertEqual("hello world", completed_events[0]["content"])
         self.assertEqual("hello world", completed_events[0]["finalText"])
+        self.assertEqual("message.completed", item_completed_events[0]["type"])
+        self.assertEqual("from codex", item_completed_events[0]["content"])
 
     def test_codex_normalizes_tools_artifacts_and_errors(self):
         started = normalize_codex_event(

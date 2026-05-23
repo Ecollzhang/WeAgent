@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import subprocess
 
 from app.adapters.base_adapter import BaseAgentAdapter
@@ -12,7 +14,7 @@ class CodexAdapter(BaseAgentAdapter):
     def stream(self, request):
         workspace_path = request.workspace_path or resolve_workspace_path()
         command = [
-            "codex",
+            _codex_executable(),
             "exec",
             "--json",
             "--cd",
@@ -33,7 +35,7 @@ class CodexAdapter(BaseAgentAdapter):
                 encoding="utf-8",
                 errors="replace",
             )
-        except FileNotFoundError as exc:
+        except OSError as exc:
             yield make_event("agent.failed", request, error=str(exc))
             return
 
@@ -47,6 +49,8 @@ class CodexAdapter(BaseAgentAdapter):
             try:
                 raw_event = json.loads(line)
             except json.JSONDecodeError as exc:
+                if _is_ignorable_non_json_line(line):
+                    continue
                 yield make_event(
                     "agent.failed",
                     request,
@@ -65,3 +69,18 @@ class CodexAdapter(BaseAgentAdapter):
                 request,
                 error=stderr or f"Codex CLI exited with code {return_code}",
             )
+
+
+def _codex_executable():
+    if os.name == "nt":
+        return (
+            shutil.which("codex.cmd")
+            or shutil.which("codex.exe")
+            or shutil.which("codex")
+            or "codex"
+        )
+    return shutil.which("codex") or "codex"
+
+
+def _is_ignorable_non_json_line(line):
+    return line.startswith("SUCCESS: The process with PID")

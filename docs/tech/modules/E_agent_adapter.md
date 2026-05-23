@@ -72,6 +72,39 @@ interface AgentAdapter {
 }
 ```
 
+### Python MVP 调用位置
+
+后端 MVP 通过 `AgentAdapterFactory.create(provider)` 创建 adapter，通过
+`AgentRequest.workspace_path` 指定 Claude/Codex 的运行目录。这个字段后续可以由
+sandbox/workspace 层生成并传入。
+
+```py
+from pathlib import Path
+from app.adapters.factory import AgentAdapterFactory
+from app.adapters.types import AgentRequest
+
+adapter = AgentAdapterFactory.create("claude")  # or "codex"
+request = AgentRequest(
+    prompt="Reply briefly.",
+    conversation_id="demo",
+    agent_id="claude-demo",
+    agent_name="Claude Demo",
+    workspace_path=Path(r"E:\code for project\seedance-competition\agentshub\WeAgent"),
+)
+
+for event in adapter.stream(request):
+    print(event)
+```
+
+Workspace 解析顺序：
+
+1. `AgentRequest.workspace_path`
+2. `AGENT_WORKSPACE_ROOT`
+3. WeAgent project root
+
+当前范围只读取并标准化 message 流。hook 失败、MCP 状态、plan mode 提示、
+后台 agent 生命周期等 runtime 事件尚未暴露给 WeAgent。
+
 ## 6. Codex Adapter
 
 推荐思路：
@@ -115,6 +148,14 @@ for line in process.stdout:
 - stderr 输出。
 - exit code 非 0。
 - 文件产物识别。
+
+真实 Codex CLI JSONL 中已观察到的消息形状：
+
+```json
+{"type":"item.completed","item":{"type":"agent_message","text":"codex adapter stream ok"}}
+```
+
+MVP normalizer 会将该形状映射为 `message.completed`。
 
 ## 7. Claude Code Adapter
 

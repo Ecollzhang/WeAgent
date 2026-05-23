@@ -57,8 +57,8 @@ class CliStreamingAdaptersTest(unittest.TestCase):
 
         command = popen.call_args.args[0]
         kwargs = popen.call_args.kwargs
-        self.assertEqual("codex", command[0])
-        self.assertEqual(["codex", "exec", "--json", "--cd"], command[:4])
+        self.assertTrue(command[0].lower().endswith(("codex", "codex.cmd", "codex.exe")))
+        self.assertEqual(["exec", "--json", "--cd"], command[1:4])
         self.assertIn("--sandbox", command)
         self.assertIn("workspace-write", command)
         self.assertIn("--skip-git-repo-check", command)
@@ -114,6 +114,15 @@ class CliStreamingAdaptersTest(unittest.TestCase):
         self.assertEqual("agent.failed", events[-1]["type"])
         self.assertIn("missing", events[-1]["error"])
 
+    def test_cli_start_permission_errors_become_agent_failed_events(self):
+        request = AgentRequest(prompt="x", agent_id="codex", agent_name="Codex")
+
+        with patch("app.adapters.codex_adapter.subprocess.Popen", side_effect=PermissionError("denied")):
+            events = list(CodexAdapter().stream(request))
+
+        self.assertEqual("agent.failed", events[-1]["type"])
+        self.assertIn("denied", events[-1]["error"])
+
     def test_invalid_json_becomes_agent_failed_event(self):
         request = AgentRequest(prompt="x", agent_id="claude", agent_name="Claude")
         process = _FakeProcess(["not json\n"])
@@ -123,6 +132,21 @@ class CliStreamingAdaptersTest(unittest.TestCase):
 
         self.assertEqual("agent.failed", events[-1]["type"])
         self.assertIn("Invalid JSON", events[-1]["error"])
+
+    def test_codex_ignores_known_trailing_non_json_cleanup_lines(self):
+        request = AgentRequest(prompt="x", agent_id="codex", agent_name="Codex")
+        process = _FakeProcess(
+            [
+                '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+                "SUCCESS: The process with PID 123 has been terminated.\n",
+            ]
+        )
+
+        with patch("app.adapters.codex_adapter.subprocess.Popen", return_value=process):
+            events = list(CodexAdapter().stream(request))
+
+        self.assertEqual("message.completed", events[-1]["type"])
+        self.assertEqual("done", events[-1]["content"])
 
     def test_non_zero_exit_becomes_agent_failed_event(self):
         request = AgentRequest(prompt="x", agent_id="codex", agent_name="Codex")
