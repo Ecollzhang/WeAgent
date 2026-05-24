@@ -83,3 +83,11 @@ metrics:
 ## Self-Check: PASSED
 
 The current increment provides working Codex and Claude Code adapters behind a factory, routes the backend user-message path through orchestrator, streams normalized message events through SSE, renders temporary streaming agent messages in the frontend, and preserves the old `get_adapter()` and `send_prompt()` compatibility surfaces.
+
+## Completion Status
+
+- Task 5: completed.
+- Task 6: completed.
+- Task 7: completed.
+- Final documentation report: `docs/report/agent-adapter-frontend-test-and-gsd-report.md`.
+- Latest pushed commit: `07b6e90 docs: add adapter frontend test report`.
