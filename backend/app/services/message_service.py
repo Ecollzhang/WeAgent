@@ -205,6 +205,14 @@ def _mock_agent_response(app, conversation_id, user_content):
         broadcast(conversation_id, {'_type': 'agent_done'})
 
 
+def _orchestrator_agent_response(app, conversation_id, user_message_id):
+    """Background thread: route a persisted user message through orchestrator."""
+    with app.app_context():
+        from app.services.orchestrator_service import orchestrator_service
+
+        orchestrator_service.dispatch_to_agents(conversation_id, user_message_id)
+
+
 class MessageService:
     """Message business logic."""
 
@@ -237,15 +245,15 @@ class MessageService:
                 'language': message.artifact.language,
             }
 
-        # If user sent the message, trigger mock agent(s) in background
+        # If user sent the message, trigger real adapter-backed agent(s).
         if sender_type == 'user':
             has_agent = any(p.participant_type == 'agent'
                             for p in conversation.participants)
             if has_agent:
                 app = current_app._get_current_object()
                 thread = threading.Thread(
-                    target=_mock_agent_response,
-                    args=(app, conversation_id, content),
+                    target=_orchestrator_agent_response,
+                    args=(app, conversation_id, message.id),
                     daemon=True,
                 )
                 thread.start()

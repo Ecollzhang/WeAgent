@@ -23,12 +23,14 @@ key-files:
     - backend/app/adapters/claude_adapter.py
     - backend/app/adapters/codex_adapter.py
     - backend/app/adapters/opencode_adapter.py
+    - backend/app/services/orchestrator_service.py
+    - backend/app/services/message_service.py
 metrics:
-  tests: 17
+  tests: 18
   frontend_changes: 0
 ---
 
-# Plan 01 Summary: Adapter-Only Increment
+# Plan 01 Summary: Adapter And Backend Orchestrator Increment
 
 ## Completed
 
@@ -41,23 +43,27 @@ metrics:
 - Verified real Claude Code adapter invocation with `workspace_path=E:\code for project\seedance-competition\agentshub\WeAgent`; this creates a CLI run in that E-drive workspace context but does not persist a WeAgent DB conversation yet.
 - Verified real Codex adapter invocation. Codex CLI emits `item.completed` with `item.type=agent_message`; the normalizer maps this to `message.completed`.
 - Added provider normalizers for text deltas, completions, tool events, artifacts, and failures.
+- Integrated backend orchestrator with `AgentAdapterFactory.create(agent.adapter_name)`.
+- Routed `message_service.send_message(... sender_type='user')` through orchestrator instead of the mock demo response path.
+- Orchestrator now broadcasts normalized adapter events, accumulates deltas, and persists one final agent message on `message.completed`.
+- Added `backend/tests/test_orchestrator_adapter_stream.py` to lock the factory-stream-persist behavior.
 
 ## Deferred
 
-- Orchestrator, message service, SSE controller, and frontend streaming UI integration were intentionally deferred after user scope clarification.
+- SSE controller changes and frontend streaming UI integration remain intentionally deferred.
 - No frontend source or lockfile changes remain in the worktree.
 - Current adapter state intentionally reads only normalized message streams. Claude/Codex runtime status prompts such as MCP errors, plan-mode notices, hook prompts, and other non-message operational events are not yet surfaced in WeAgent.
 - Adapter execution location is controlled by `AgentRequest.workspace_path`. If absent, `AGENT_WORKSPACE_ROOT` is used; if that is absent, the adapter falls back to the WeAgent project root. This is the future integration point for the sandbox/workspace layer.
 
 ## Verification
 
-- `PYTHONDONTWRITEBYTECODE=1 python -m unittest discover tests` from `backend/`: 17 tests passing.
-- `PYTHONPYCACHEPREFIX=.pycache_verify python -m compileall backend/app/adapters`: passing.
+- `python -m unittest discover tests` from `backend/`: 18 tests passing.
+- `python -m compileall app\adapters app\services` from `backend/`: passing.
 
-## Deviations
+## Current Boundary
 
-- The original plan included frontend and orchestration integration. Scope was narrowed to an adapter-only increment to avoid changing current interfaces.
+- The original plan included frontend streaming UI. Backend orchestration is now integrated, but frontend-specific rendering is still deferred to avoid UI changes in this step.
 
 ## Self-Check: PASSED
 
-The current increment provides working Codex and Claude Code adapters behind a factory while preserving the old `get_adapter()` and `send_prompt()` compatibility surfaces.
+The current increment provides working Codex and Claude Code adapters behind a factory, routes the backend user-message path through orchestrator, and preserves the old `get_adapter()` and `send_prompt()` compatibility surfaces.

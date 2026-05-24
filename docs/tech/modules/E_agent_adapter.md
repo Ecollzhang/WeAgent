@@ -105,6 +105,21 @@ Workspace 解析顺序：
 当前范围只读取并标准化 message 流。hook 失败、MCP 状态、plan mode 提示、
 后台 agent 生命周期等 runtime 事件尚未暴露给 WeAgent。
 
+### Python MVP 后端集成状态
+
+当前后端 `message_service.send_message(... sender_type='user')` 已从 mock demo
+回复切换为触发 `orchestrator_service.dispatch_to_agents(...)`。Orchestrator 会：
+
+1. 读取会话中的 agent participants。
+2. 使用 `AgentAdapterFactory.create(agent.adapter_name)` 创建对应 adapter。
+3. 构造 `AgentRequest`，包含 conversation、agent、system prompt 和 workspace。
+4. 逐条广播 adapter 产出的 normalized events。
+5. 累积 `message.delta`，并在 `message.completed` 后保存一条最终 agent message。
+6. 对 adapter 异常广播 `agent.failed`，避免调用方无响应。
+
+前端对 `message.delta`、`message.completed`、`agent.failed` 的专门渲染仍未接入；
+因此当前可认为后端主链路已经接到 adapter，UI 流式体验仍是下一阶段工作。
+
 ## 6. Codex Adapter
 
 推荐思路：
