@@ -352,7 +352,21 @@ export default {
       this.eventSource.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
-          // Deduplicate: skip if message already exists in store
+
+          // Handle deploy status updates (in-place element update)
+          if (msg._type === 'deploy_status') {
+            this.$store.commit('message/UPDATE_DEPLOY_STATUS', {
+              conversationId,
+              deployId: msg.deploy_id,
+              status: msg.status,
+              progress: msg.progress,
+              logs: msg.logs,
+              preview_url: msg.preview_url,
+            })
+            return
+          }
+
+          // Regular message: deduplicate and append
           const existing = this.$store.getters['message/getMessagesByConversation'](conversationId)
           if (existing.some(m => m.id === msg.id)) return
           this.$store.commit('message/APPEND_MESSAGE', {

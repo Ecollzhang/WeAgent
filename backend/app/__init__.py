@@ -14,6 +14,35 @@ cors = CORS()
 socketio = SocketIO(cors_allowed_origins='*')
 
 
+def _ensure_deployments_table():
+    """Create deployments table if not exists (for existing databases)."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(db.engine)
+    if 'deployments' not in inspector.get_table_names():
+        with db.engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS `deployments` (
+                    `conversation_id` VARCHAR(36) NOT NULL,
+                    `artifact_id` VARCHAR(36) DEFAULT NULL,
+                    `status` ENUM('pending','deploying','success','failed') NOT NULL DEFAULT 'pending',
+                    `provider` VARCHAR(50) DEFAULT 'mock',
+                    `preview_url` VARCHAR(500) DEFAULT '',
+                    `deploy_url` VARCHAR(500) DEFAULT '',
+                    `progress` INT DEFAULT 0,
+                    `logs` JSON DEFAULT NULL,
+                    `error` TEXT,
+                    `source_type` VARCHAR(50) DEFAULT 'webpage',
+                    `id` VARCHAR(36) NOT NULL,
+                    `created_at` DATETIME NOT NULL,
+                    `updated_at` DATETIME NOT NULL,
+                    PRIMARY KEY (`id`),
+                    KEY `ix_deployments_conversation_id` (`conversation_id`),
+                    CONSTRAINT `deployments_ibfk_1` FOREIGN KEY (`conversation_id`) REFERENCES `conversations` (`id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """))
+            conn.commit()
+
+
 def _migrate_existing_tables():
     """Add new columns to existing tables without dropping data."""
     from sqlalchemy import inspect, text
@@ -88,6 +117,7 @@ def create_app(config_name=None):
     from app.controllers.artifact_controller import artifact_bp
     from app.controllers.tool_controller import tool_bp
     from app.controllers.upload_controller import upload_bp
+    from app.controllers.deploy_controller import deploy_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
@@ -96,6 +126,7 @@ def create_app(config_name=None):
     app.register_blueprint(artifact_bp, url_prefix='/api/artifacts')
     app.register_blueprint(tool_bp, url_prefix='/api/tools')
     app.register_blueprint(upload_bp, url_prefix='/api/upload')
+    app.register_blueprint(deploy_bp, url_prefix='/api/deploys')
 
     # Serve uploaded files
     @app.route('/uploads/<path:filename>')
@@ -117,11 +148,13 @@ def create_app(config_name=None):
         from app.models.agent_category import AgentCategory
         from app.models.artifact import Artifact
         from app.models.agent_tool import AgentTool
+        from app.models.deployment import Deployment
 
         db.create_all()
 
         # Migrate existing tables — add new columns if missing
         _migrate_existing_tables()
+        _ensure_deployments_table()
 
         # Seed default data
         try:

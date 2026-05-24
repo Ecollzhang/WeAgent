@@ -34,8 +34,23 @@ const mutations = {
       }
     }
   },
+  UPDATE_DEPLOY_STATUS(state, { conversationId, deployId, status, progress, logs, preview_url }) {
+    if (!state.messages[conversationId]) return
+    for (const msg of state.messages[conversationId]) {
+      if (!msg.elements) continue
+      const elems = typeof msg.elements === 'string' ? JSON.parse(msg.elements) : msg.elements
+      for (const el of elems) {
+        if (el.type === 'deploy_status' && el.data && el.data.deploy_id === deployId) {
+          el.data.status = status
+          el.data.progress = progress
+          if (logs) el.data.logs = logs
+          if (preview_url) el.data.preview_url = preview_url
+          return
+        }
+      }
+    }
+  },
   SET_PINNED_MESSAGES(state, messages) {
-    state.pinnedMessages = messages
   },
   SET_LOADING(state, loading) {
     state.loading = loading

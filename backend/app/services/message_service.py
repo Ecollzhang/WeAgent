@@ -2,6 +2,8 @@ import threading
 import time
 import random
 import queue
+import difflib
+import json
 import urllib.parse
 from flask import current_app
 from app.repositories.message_repo import message_repo
@@ -109,11 +111,307 @@ def _mock_agent_response(app, conversation_id, user_content):
                 db.session.commit()
                 broadcast(conversation_id, _message_dict(msg))
 
-                # 3) Rich final reply — text, code, table, image, file, text
+                # 3) Final reply — branch on user instructions
                 time.sleep(1.2)
 
-                # SVG bar chart (inline data URI — no external URL needed)
-                svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240">
+                content_lower = user_content.strip().lower()
+
+                from app.models.artifact import Artifact
+
+                if '写一段代码' in content_lower or '写代码' in content_lower:
+                    original_code = (
+                        'def process_data(items):\n'
+                        '    result = []\n'
+                        '    for i in range(len(items)):\n'
+                        '        item = items[i]\n'
+                        '        if item["status"] == "active":\n'
+                        '            result.append(item["name"].upper())\n'
+                        '    return result'
+                    )
+                    code_artifact = Artifact(
+                        artifact_type='code', title='utils.py',
+                        content=original_code, language='python', version=1,
+                    )
+                    db.session.add(code_artifact)
+                    db.session.flush()
+
+                    elements = [
+                        {'type': 'text', 'data': {'content': f'好的 **{agent_name}** 为你生成了以下代码：'}},
+                        {'type': 'code', 'data': {
+                            'language': 'python', 'content': original_code,
+                            'filename': 'utils.py', 'artifact_id': code_artifact.id,
+                        }},
+                        {'type': 'text', 'data': {'content': '你可以输入 "优化代码" 让我帮你优化这段代码。'}},
+                    ]
+                    msg = Message(
+                        conversation_id=conversation_id,
+                        sender_type='agent', sender_id=agent_id,
+                        content=f'好的，这是为你生成的代码。',
+                        message_type='text', elements=elements,
+                    )
+                    db.session.add(msg)
+                    db.session.commit()
+                    broadcast(conversation_id, _message_dict(msg))
+
+                elif '重构代码' in content_lower or '重构' in content_lower:
+                    original_code = (
+                        'function fetchUserData(userId) {\n'
+                        '    return fetch("/api/users/" + userId)\n'
+                        '        .then(function(response) {\n'
+                        '            return response.json();\n'
+                        '        })\n'
+                        '        .then(function(data) {\n'
+                        '            console.log("User data:", data);\n'
+                        '            return data;\n'
+                        '        })\n'
+                        '        .catch(function(error) {\n'
+                        '            console.error("Error:", error);\n'
+                        '        });\n'
+                        '}'
+                    )
+                    refactored_code = (
+                        'async function fetchUserData(userId) {\n'
+                        '    try {\n'
+                        '        const response = await fetch(`/api/users/${userId}`);\n'
+                        '        const data = await response.json();\n'
+                        '        console.log("User data:", data);\n'
+                        '        return data;\n'
+                        '    } catch (error) {\n'
+                        '        console.error("Error:", error);\n'
+                        '    }\n'
+                        '}'
+                    )
+                    diff_lines = list(difflib.unified_diff(
+                        original_code.splitlines(keepends=True),
+                        refactored_code.splitlines(keepends=True),
+                        fromfile='original.js', tofile='refactored.js',
+                    ))
+                    diff_text = ''.join(diff_lines)
+
+                    before_artifact = Artifact(
+                        artifact_type='code', title='api.js',
+                        content=original_code, language='javascript', version=1,
+                    )
+                    after_artifact = Artifact(
+                        artifact_type='code', title='api.js',
+                        content=refactored_code, language='javascript', version=2,
+                    )
+                    db.session.add(before_artifact)
+                    db.session.add(after_artifact)
+                    db.session.flush()
+
+                    diff_artifact = Artifact(
+                        artifact_type='diff', title='api.js',
+                        content=json.dumps({
+                            'before_id': before_artifact.id,
+                            'after_id': after_artifact.id,
+                            'diff_text': diff_text,
+                        }),
+                        language='javascript', version=1,
+                    )
+                    db.session.add(diff_artifact)
+                    db.session.flush()
+
+                    elements = [
+                        {'type': 'text', 'data': {'content': f'**{agent_name}** 已将你的回调风格重构为 async/await：'}},
+                        {'type': 'diff', 'data': {
+                            'after': refactored_code, 'diff_text': diff_text,
+                            'language': 'javascript', 'filename': 'api.js',
+                            'artifact_id': diff_artifact.id,
+                        }},
+                        {'type': 'text', 'data': {'content': '重构完成，代码可读性和错误处理都得到了改善。'}},
+                    ]
+                    msg = Message(
+                        conversation_id=conversation_id,
+                        sender_type='agent', sender_id=agent_id,
+                        content=f'已重构代码。',
+                        message_type='text', elements=elements,
+                        artifact_id=diff_artifact.id,
+                    )
+                    db.session.add(msg)
+                    db.session.commit()
+                    broadcast(conversation_id, _message_dict(msg))
+
+                elif '优化代码' in content_lower or '优化' in content_lower:
+                    original_code = (
+                        'def process_data(items):\n'
+                        '    result = []\n'
+                        '    for i in range(len(items)):\n'
+                        '        item = items[i]\n'
+                        '        if item["status"] == "active":\n'
+                        '            result.append(item["name"].upper())\n'
+                        '    return result'
+                    )
+                    optimized_code = (
+                        'def process_data(items):\n'
+                        '    return [item["name"].upper()\n'
+                        '            for item in items\n'
+                        '            if item.get("status") == "active"]'
+                    )
+                    diff_lines = list(difflib.unified_diff(
+                        original_code.splitlines(keepends=True),
+                        optimized_code.splitlines(keepends=True),
+                        fromfile='original.py', tofile='optimized.py',
+                    ))
+                    diff_text = ''.join(diff_lines)
+
+                    before_artifact = Artifact(
+                        artifact_type='code', title='utils.py',
+                        content=original_code, language='python', version=1,
+                    )
+                    after_artifact = Artifact(
+                        artifact_type='code', title='utils.py',
+                        content=optimized_code, language='python', version=2,
+                    )
+                    db.session.add(before_artifact)
+                    db.session.add(after_artifact)
+                    db.session.flush()
+
+                    diff_artifact = Artifact(
+                        artifact_type='diff', title='utils.py',
+                        content=json.dumps({
+                            'before_id': before_artifact.id,
+                            'after_id': after_artifact.id,
+                            'diff_text': diff_text,
+                        }),
+                        language='python', version=1,
+                    )
+                    db.session.add(diff_artifact)
+                    db.session.flush()
+
+                    elements = [
+                        {'type': 'text', 'data': {'content': f'**{agent_name}** 已优化你的代码，以下是优化结果：'}},
+                        {'type': 'diff', 'data': {
+                            'after': optimized_code, 'diff_text': diff_text,
+                            'language': 'python', 'filename': 'utils.py',
+                            'artifact_id': diff_artifact.id,
+                        }},
+                        {'type': 'text', 'data': {'content': '代码已优化完成，使用了列表推导式替代手动循环，更简洁高效。'}},
+                    ]
+                    msg = Message(
+                        conversation_id=conversation_id,
+                        sender_type='agent', sender_id=agent_id,
+                        content=f'已优化你的代码。',
+                        message_type='text', elements=elements,
+                        artifact_id=diff_artifact.id,
+                    )
+                    db.session.add(msg)
+                    db.session.commit()
+                    broadcast(conversation_id, _message_dict(msg))
+
+                elif '写一个网页' in content_lower or '生成网页' in content_lower or '做个页面' in content_lower:
+                    webpage_html = '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据仪表盘</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f0f5ff; padding: 24px; }
+  .dashboard { max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 20px; color: #1e293b; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .card .label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+  .card .value { font-size: 24px; font-weight: 700; color: #1e293b; }
+  .card .value.green { color: #22c55e; }
+  .card .value.blue { color: #4080ff; }
+  .card .value.orange { color: #f59e0b; }
+  .card .value.purple { color: #8b5cf6; }
+  .chart { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .chart h2 { font-size: 14px; color: #1e293b; margin-bottom: 12px; }
+  .bar-chart { display: flex; align-items: flex-end; gap: 12px; height: 120px; padding: 0 8px; }
+  .bar-group { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .bar { width: 100%; max-width: 40px; border-radius: 4px 4px 0 0; min-height: 4px; transition: height 0.3s; }
+  .bar-label { font-size: 10px; color: #94a3b8; }
+  .bar-value { font-size: 10px; font-weight: 600; color: #1e293b; }
+</style>
+</head>
+<body>
+<div class="dashboard">
+  <h1>系统监控仪表盘</h1>
+  <div class="grid">
+    <div class="card"><div class="label">CPU 使用率</div><div class="value blue">78%</div></div>
+    <div class="card"><div class="label">内存使用率</div><div class="value green">62%</div></div>
+    <div class="card"><div class="label">磁盘 I/O</div><div class="value orange">91%</div></div>
+    <div class="card"><div class="label">网络延迟</div><div class="value purple">45ms</div></div>
+  </div>
+  <div class="chart">
+    <h2>实时性能指标</h2>
+    <div class="bar-chart">
+      <div class="bar-group"><div class="bar-value">78%</div><div class="bar" style="height:78px;background:#4080ff"></div><div class="bar-label">CPU</div></div>
+      <div class="bar-group"><div class="bar-value">62%</div><div class="bar" style="height:62px;background:#22c55e"></div><div class="bar-label">内存</div></div>
+      <div class="bar-group"><div class="bar-value">91%</div><div class="bar" style="height:91px;background:#f59e0b"></div><div class="bar-label">磁盘</div></div>
+      <div class="bar-group"><div class="bar-value">73%</div><div class="bar" style="height:73px;background:#8b5cf6"></div><div class="bar-label">网络</div></div>
+    </div>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#94a3b8;margin-top:16px;">数据每 30 秒自动刷新</p>
+</div>
+</body>
+</html>'''
+
+                    webpage_artifact = Artifact(
+                        artifact_type='webpage', title='系统监控仪表盘',
+                        content=webpage_html, language='html', version=1,
+                    )
+                    db.session.add(webpage_artifact)
+                    db.session.flush()
+
+                    elements = [
+                        {'type': 'text', 'data': {'content': f'**{agent_name}** 为你生成了一个数据仪表盘页面：'}},
+                        {'type': 'webpage', 'data': {
+                            'content': webpage_html,
+                            'title': '系统监控仪表盘',
+                            'language': 'html',
+                            'artifact_id': webpage_artifact.id,
+                            'preview_url': None,
+                        }},
+                        {'type': 'text', 'data': {'content': '点击卡片可展开全屏预览和编辑源码。'}},
+                    ]
+                    msg = Message(
+                        conversation_id=conversation_id,
+                        sender_type='agent', sender_id=agent_id,
+                        content=f'已生成网页。',
+                        message_type='text', elements=elements,
+                        artifact_id=webpage_artifact.id,
+                    )
+                    db.session.add(msg)
+                    db.session.commit()
+                    broadcast(conversation_id, _message_dict(msg))
+
+                elif '部署' in content_lower:
+                    from app.services.deploy_service import deploy_service, run_mock_deploy
+                    deploy_result, _ = deploy_service.create(
+                        conversation_id=conversation_id, source_type='webpage',
+                    )
+                    deploy_id = deploy_result['id']
+
+                    elements = [
+                        {'type': 'text', 'data': {'content': f'**{agent_name}** 正在为你部署...'}},
+                        {'type': 'deploy_status', 'data': {
+                            'deploy_id': deploy_id,
+                            'status': 'pending',
+                            'progress': 0,
+                            'logs': [],
+                            'preview_url': None,
+                            'deploy_url': None,
+                        }},
+                    ]
+                    msg = Message(
+                        conversation_id=conversation_id,
+                        sender_type='agent', sender_id=agent_id,
+                        content=f'正在部署。',
+                        message_type='text', elements=elements,
+                    )
+                    db.session.add(msg)
+                    db.session.commit()
+                    broadcast(conversation_id, _message_dict(msg))
+
+                    # Run mock deploy synchronously (broadcasts progress via SSE)
+                    run_mock_deploy(conversation_id, deploy_id)
+
+                else:
+                    # Default: rich response with text, code, table, image, file
+                    svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240">
   <rect fill="#f8f9fa" width="480" height="240" rx="8"/>
   <text fill="#1e293b" font-size="15" font-weight="bold" x="20" y="30">系统性能监控</text>
   <rect fill="#4080ff" x="40" y="80" width="55" height="90" rx="4"/>
@@ -134,72 +432,72 @@ def _mock_agent_response(app, conversation_id, user_content):
   <line stroke="#e8eaed" x1="20" y1="210" x2="460" y2="210"/>
   <text fill="#94a3b8" font-size="10" x="20" y="228">更新时间: 刚刚</text>
 </svg>'''
-                chart_data_uri = f'data:image/svg+xml,{urllib.parse.quote(svg)}'
+                    chart_data_uri = f'data:image/svg+xml,{urllib.parse.quote(svg)}'
 
-                elements = [
-                    {'type': 'text', 'data': {'content': f'你好！我是 **{agent_name}**，已收到你的消息。'}},
-                    {'type': 'text', 'data': {'content': f'> {user_content}'}},
-                    {'type': 'text', 'data': {'content': '以下是本次的处理结果：'}},
-                    {'type': 'code', 'data': {
-                        'language': 'python',
-                        'content': (
-                            'def analyze_performance(metrics):\n'
-                            '    """分析系统性能指标"""\n'
-                            '    results = {}\n'
-                            '    for name, value in metrics.items():\n'
-                            '        if value > 80:\n'
-                            '            results[name] = "警告"\n'
-                            '        elif value > 50:\n'
-                            '            results[name] = "注意"\n'
-                            '        else:\n'
-                            '            results[name] = "正常"\n'
-                            '    return results\n'
-                            '\n'
-                            '# 系统指标数据\n'
-                            'system_metrics = {\n'
-                            '    "CPU": 78,\n'
-                            '    "内存": 62,\n'
-                            '    "磁盘": 91,\n'
-                            '    "网络": 73,\n'
-                            '    "延迟": 45,\n'
-                            '}\n'
-                            'print(analyze_performance(system_metrics))'
-                        ),
-                        'filename': 'analyzer.py',
-                    }},
-                    {'type': 'table', 'data': {
-                        'headers': ['指标', '当前值', '阈值', '状态', '建议'],
-                        'rows': [
-                            ['CPU 使用率', '78%', '80%', '⚠️ 注意', '检查异常进程'],
-                            ['内存使用率', '62%', '85%', '✅ 正常', '-'],
-                            ['磁盘 I/O', '91%', '90%', '🔴 警告', '需要扩容！'],
-                            ['网络延迟', '45ms', '100ms', '✅ 正常', '-'],
-                            ['错误率', '0.02%', '1%', '✅ 正常', '-'],
-                        ],
-                    }},
-                    {'type': 'image', 'data': {
-                        'url': chart_data_uri,
-                        'alt': '系统性能监控图表',
-                    }},
-                    {'type': 'file', 'data': {
-                        'name': 'performance_report_2024.html',
-                        'url': '#',
-                        'size': 245760,
-                    }},
-                    {'type': 'text', 'data': {'content': f'以上是 **{agent_name}** 的完整分析报告。磁盘 I/O 已达 91%，建议及时扩容。有其他问题请继续提问！'}},
-                ]
+                    elements = [
+                        {'type': 'text', 'data': {'content': f'你好！我是 **{agent_name}**，已收到你的消息。'}},
+                        {'type': 'text', 'data': {'content': f'> {user_content}'}},
+                        {'type': 'text', 'data': {'content': '以下是本次的处理结果：'}},
+                        {'type': 'code', 'data': {
+                            'language': 'python',
+                            'content': (
+                                'def analyze_performance(metrics):\n'
+                                '    """分析系统性能指标"""\n'
+                                '    results = {}\n'
+                                '    for name, value in metrics.items():\n'
+                                '        if value > 80:\n'
+                                '            results[name] = "警告"\n'
+                                '        elif value > 50:\n'
+                                '            results[name] = "注意"\n'
+                                '        else:\n'
+                                '            results[name] = "正常"\n'
+                                '    return results\n'
+                                '\n'
+                                '# 系统指标数据\n'
+                                'system_metrics = {\n'
+                                '    "CPU": 78,\n'
+                                '    "内存": 62,\n'
+                                '    "磁盘": 91,\n'
+                                '    "网络": 73,\n'
+                                '    "延迟": 45,\n'
+                                '}\n'
+                                'print(analyze_performance(system_metrics))'
+                            ),
+                            'filename': 'analyzer.py',
+                        }},
+                        {'type': 'table', 'data': {
+                            'headers': ['指标', '当前值', '阈值', '状态', '建议'],
+                            'rows': [
+                                ['CPU 使用率', '78%', '80%', '⚠️ 注意', '检查异常进程'],
+                                ['内存使用率', '62%', '85%', '✅ 正常', '-'],
+                                ['磁盘 I/O', '91%', '90%', '🔴 警告', '需要扩容！'],
+                                ['网络延迟', '45ms', '100ms', '✅ 正常', '-'],
+                                ['错误率', '0.02%', '1%', '✅ 正常', '-'],
+                            ],
+                        }},
+                        {'type': 'image', 'data': {
+                            'url': chart_data_uri,
+                            'alt': '系统性能监控图表',
+                        }},
+                        {'type': 'file', 'data': {
+                            'name': 'performance_report_2024.html',
+                            'url': '#',
+                            'size': 245760,
+                        }},
+                        {'type': 'text', 'data': {'content': f'以上是 **{agent_name}** 的完整分析报告。磁盘 I/O 已达 91%，建议及时扩容。有其他问题请继续提问！'}},
+                    ]
 
-                msg = Message(
-                    conversation_id=conversation_id,
-                    sender_type='agent',
-                    sender_id=agent_id,
-                    content=f'你好！我是 **{agent_name}**，已收到你的消息。\n\n> {user_content}\n\n这是一个模拟回复，后续将接入真实的 AI 模型。',
-                    message_type='text',
-                    elements=elements,
-                )
-                db.session.add(msg)
-                db.session.commit()
-                broadcast(conversation_id, _message_dict(msg))
+                    msg = Message(
+                        conversation_id=conversation_id,
+                        sender_type='agent',
+                        sender_id=agent_id,
+                        content=f'你好！我是 **{agent_name}**，已收到你的消息。\n\n> {user_content}\n\n这是一个模拟回复，后续将接入真实的 AI 模型。',
+                        message_type='text',
+                        elements=elements,
+                    )
+                    db.session.add(msg)
+                    db.session.commit()
+                    broadcast(conversation_id, _message_dict(msg))
     finally:
         # Signal SSE subscribers that this agent round is done
         broadcast(conversation_id, {'_type': 'agent_done'})

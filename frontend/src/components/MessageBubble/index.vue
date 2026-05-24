@@ -57,6 +57,21 @@
             ></el-image>
           </div>
 
+          <!-- Deploy status element -->
+          <div v-else-if="el.type === 'deploy_status'" class="el-deploy">
+            <DeployStatusCard :data="el.data" />
+          </div>
+
+          <!-- Webpage element -->
+          <div v-else-if="el.type === 'webpage'" class="el-webpage">
+            <WebPreviewCard :data="el.data" @expand="openFullscreen(el.data)" />
+          </div>
+
+          <!-- Diff element -->
+          <div v-else-if="el.type === 'diff'" class="el-diff">
+            <DiffViewCard :data="el.data" />
+          </div>
+
           <!-- File element -->
           <div v-else-if="el.type === 'file'" class="el-file">
             <i class="el-icon-document"></i>
@@ -113,14 +128,27 @@
         <pre class="preview-code"><code>{{ previewData?.content }}</code></pre>
       </div>
     </el-dialog>
+
+    <!-- Webpage Fullscreen Preview -->
+    <ArtifactFullscreenPreview
+      :data="fullscreenData"
+      :visible="fullscreenVisible"
+      @close="fullscreenVisible = false"
+      @save="handleFullscreenSave"
+    />
   </div>
 </template>
 
 <script>
 import { formatTime } from '../../utils/format'
+import DiffViewCard from '../DiffViewCard/index.vue'
+import WebPreviewCard from '../WebPreviewCard/index.vue'
+import ArtifactFullscreenPreview from '../ArtifactFullscreenPreview/index.vue'
+import DeployStatusCard from '../DeployStatusCard/index.vue'
 
 export default {
   name: 'MessageBubble',
+  components: { DiffViewCard, WebPreviewCard, ArtifactFullscreenPreview, DeployStatusCard },
   props: {
     message: Object,
     isOwn: Boolean,
@@ -129,6 +157,8 @@ export default {
     return {
       codePreviewVisible: false,
       previewData: null,
+      fullscreenVisible: false,
+      fullscreenData: null,
     }
   },
   computed: {
@@ -213,6 +243,13 @@ export default {
         i++
       }
       return size.toFixed(1) + ' ' + units[i]
+    },
+    openFullscreen(data) {
+      this.fullscreenData = data
+      this.fullscreenVisible = true
+    },
+    handleFullscreenSave(data) {
+      this.$emit('save-artifact', data)
     },
   },
 }
@@ -353,6 +390,24 @@ export default {
 
 /* Image element */
 .el-image-wrap {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Deploy element */
+.el-deploy {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Webpage element */
+.el-webpage {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Diff element */
+.el-diff {
   border-radius: 8px;
   overflow: hidden;
 }
