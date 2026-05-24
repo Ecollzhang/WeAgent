@@ -83,6 +83,21 @@ class _FakeMessageService:
         }, None
 
 
+class _FakeApp:
+    def __init__(self):
+        self.entered = False
+
+    def app_context(self):
+        return self
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
 class OrchestratorAdapterStreamTest(unittest.TestCase):
     def test_invoke_agent_streams_via_factory_and_persists_completed_text(self):
         adapter = _FakeAdapter()
@@ -150,6 +165,19 @@ class OrchestratorAdapterStreamTest(unittest.TestCase):
             orchestrator_module.AgentAdapterFactory = original_factory
             orchestrator_module.message_service = original_message_service
             orchestrator_module.broadcast = original_broadcast
+
+    def test_invoke_agent_in_context_wraps_worker_with_flask_app_context(self):
+        service = orchestrator_module.OrchestratorService()
+        app = _FakeApp()
+        calls = []
+
+        service._invoke_agent = lambda *args: calls.append(args)
+        agent = SimpleNamespace(id="agent-1")
+
+        service._invoke_agent_in_context(app, agent, "conversation-1", "hello")
+
+        self.assertTrue(app.entered)
+        self.assertEqual([(agent, "conversation-1", "hello")], calls)
 
 
 if __name__ == "__main__":

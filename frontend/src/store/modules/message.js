@@ -23,7 +23,83 @@ const mutations = {
     if (!state.messages[conversationId]) {
       Vue.set(state.messages, conversationId, [])
     }
+    if (message.id && state.messages[conversationId].some(m => m.id === message.id)) {
+      return
+    }
     state.messages[conversationId].push(message)
+  },
+  APPEND_STREAMING_DELTA(state, { conversationId, event }) {
+    if (!state.messages[conversationId]) {
+      Vue.set(state.messages, conversationId, [])
+    }
+    const id = `stream_${event.runId}`
+    const msgs = state.messages[conversationId]
+    const idx = msgs.findIndex(m => m.id === id)
+    const delta = event.content || ''
+    if (idx === -1) {
+      msgs.push({
+        id,
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        sender_id: String(event.agentId || ''),
+        sender_name: event.agentName || 'Agent',
+        content: delta,
+        message_type: 'text',
+        created_at: event.timestamp || new Date().toISOString(),
+        is_streaming: true,
+      })
+      return
+    }
+    Vue.set(msgs, idx, {
+      ...msgs[idx],
+      content: `${msgs[idx].content || ''}${delta}`,
+      is_streaming: true,
+    })
+  },
+  FINALIZE_STREAMING_MESSAGE(state, { conversationId, event }) {
+    const msgs = state.messages[conversationId]
+    if (!msgs) return
+    const id = `stream_${event.runId}`
+    const idx = msgs.findIndex(m => m.id === id)
+    if (idx === -1) return
+    Vue.set(msgs, idx, {
+      ...msgs[idx],
+      content: event.content || msgs[idx].content,
+      is_streaming: false,
+    })
+  },
+  FAIL_STREAMING_MESSAGE(state, { conversationId, event }) {
+    if (!state.messages[conversationId]) {
+      Vue.set(state.messages, conversationId, [])
+    }
+    const id = `stream_${event.runId}`
+    const content = event.message || event.content || 'Agent 调用失败'
+    const msgs = state.messages[conversationId]
+    const idx = msgs.findIndex(m => m.id === id)
+    const failedMessage = {
+      id,
+      conversation_id: conversationId,
+      sender_type: 'agent',
+      sender_id: String(event.agentId || ''),
+      sender_name: event.agentName || 'Agent',
+      content,
+      message_type: 'text',
+      created_at: event.timestamp || new Date().toISOString(),
+      is_streaming: false,
+      is_failed: true,
+    }
+    if (idx === -1) {
+      msgs.push(failedMessage)
+    } else {
+      Vue.set(msgs, idx, failedMessage)
+    }
+  },
+  REMOVE_STREAMING_MESSAGES_FOR_AGENT(state, { conversationId, agentId }) {
+    const msgs = state.messages[conversationId]
+    if (!msgs) return
+    Vue.set(state.messages, conversationId, msgs.filter(msg => {
+      return !(msg.is_streaming === false && msg.id?.startsWith('stream_') && String(msg.sender_id) === String(agentId))
+    }))
   },
   UPDATE_MESSAGE_ID(state, { conversationId, tempId, realId }) {
     const msgs = state.messages[conversationId]

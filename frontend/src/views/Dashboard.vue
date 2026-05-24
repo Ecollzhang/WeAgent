@@ -355,6 +355,12 @@ export default {
           // Deduplicate: skip if message already exists in store
           const existing = this.$store.getters['message/getMessagesByConversation'](conversationId)
           if (existing.some(m => m.id === msg.id)) return
+          if (msg.sender_type === 'agent') {
+            this.$store.commit('message/REMOVE_STREAMING_MESSAGES_FOR_AGENT', {
+              conversationId,
+              agentId: msg.sender_id,
+            })
+          }
           this.$store.commit('message/APPEND_MESSAGE', {
             conversationId,
             message: msg,
@@ -365,6 +371,47 @@ export default {
           console.error('[SSE] parse error:', e)
         }
       }
+
+      this.eventSource.addEventListener('agent.started', () => {
+        this.isAgentResponding = true
+      })
+
+      this.eventSource.addEventListener('message.delta', (event) => {
+        try {
+          const agentEvent = JSON.parse(event.data)
+          this.$store.commit('message/APPEND_STREAMING_DELTA', {
+            conversationId,
+            event: agentEvent,
+          })
+        } catch (e) {
+          console.error('[SSE] message.delta parse error:', e)
+        }
+      })
+
+      this.eventSource.addEventListener('message.completed', (event) => {
+        try {
+          const agentEvent = JSON.parse(event.data)
+          this.$store.commit('message/FINALIZE_STREAMING_MESSAGE', {
+            conversationId,
+            event: agentEvent,
+          })
+        } catch (e) {
+          console.error('[SSE] message.completed parse error:', e)
+        }
+      })
+
+      this.eventSource.addEventListener('agent.failed', (event) => {
+        try {
+          const agentEvent = JSON.parse(event.data)
+          this.$store.commit('message/FAIL_STREAMING_MESSAGE', {
+            conversationId,
+            event: agentEvent,
+          })
+        } catch (e) {
+          console.error('[SSE] agent.failed parse error:', e)
+        }
+        cleanup()
+      })
 
       this.eventSource.addEventListener('done', () => {
         cleanup()
@@ -442,7 +489,7 @@ export default {
                 isLeaf: true,
                 agentColor: agent.avatar_color || '#4080ff',
                 agentAvatar: agent.avatar_url || '',
-                adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' }[agent.adapter_name] || agent.adapter_name,
+                adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock' }[agent.adapter_name] || agent.adapter_name,
               })
             }
           }
@@ -465,7 +512,7 @@ export default {
             isLeaf: true,
             agentColor: agent.avatar_color || '#4080ff',
             agentAvatar: agent.avatar_url || '',
-            adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' }[agent.adapter_name] || agent.adapter_name,
+            adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock' }[agent.adapter_name] || agent.adapter_name,
           }))
           treeData.push({
             id: '_uncategorized',

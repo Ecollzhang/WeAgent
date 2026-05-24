@@ -1,5 +1,6 @@
 import threading
 import logging
+from flask import current_app, has_app_context
 from app.adapters.factory import AgentAdapterFactory
 from app.adapters.types import AgentRequest, resolve_workspace_path
 from app.repositories.conversation_repo import conversation_repo
@@ -39,6 +40,8 @@ class OrchestratorService:
             if not user_message:
                 return
 
+            app = current_app._get_current_object() if has_app_context() else None
+
             # Dispatch to each agent in parallel
             threads = []
             for participant in agent_participants:
@@ -47,8 +50,8 @@ class OrchestratorService:
                     continue
 
                 thread = threading.Thread(
-                    target=self._invoke_agent,
-                    args=(agent, conversation_id, user_message.content)
+                    target=self._invoke_agent_in_context,
+                    args=(app, agent, conversation_id, user_message.content)
                 )
                 threads.append(thread)
                 thread.start()
@@ -106,6 +109,13 @@ class OrchestratorService:
                     'message': str(e),
                 },
             )
+
+    def _invoke_agent_in_context(self, app, agent, conversation_id, user_content):
+        if app is None:
+            self._invoke_agent(agent, conversation_id, user_content)
+            return
+        with app.app_context():
+            self._invoke_agent(agent, conversation_id, user_content)
 
     def _build_agent_request(self, agent, conversation_id, user_content):
         agent_config = agent.config if isinstance(getattr(agent, 'config', None), dict) else {}

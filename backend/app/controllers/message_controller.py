@@ -10,6 +10,17 @@ import queue
 message_bp = Blueprint('messages', __name__)
 
 
+def _format_sse(data, event_name=None):
+    payload = json.dumps(data, ensure_ascii=False)
+    if event_name:
+        return f'event: {event_name}\ndata: {payload}\n\n'
+    return f'data: {payload}\n\n'
+
+
+def _is_agent_event(data):
+    return data.get('schemaVersion') == 'v1' and data.get('type')
+
+
 @message_bp.route('', methods=['POST'])
 @jwt_required()
 def send_message():
@@ -126,7 +137,7 @@ def stream_messages(conversation_id):
         result, error = message_service.poll_messages(conversation_id, after=last_after)
         if not error and result and result.get('items'):
             for msg in result['items']:
-                yield f'data: {json.dumps(msg, ensure_ascii=False)}\n\n'
+                yield _format_sse(msg)
                 last_after = msg['id']
 
         # Phase 2: real-time — subscribe to in-memory queue (true event-driven)
@@ -137,13 +148,16 @@ def stream_messages(conversation_id):
                     msg = q.get(timeout=30)
                     # Skip internal control signals
                     if msg.get('_type') == 'agent_done':
-                        yield f'event: done\ndata: {json.dumps({"reason": "complete"})}\n\n'
+                        yield _format_sse({"reason": "complete"}, "done")
                         return
-                    # Regular message → send to client
-                    yield f'data: {json.dumps(msg, ensure_ascii=False)}\n\n'
+                    # Agent events use named SSE events; persisted messages stay default data events.
+                    if _is_agent_event(msg):
+                        yield _format_sse(msg, msg['type'])
+                    else:
+                        yield _format_sse(msg)
                     last_after = msg.get('id', last_after)
                 except queue.Empty:
-                    yield f'event: done\ndata: {json.dumps({"reason": "timeout"})}\n\n'
+                    yield _format_sse({"reason": "timeout"}, "done")
                     return
         finally:
             unsubscribe(conversation_id, q)

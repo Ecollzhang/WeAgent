@@ -10,7 +10,7 @@ progress:
   completed_phases: 0
   total_plans: 1
   completed_plans: 0
-  percent: 80
+  percent: 95
 ---
 
 # Planning State
@@ -33,3 +33,4 @@ progress:
 - Use normalized `AgentEvent` dictionaries as the only output surface consumed by orchestrator/SSE.
 - Keep mock adapter behavior available for demo stability.
 - After local Claude/Codex smoke tests pass, route the backend user-message path through orchestrator and adapter factory before frontend streaming UI work.
+- Task 5-6 are now complete for normalized message events: backend orchestrator, SSE named events, and frontend temporary streaming message rendering.

@@ -6,7 +6,7 @@ class CreateAgentSchema(Schema):
     name = fields.String(required=True, validate=validate.Length(max=100))
     capability_tags = fields.List(fields.String(), load_default=list)
     agent_type = fields.String(validate=validate.OneOf(['external', 'custom']), load_default='custom')
-    adapter_name = fields.String(validate=validate.OneOf(['claude', 'codex', 'opencode']), load_default='claude')
+    adapter_name = fields.String(validate=validate.OneOf(['claude', 'codex', 'opencode', 'mock']), load_default='claude')
     config = fields.Dict(load_default=dict)
     system_prompt = fields.String(load_default='')
     skill = fields.String(load_default='')

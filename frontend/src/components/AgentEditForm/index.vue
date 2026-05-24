@@ -44,6 +44,7 @@
               <el-option label="Claude Code" value="claude"></el-option>
               <el-option label="Codex" value="codex"></el-option>
               <el-option label="OpenCode" value="opencode"></el-option>
+              <el-option label="Mock" value="mock"></el-option>
             </el-select>
           </el-form-item>
 

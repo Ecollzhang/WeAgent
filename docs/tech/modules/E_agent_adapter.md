@@ -117,8 +117,16 @@ Workspace 解析顺序：
 5. 累积 `message.delta`，并在 `message.completed` 后保存一条最终 agent message。
 6. 对 adapter 异常广播 `agent.failed`，避免调用方无响应。
 
-前端对 `message.delta`、`message.completed`、`agent.failed` 的专门渲染仍未接入；
-因此当前可认为后端主链路已经接到 adapter，UI 流式体验仍是下一阶段工作。
+前端已经接入 `agent.started`、`message.delta`、`message.completed`、`agent.failed`
+的最小 SSE 监听，并通过 Vuex 临时消息展示流式文本。后端 SSE 会把 normalized
+agent events 作为 named SSE events 发出，持久化 DB message 仍走默认 data event。
+
+localhost smoke 已验证：
+
+- `http://127.0.0.1:5000/api/health` 返回 200。
+- `http://127.0.0.1:8080` 返回 200。
+- mock adapter 会发出 `agent.started`、`message.delta`、`message.completed` 和 `done`。
+- 最终会话中包含用户消息和保存后的 agent 消息。
 
 ## 6. Codex Adapter
 
