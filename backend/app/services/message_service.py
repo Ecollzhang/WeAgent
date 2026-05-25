@@ -1,13 +1,16 @@
 import threading
 import time
-import random
 import queue
 import urllib.parse
+import uuid
+from datetime import datetime
 from flask import current_app
+from app import db, socketio
 from app.repositories.message_repo import message_repo
 from app.repositories.conversation_repo import conversation_repo
 from app.repositories.artifact_repo import artifact_repo
 from app.models.message import Message
+from app.services.agent_run_service import agent_run_service
 
 # ====== In-memory pub/sub for real-time SSE streaming ======
 _queue_lock = threading.Lock()
@@ -48,6 +51,18 @@ def broadcast(conversation_id, msg_dict):
 def _message_dict(msg):
     """Convert Message model to dict with optional artifact enrichment."""
     data = msg.to_dict()
+    if msg.sender_type == 'agent':
+        conversation = conversation_repo.get_by_id(msg.conversation_id)
+        if conversation:
+            participant = next(
+                (p for p in conversation.participants
+                 if p.participant_type == 'agent' and p.participant_id == msg.sender_id),
+                None,
+            )
+            if participant:
+                data['sender_name'] = participant.participant_name or msg.sender_id
+                data['sender_avatar'] = participant.participant_avatar or ''
+                data['sender_color'] = participant.participant_color or ''
     if msg.artifact:
         data['artifact'] = {
             'id': msg.artifact.id,
@@ -244,13 +259,188 @@ class MessageService:
             if has_agent:
                 app = current_app._get_current_object()
                 thread = threading.Thread(
-                    target=_mock_agent_response,
-                    args=(app, conversation_id, content),
+                    target=self._dispatch_single_agent_sandbox,
+                    args=(app, conversation_id, content, message.id),
                     daemon=True,
                 )
                 thread.start()
 
         return result, None
+
+    def _dispatch_single_agent_sandbox(self, app, conversation_id, user_content,
+                                       user_message_id=None):
+        """Create one agent message and run the sandbox call in background."""
+        with app.app_context():
+            conversation = conversation_repo.get_by_id(conversation_id)
+            if not conversation:
+                return
+
+            agent_participants = [
+                p for p in conversation.participants
+                if p.participant_type == 'agent'
+            ]
+            if len(agent_participants) != 1:
+                self._emit_system_error(
+                    conversation_id,
+                    '阶段 1 仅支持单 Agent 沙箱对话，多 Agent 会在阶段 2 接入。'
+                )
+                return
+
+            if not conversation.sandbox_session_id:
+                self._emit_system_error(conversation_id, '该会话没有可用的沙箱容器。')
+                return
+
+            participant = agent_participants[0]
+            round_id = str(uuid.uuid4())
+            agent_msg = Message(
+                conversation_id=conversation_id,
+                sender_type='agent',
+                sender_id=participant.participant_id,
+                content='正在处理...',
+                message_type='text',
+                parent_message_id=user_message_id,
+                elements=[{'type': 'progress', 'content': '正在处理...', 'status': 'running'}],
+                round_id=round_id,
+                status='streaming',
+                raw_output='',
+            )
+            db.session.add(agent_msg)
+            db.session.commit()
+
+            run = agent_run_service.create_run(
+                conversation_id=conversation_id,
+                round_id=round_id,
+                message_id=agent_msg.id,
+                agent_id=participant.participant_id,
+                sandbox_session_id=conversation.sandbox_session_id,
+            )
+            agent_msg.run_id = run.id
+            db.session.commit()
+
+            socketio.emit('conversation_message_created', _message_dict(agent_msg),
+                          room=conversation_id)
+
+            try:
+                from app.sandbox import get_manager
+                result = get_manager().send_message(
+                    conversation.sandbox_session_id,
+                    participant.participant_id,
+                    user_content,
+                )
+                if result.get('status') == 'error':
+                    self._mark_agent_message_failed(agent_msg.id, run.id,
+                                                    result.get('error', 'Agent execution failed'))
+                else:
+                    self._mark_agent_message_done_if_active(
+                        agent_msg.id,
+                        run.id,
+                        participant.participant_id,
+                        result.get('reply', ''),
+                    )
+            except Exception as e:
+                self._mark_agent_message_failed(agent_msg.id, run.id, str(e))
+
+    def _emit_system_error(self, conversation_id, content):
+        msg = Message(
+            conversation_id=conversation_id,
+            sender_type='agent',
+            sender_id='system',
+            content=content,
+            message_type='text',
+            elements=[{'type': 'progress', 'content': content, 'status': 'error'}],
+            status='error',
+        )
+        db.session.add(msg)
+        db.session.commit()
+        socketio.emit('conversation_message_created', _message_dict(msg),
+                      room=conversation_id)
+
+    def _mark_agent_message_failed(self, message_id, run_id, error):
+        msg = Message.query.get(message_id)
+        if not msg:
+            return
+        msg.status = 'error'
+        msg.content = error
+        msg.raw_output = ((msg.raw_output or '') + f'\n{error}').strip()
+        msg.elements = [{'type': 'progress', 'content': error, 'status': 'error'}]
+        run = None
+        try:
+            from app.models.agent_run import AgentRun
+            run = AgentRun.query.get(run_id)
+        except Exception:
+            pass
+        if run:
+            run.status = 'error'
+            run.error = error
+            run.finished_at = datetime.utcnow()
+        db.session.commit()
+        socketio.emit('conversation_message_status', {
+            'conversation_id': msg.conversation_id,
+            'message_id': msg.id,
+            'run_id': run_id,
+            'agent_id': msg.sender_id,
+            'status': 'error',
+            'content': msg.content,
+            'elements': msg.elements,
+            'raw_output': msg.raw_output,
+            'error': error,
+        }, room=msg.conversation_id)
+
+    def _mark_agent_message_done_if_active(self, message_id, run_id, agent_id, reply):
+        """Fallback finalization when container event callbacks are missed.
+
+        Normal streaming is driven by sandbox events. The synchronous container
+        response is still authoritative enough to close the round if the final
+        callback did not reach Flask.
+        """
+        from app.models.agent_run import AgentRun
+
+        msg = Message.query.get(message_id)
+        run = AgentRun.query.get(run_id)
+        if not msg or not run or run.status not in ('pending', 'running'):
+            return
+
+        text = (reply or '').strip()
+        if text:
+            msg.content = text[-1200:]
+            if not msg.raw_output:
+                msg.raw_output = text
+
+            elements = list(msg.elements or [])
+            has_text = any(el.get('type') == 'text' for el in elements if isinstance(el, dict))
+            if not has_text:
+                elements.append({'type': 'text', 'content': text})
+            try:
+                from app.services.message_element_builder import mentioned_file_elements
+                for element in mentioned_file_elements(run.sandbox_session_id, text):
+                    key = element.get('data', {}).get('url') or element.get('data', {}).get('name')
+                    exists = key and any(
+                        (item.get('data', {}).get('url') or item.get('data', {}).get('name')) == key
+                        for item in elements if isinstance(item, dict)
+                    )
+                    if not exists:
+                        elements.append(element)
+            except Exception:
+                pass
+            msg.elements = elements
+        elif not msg.content:
+            msg.content = '任务已完成'
+
+        msg.status = 'done'
+        run.status = 'done'
+        run.finished_at = datetime.utcnow()
+        db.session.commit()
+
+        socketio.emit('conversation_message_status', {
+            'conversation_id': msg.conversation_id,
+            'message_id': msg.id,
+            'run_id': run.id,
+            'agent_id': agent_id,
+            'status': 'done',
+            'content': msg.content,
+            'elements': msg.elements,
+            'raw_output': msg.raw_output,
+        }, room=msg.conversation_id)
 
     def get_conversation_messages(self, conversation_id, page=1, per_page=50):
         """Get paginated messages for a conversation."""
@@ -264,15 +454,7 @@ class MessageService:
 
         items = []
         for msg in pagination.items:
-            msg_data = msg.to_dict()
-            if msg.artifact:
-                msg_data['artifact'] = {
-                    'id': msg.artifact.id,
-                    'artifact_type': msg.artifact.artifact_type,
-                    'title': msg.artifact.title,
-                    'language': msg.artifact.language,
-                }
-            items.append(msg_data)
+            items.append(_message_dict(msg))
 
         return {
             'items': items,
@@ -295,18 +477,14 @@ class MessageService:
             if ref:
                 query = query.filter(Message.created_at > ref.created_at)
 
-        messages = query.order_by(Message.created_at.asc()).all()
+        messages = query.order_by(
+            Message.created_at.asc(),
+            Message.sender_type.desc(),
+            Message.id.asc(),
+        ).all()
         items = []
         for msg in messages:
-            msg_data = msg.to_dict()
-            if msg.artifact:
-                msg_data['artifact'] = {
-                    'id': msg.artifact.id,
-                    'artifact_type': msg.artifact.artifact_type,
-                    'title': msg.artifact.title,
-                    'language': msg.artifact.language,
-                }
-            items.append(msg_data)
+            items.append(_message_dict(msg))
 
         return {'items': items}, None
 

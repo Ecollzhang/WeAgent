@@ -33,12 +33,16 @@ service.interceptors.response.use(
 
       switch (status) {
         case 401:
-          // Token expired or invalid
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
-          localStorage.removeItem('user')
-          window.location.href = '/login'
-          Message.error('Login expired, please login again')
+          if (config.url === '/auth/login' || config.url === '/auth/register') {
+            Message.error(data?.message || '用户名或密码错误')
+          } else {
+            // Token expired or invalid
+            localStorage.removeItem('access_token')
+            localStorage.removeItem('refresh_token')
+            localStorage.removeItem('user')
+            window.location.href = '/login'
+            Message.error('Login expired, please login again')
+          }
           break
         case 403:
           Message.error('No permission')

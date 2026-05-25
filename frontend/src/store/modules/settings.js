@@ -28,12 +28,17 @@ const actions = {
   },
 
   async saveModelConfig({ commit }, config) {
-    commit('SET_MODEL_CONFIG', config)
     try {
-      await saveModelConfig(config)
+      const response = await saveModelConfig(config)
+      if (response.code === 200) {
+        commit('SET_MODEL_CONFIG', response.data)
+        return response.data
+      }
     } catch (e) {
       // Saved locally even if API fails
     }
+    commit('SET_MODEL_CONFIG', config)
+    return config
   },
 }
 

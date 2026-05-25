@@ -45,6 +45,12 @@ const routes = [
     component: () => import('../views/Tools.vue'),
     meta: { requiresAuth: true },
   },
+  {
+    path: '/sandbox',
+    name: 'SandboxTest',
+    component: () => import('../views/SandboxTest.vue'),
+    meta: { requiresAuth: false },
+  },
 ]
 
 const router = new Router({

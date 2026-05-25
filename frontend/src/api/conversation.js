@@ -23,3 +23,24 @@ export function addParticipant(conversationId, data) {
 export function removeParticipant(conversationId, participantType, participantId) {
   return service.delete(`/conversations/${conversationId}/participants/${participantType}/${participantId}`)
 }
+
+export function stopConversationAgent(conversationId, agentId) {
+  return service.post(`/conversations/${conversationId}/agents/${agentId}/stop`)
+}
+
+export function getConversationAttachments(conversationId) {
+  return service.get(`/conversations/${conversationId}/attachments`)
+}
+
+export function uploadConversationAttachment(conversationId, file, agentId) {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (agentId) formData.append('agent_id', agentId)
+  return service.post(`/conversations/${conversationId}/attachments`, formData)
+}
+
+export function deleteConversationAttachment(conversationId, path, agentId) {
+  return service.delete(`/conversations/${conversationId}/attachments`, {
+    data: { path, agent_id: agentId },
+  })
+}

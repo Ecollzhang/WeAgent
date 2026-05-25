@@ -4,6 +4,7 @@ class SocketClient {
   constructor() {
     this.socket = null
     this.listeners = {}
+    this.rooms = new Set()
   }
 
   connect() {
@@ -20,6 +21,9 @@ class SocketClient {
 
     this.socket.on('connect', () => {
       console.log('Socket connected')
+      this.rooms.forEach(room => {
+        this.socket.emit('join', { conversation_id: room })
+      })
     })
 
     this.socket.on('disconnect', () => {
@@ -46,12 +50,16 @@ class SocketClient {
   }
 
   joinConversation(conversationId) {
+    if (!conversationId) return
+    this.rooms.add(conversationId)
     if (this.socket && this.socket.connected) {
       this.socket.emit('join', { conversation_id: conversationId })
     }
   }
 
   leaveConversation(conversationId) {
+    if (!conversationId) return
+    this.rooms.delete(conversationId)
     if (this.socket && this.socket.connected) {
       this.socket.emit('leave', { conversation_id: conversationId })
     }

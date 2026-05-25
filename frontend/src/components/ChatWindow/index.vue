@@ -9,7 +9,8 @@
       </div>
       <div class="header-actions">
         <el-button size="mini" icon="el-icon-search" type="text" @click="$emit('search-messages')" title="搜索"></el-button>
-        <el-button size="mini" icon="el-icon-paperclip" type="text" @click="$emit('open-attachment')" title="附件"></el-button>
+        <el-button size="mini" icon="el-icon-folder-opened" type="text" @click="$emit('open-workspace', 'workspace')" title="工作目录"></el-button>
+        <el-button size="mini" icon="el-icon-upload2" type="text" @click="$emit('open-attachments')" title="上传文件"></el-button>
         <el-button size="mini" icon="el-icon-star-off" type="text" @click="$emit('toggle-star')" title="收藏"></el-button>
         <el-button size="mini" icon="el-icon-time" type="text" @click="$emit('open-history')" title="历史"></el-button>
         <el-dropdown trigger="click" @command="handleMoreCommand">
@@ -43,7 +44,10 @@
           <MessageBubble
             :message="msg"
             :isOwn="msg.sender_type === 'user' && msg.sender_id === userId"
+            :sessionId="sessionId"
             @pin="$emit('pin-message', msg.id)"
+            @stop-agent="$emit('stop-agent', msg)"
+            @open-file="$emit('open-file', $event)"
           />
         </div>
       </template>
@@ -63,7 +67,7 @@
         <span class="typing-text">智能体正在响应...</span>
       </div>
 
-      <div v-else class="empty-messages">
+      <div v-else-if="!conversation" class="empty-messages">
         <i class="el-icon-s-promotion"></i>
         <h2>欢迎使用 WeAgent</h2>
         <p>多智能体协作平台</p>
@@ -111,6 +115,7 @@ export default {
     messages: Array,
     userId: String,
     agentResponding: { type: Boolean, default: false },
+    sessionAgents: { type: Array, default: () => [] },
   },
   data() {
     return {
@@ -128,6 +133,9 @@ export default {
     participantCount() {
       if (!this.conversation || !this.conversation.participants) return 0
       return this.conversation.participants.length
+    },
+    sessionId() {
+      return this.conversation?.sandbox_session_id || this.conversation?.id || ''
     },
   },
   watch: {
@@ -157,7 +165,9 @@ export default {
     },
     handleTabSwitch(key) {
       this.activeTab = key
-      if (key !== 'chat') {
+      if (key === 'logs') {
+        this.$emit('open-workspace', 'workspace')
+      } else if (key !== 'chat') {
         this.$message.info(key === 'agent_config' ? '智能体配置功能即将上线' :
                           key === 'tool_calls' ? '工具调用记录功能即将上线' :
                           '日志功能即将上线')

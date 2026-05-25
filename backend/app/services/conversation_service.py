@@ -1,9 +1,19 @@
 from app.models.message import Message
 from app.models.user import User
 from app.models.agent import Agent
+from app import db
 from app.repositories.conversation_repo import conversation_repo
 from app.repositories.agent_repo import agent_repo
 from app.repositories.message_repo import message_repo
+from app.services.settings_service import settings_service
+from werkzeug.utils import secure_filename
+
+
+def _safe_workspace_name(name):
+    import re
+    clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(name or '').strip())
+    clean = re.sub(r'\s+', '_', clean).strip('._ ')
+    return clean[:80] or 'agent'
 
 
 def _participant_display_info(participant_type, participant_id):
@@ -145,7 +155,67 @@ class ConversationService:
                     participant_color=info['color'],
                 )
 
+        agent_participants = [
+            p for p in conversation.participants
+            if p.participant_type == 'agent'
+        ]
+        if len(agent_participants) == 1:
+            error = self._create_single_agent_sandbox(conversation, agent_participants[0],
+                                                      owner_id)
+            if error:
+                conversation.delete()
+                return None, error
+
         return self._conv_to_dict(conversation), None
+
+    def _create_single_agent_sandbox(self, conversation, participant, user_id):
+        env_vars, error = settings_service.get_container_env_vars(user_id)
+        if error:
+            return error
+
+        agent = Agent.query.get(participant.participant_id)
+        if not agent:
+            return 'Agent not found'
+
+        workspace_name = _safe_workspace_name(agent.name)
+        work_dir = f'/workspace/agents/{workspace_name}'
+        system_prompt_parts = [agent.system_prompt or '']
+        if agent.skill:
+            system_prompt_parts.append(f'\n\n工作流程:\n{agent.skill}')
+        system_prompt_parts.append(f"""
+
+文件产物要求:
+- 如果任务需要生成页面、代码、文档或其它文件，必须实际写入 {work_dir}/ 下的文件。
+- 不要只在回复中描述“已创建文件”；必须让文件真实存在于工作目录。
+- 前端页面入口优先写入 {work_dir}/index.html，相关资源放入同目录的 css/、js/ 或 assets/。
+- 回复正文只总结产物和使用方式，不要要求用户手动进入 Docker 容器。
+- 如写入了可预览 HTML，请明确提到入口文件 index.html。
+""")
+
+        agents_config = [{
+            'agent_id': agent.id,
+            'role': agent.name,
+            'workspace_name': workspace_name,
+            'system_prompt': '\n'.join(part for part in system_prompt_parts if part),
+        }]
+
+        try:
+            from app.sandbox import get_manager
+            session = get_manager().create_session(
+                conversation.id,
+                agents_config,
+                env_vars=env_vars,
+            )
+        except Exception as e:
+            return f'创建沙箱容器失败：{e}'
+
+        conversation.sandbox_session_id = session.session_id
+        conversation.sandbox_container_id = session.container_id
+        conversation.sandbox_host_port = session.host_port
+        conversation.sandbox_status = 'running'
+        conversation.last_active_at = db.func.now()
+        db.session.commit()
+        return None
 
     def get_user_conversations(self, user_id):
         """Get all conversations for a user with last message."""
@@ -179,8 +249,155 @@ class ConversationService:
             return None, 'Conversation not found'
         if conversation.owner_id != user_id:
             return None, 'Permission denied'
+        if conversation.sandbox_session_id:
+            try:
+                from app.sandbox import get_manager
+                get_manager().destroy_session(conversation.sandbox_session_id)
+            except Exception:
+                pass
         conversation.delete()
         return {'deleted': True}, None
+
+    def stop_agent(self, conversation_id, agent_id, user_id):
+        """Stop a single agent run in a formal conversation."""
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation:
+            return None, 'Conversation not found'
+        if conversation.owner_id != user_id:
+            return None, 'Permission denied'
+        if not conversation.sandbox_session_id:
+            return None, 'Conversation has no sandbox session'
+
+        try:
+            from app.sandbox import get_manager
+            result = get_manager().stop_agent(conversation.sandbox_session_id, agent_id)
+        except Exception as e:
+            return None, str(e)
+
+        from app.services.sandbox_event_bridge import sandbox_event_bridge
+        sandbox_event_bridge.mark_agent_stopped(conversation.id, agent_id)
+        return result, None
+
+    def _get_conversation_agent(self, conversation, agent_id=None):
+        agents = [p for p in conversation.participants if p.participant_type == 'agent']
+        if agent_id:
+            return next((p for p in agents if p.participant_id == agent_id), None)
+        return agents[0] if len(agents) == 1 else None
+
+    def list_attachments(self, conversation_id, user_id):
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation:
+            return None, 'Conversation not found'
+        if conversation.owner_id != user_id:
+            return None, 'Permission denied'
+        agent = self._get_conversation_agent(conversation)
+        if not agent:
+            return None, '阶段 1 仅支持单 Agent 会话附件'
+        if not conversation.sandbox_session_id:
+            return None, 'Conversation has no sandbox session'
+
+        workspace_name = _safe_workspace_name(agent.participant_name or agent.participant_id)
+        root = f'/workspace/agents/{workspace_name}/userInput'
+        try:
+            from app.sandbox import get_manager
+            result = get_manager().get_file_tree(conversation.sandbox_session_id, root=root)
+        except Exception as e:
+            return None, str(e)
+
+        files = []
+
+        def walk(node):
+            if not node:
+                return
+            if node.get('type') == 'file':
+                files.append({
+                    'name': node.get('name'),
+                    'path': node.get('path'),
+                    'size': node.get('size'),
+                    'agent_id': agent.participant_id,
+                })
+            for child in node.get('children') or []:
+                walk(child)
+
+        if result and result.get('error') and 'Path not found' in result.get('error', ''):
+            result = {}
+        if result and result.get('error'):
+            return None, result.get('error')
+        if result and result.get('tree'):
+            walk(result.get('tree'))
+        return {
+            'agent_id': agent.participant_id,
+            'agent_name': agent.participant_name,
+            'root': root,
+            'files': files,
+        }, None
+
+    def upload_attachment(self, conversation_id, user_id, file, agent_id=None):
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation:
+            return None, 'Conversation not found'
+        if conversation.owner_id != user_id:
+            return None, 'Permission denied'
+        if not file or not file.filename:
+            return None, 'No file selected'
+        agent = self._get_conversation_agent(conversation, agent_id)
+        if not agent:
+            return None, '阶段 1 仅支持单 Agent 会话附件'
+        if not conversation.sandbox_session_id:
+            return None, 'Conversation has no sandbox session'
+
+        filename = secure_filename(file.filename) or 'upload.bin'
+        workspace_name = _safe_workspace_name(agent.participant_name or agent.participant_id)
+        path = f'/workspace/agents/{workspace_name}/userInput/{filename}'
+        content = file.read()
+        try:
+            from app.sandbox import get_manager
+            result = get_manager().upload_agent_file(
+                conversation.sandbox_session_id,
+                agent.participant_id,
+                path,
+                filename,
+                content,
+                file.mimetype or 'application/octet-stream',
+            )
+        except Exception as e:
+            return None, str(e)
+        if result.get('error'):
+            return None, result.get('error')
+        return {
+            'name': filename,
+            'path': result.get('path', path),
+            'size': result.get('size', len(content)),
+            'agent_id': agent.participant_id,
+            'agent_name': agent.participant_name,
+        }, None
+
+    def delete_attachment(self, conversation_id, user_id, path, agent_id=None):
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation:
+            return None, 'Conversation not found'
+        if conversation.owner_id != user_id:
+            return None, 'Permission denied'
+        if not path:
+            return None, 'path required'
+        agent = self._get_conversation_agent(conversation, agent_id)
+        if not agent:
+            return None, '阶段 1 仅支持单 Agent 会话附件'
+        if not conversation.sandbox_session_id:
+            return None, 'Conversation has no sandbox session'
+
+        try:
+            from app.sandbox import get_manager
+            result = get_manager().delete_agent_file(
+                conversation.sandbox_session_id,
+                agent.participant_id,
+                path,
+            )
+        except Exception as e:
+            return None, str(e)
+        if result.get('error'):
+            return None, result.get('error')
+        return {'deleted': True, 'path': path}, None
 
     def add_participant(self, conversation_id, participant_type, participant_id, user_id):
         """Add a participant to conversation."""

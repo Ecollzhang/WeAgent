@@ -31,6 +31,10 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE agents ADD COLUMN class_id VARCHAR(36) DEFAULT NULL'))
             if 'user_id' not in cols:
                 conn.execute(text('ALTER TABLE agents ADD COLUMN user_id VARCHAR(36) DEFAULT NULL'))
+            if 'tool_ids' not in cols:
+                conn.execute(text('ALTER TABLE agents ADD COLUMN tool_ids JSON DEFAULT NULL'))
+            if 'is_public' not in cols:
+                conn.execute(text('ALTER TABLE agents ADD COLUMN is_public BOOLEAN DEFAULT TRUE'))
             conn.commit()
 
     # agent_categories table
@@ -59,6 +63,34 @@ def _migrate_existing_tables():
         with db.engine.connect() as conn:
             if 'elements' not in cols:
                 conn.execute(text('ALTER TABLE messages ADD COLUMN elements JSON DEFAULT NULL'))
+            if 'round_id' not in cols:
+                conn.execute(text('ALTER TABLE messages ADD COLUMN round_id VARCHAR(36) DEFAULT NULL'))
+            if 'run_id' not in cols:
+                conn.execute(text('ALTER TABLE messages ADD COLUMN run_id VARCHAR(36) DEFAULT NULL'))
+            if 'status' not in cols:
+                conn.execute(text('ALTER TABLE messages ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT "done"'))
+            if 'raw_output' not in cols:
+                conn.execute(text('ALTER TABLE messages ADD COLUMN raw_output TEXT DEFAULT NULL'))
+            if 'meta' not in cols:
+                conn.execute(text('ALTER TABLE messages ADD COLUMN meta JSON DEFAULT NULL'))
+            conn.commit()
+
+    # conversations table — sandbox lifecycle columns
+    if 'conversations' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('conversations')]
+        with db.engine.connect() as conn:
+            if 'sandbox_session_id' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_session_id VARCHAR(100) DEFAULT NULL'))
+            if 'sandbox_container_id' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_container_id VARCHAR(128) DEFAULT NULL'))
+            if 'sandbox_host_port' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_host_port INTEGER DEFAULT NULL'))
+            if 'sandbox_status' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_status VARCHAR(20) NOT NULL DEFAULT "pending"'))
+            if 'last_active_at' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN last_active_at DATETIME DEFAULT NULL'))
+            if 'stopped_at' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN stopped_at DATETIME DEFAULT NULL'))
             conn.commit()
 
 
@@ -88,6 +120,7 @@ def create_app(config_name=None):
     from app.controllers.artifact_controller import artifact_bp
     from app.controllers.tool_controller import tool_bp
     from app.controllers.upload_controller import upload_bp
+    from app.controllers.settings_controller import settings_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
@@ -96,6 +129,14 @@ def create_app(config_name=None):
     app.register_blueprint(artifact_bp, url_prefix='/api/artifacts')
     app.register_blueprint(tool_bp, url_prefix='/api/tools')
     app.register_blueprint(upload_bp, url_prefix='/api/upload')
+    app.register_blueprint(settings_bp, url_prefix='/api/settings')
+
+    # Register sandbox blueprint (optional, for testing)
+    try:
+        from app.sandbox.api.routes import sandbox_bp
+        app.register_blueprint(sandbox_bp, url_prefix='/api/sandbox')
+    except ImportError as e:
+        print(f'[WeAgent] Sandbox blueprint not loaded: {e}')
 
     # Serve uploaded files
     @app.route('/uploads/<path:filename>')
@@ -107,6 +148,14 @@ def create_app(config_name=None):
     from app.utils.redis_client import redis_client
     redis_client.init_app(app)
 
+    # Register SocketIO event handlers. The decorators in app.socket.events
+    # only take effect after the module is imported.
+    try:
+        import importlib
+        importlib.import_module('app.socket.events')
+    except Exception as e:
+        print(f'[WeAgent] Socket events not loaded: {e}')
+
     # Auto-create tables and seed data (development convenience)
     with app.app_context():
         # Import all models so SQLAlchemy knows about them
@@ -117,6 +166,8 @@ def create_app(config_name=None):
         from app.models.agent_category import AgentCategory
         from app.models.artifact import Artifact
         from app.models.agent_tool import AgentTool
+        from app.models.user_model_config import UserModelConfig
+        from app.models.agent_run import AgentRun
 
         db.create_all()
 

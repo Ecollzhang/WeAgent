@@ -107,3 +107,59 @@ def remove_participant(conversation_id, participant_type, participant_id):
         return error_response(error, code=400)
 
     return success_response(result, message='Participant removed')
+
+
+@conversation_bp.route('/<conversation_id>/agents/<agent_id>/stop', methods=['POST'])
+@jwt_required()
+def stop_agent(conversation_id, agent_id):
+    """Stop one agent's current execution in a conversation."""
+    user_id = get_jwt_identity()
+    result, error = conversation_service.stop_agent(conversation_id, agent_id, user_id)
+
+    if error:
+        return error_response(error, code=400)
+
+    return success_response(result, message='Agent stopped')
+
+
+@conversation_bp.route('/<conversation_id>/attachments', methods=['GET'])
+@jwt_required()
+def list_attachments(conversation_id):
+    user_id = get_jwt_identity()
+    result, error = conversation_service.list_attachments(conversation_id, user_id)
+
+    if error:
+        return error_response(error, code=400)
+
+    return success_response(result)
+
+
+@conversation_bp.route('/<conversation_id>/attachments', methods=['POST'])
+@jwt_required()
+def upload_attachment(conversation_id):
+    user_id = get_jwt_identity()
+    file = request.files.get('file')
+    agent_id = request.form.get('agent_id')
+    result, error = conversation_service.upload_attachment(
+        conversation_id, user_id, file, agent_id=agent_id
+    )
+
+    if error:
+        return error_response(error, code=400)
+
+    return success_response(result, message='File uploaded')
+
+
+@conversation_bp.route('/<conversation_id>/attachments', methods=['DELETE'])
+@jwt_required()
+def delete_attachment(conversation_id):
+    user_id = get_jwt_identity()
+    data = request.json or {}
+    result, error = conversation_service.delete_attachment(
+        conversation_id, user_id, data.get('path'), data.get('agent_id')
+    )
+
+    if error:
+        return error_response(error, code=400)
+
+    return success_response(result, message='File deleted')

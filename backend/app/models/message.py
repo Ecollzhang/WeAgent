@@ -23,6 +23,13 @@ class Message(BaseModel):
     is_pinned = db.Column(db.Boolean, default=False)
     elements = db.Column(db.JSON, nullable=True)
     """Structured content array: [{"type": "text|code|image|table|file", "data": {...}}]"""
+    round_id = db.Column(db.String(36), nullable=True, index=True)
+    run_id = db.Column(db.String(36), nullable=True, index=True)
+    status = db.Column(db.Enum('pending', 'streaming', 'done', 'error', 'stopped',
+                               name='message_status'),
+                       nullable=False, default='done')
+    raw_output = db.Column(db.Text, nullable=True)
+    meta = db.Column(db.JSON, nullable=True)
 
     # Relationships
     artifact = db.relationship('Artifact', backref='message', lazy='joined',

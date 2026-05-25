@@ -12,7 +12,11 @@ class MessageRepository(BaseRepository):
         """Get paginated messages for a conversation."""
         return Message.query.filter_by(
             conversation_id=conversation_id
-        ).order_by(Message.created_at.asc()).paginate(
+        ).order_by(
+            Message.created_at.asc(),
+            Message.sender_type.desc(),
+            Message.id.asc(),
+        ).paginate(
             page=page, per_page=per_page, error_out=False
         )
 
@@ -21,7 +25,11 @@ class MessageRepository(BaseRepository):
         return Message.query.filter_by(
             conversation_id=conversation_id,
             is_pinned=True
-        ).order_by(Message.created_at.asc()).all()
+        ).order_by(
+            Message.created_at.asc(),
+            Message.sender_type.desc(),
+            Message.id.asc(),
+        ).all()
 
     def toggle_pin(self, message_id):
         """Toggle pin status of a message."""

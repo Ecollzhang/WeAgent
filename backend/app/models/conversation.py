@@ -9,6 +9,14 @@ class Conversation(BaseModel):
     type = db.Column(db.Enum('single', 'group', name='conversation_type'),
                      nullable=False, default='single')
     owner_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    sandbox_session_id = db.Column(db.String(100), nullable=True, index=True)
+    sandbox_container_id = db.Column(db.String(128), nullable=True)
+    sandbox_host_port = db.Column(db.Integer, nullable=True)
+    sandbox_status = db.Column(db.Enum('pending', 'running', 'stopped', 'error',
+                                       name='sandbox_status'),
+                               nullable=False, default='pending')
+    last_active_at = db.Column(db.DateTime, nullable=True)
+    stopped_at = db.Column(db.DateTime, nullable=True)
 
     # Relationships
     participants = db.relationship('ConversationParticipant', backref='conversation',

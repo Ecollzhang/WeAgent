@@ -39,7 +39,7 @@
             </el-form-item>
             <el-form-item label="模型名称">
               <el-select v-model="modelConfig.model" style="width: 100%">
-                <el-option label="Claude 3.5 Sonnet" value="claude-3.5-sonnet"></el-option>
+                <el-option label="deepseek-v4-pro" value="deepseek-v4-pro"></el-option>
                 <el-option label="Claude 3 Opus" value="claude-3-opus"></el-option>
                 <el-option label="GPT-4o" value="gpt-4o"></el-option>
                 <el-option label="GPT-4o-mini" value="gpt-4o-mini"></el-option>
@@ -151,11 +151,16 @@ export default {
       },
     }
   },
-  created() {
+  async created() {
     // Load model config from store
     const saved = this.$store.state.settings.modelConfig
     if (saved) {
       this.modelConfig = { ...this.modelConfig, ...saved }
+    }
+    await this.$store.dispatch('settings/fetchModelConfig')
+    const remoteSaved = this.$store.state.settings.modelConfig
+    if (remoteSaved) {
+      this.modelConfig = { ...this.modelConfig, ...remoteSaved }
     }
     // Load user profile
     const user = this.$store.state.user.user

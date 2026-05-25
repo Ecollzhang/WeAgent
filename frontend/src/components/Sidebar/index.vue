@@ -20,6 +20,10 @@
         <i class="el-icon-setting"></i>
         <span>设置</span>
       </router-link>
+      <router-link to="/sandbox" class="nav-item" :class="{ active: $route.path === '/sandbox' }">
+        <i class="el-icon-s-data"></i>
+        <span>沙箱测试</span>
+      </router-link>
     </div>
     <div class="sidebar-footer" @click="handleLogout">
       <div class="user-info">

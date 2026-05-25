@@ -22,6 +22,7 @@
         :messages="currentMessages"
         :userId="userId"
         :agentResponding="isAgentResponding"
+        :sessionAgents="currentSessionAgents"
         @send-message="handleSendMessage"
         @pin-message="handlePinMessage"
         @delete-conversation="handleDeleteConversation"
@@ -29,8 +30,123 @@
         @open-attachment="handleOpenAttachment"
         @toggle-star="handleToggleStar"
         @open-history="handleOpenHistory"
+        @stop-agent="handleStopAgent"
+        @open-workspace="handleOpenWorkspace"
+        @open-file="handleOpenFile"
+        @open-attachments="handleOpenAttachments"
       />
     </div>
+
+    <el-dialog
+      :title="previewTitle"
+      :visible.sync="previewVisible"
+      width="78%"
+      top="5vh"
+      custom-class="file-preview-dialog"
+    >
+      <div v-loading="previewLoading" class="file-browser-body">
+        <div class="file-tree-panel">
+          <div class="file-scope-tabs">
+            <el-button size="mini" :type="fileScope === 'workspace' ? 'primary' : 'text'" @click="switchFileScope('workspace')">全部</el-button>
+            <el-button size="mini" :type="fileScope === 'shared' ? 'primary' : 'text'" @click="switchFileScope('shared')">公共</el-button>
+            <el-dropdown trigger="click" @command="switchFileScope">
+              <el-button size="mini" :type="fileScope.startsWith('agent:') ? 'primary' : 'text'">
+                Agent<i class="el-icon-arrow-down el-icon--right" />
+              </el-button>
+              <el-dropdown-menu slot="dropdown">
+                <el-dropdown-item
+                  v-for="ag in currentSessionAgents"
+                  :key="ag.agent_id"
+                  :command="`agent:${ag.agent_id}`"
+                >
+                  {{ ag.role || ag.name || ag.agent_id }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </el-dropdown>
+          </div>
+          <div class="file-tree-header">
+            <span>{{ fileTreeRoot }}</span>
+            <el-button size="mini" type="text" @click="loadFileTree(fileTreeRoot)">刷新</el-button>
+          </div>
+          <el-tree
+            :data="fileTreeData"
+            :props="fileTreeProps"
+            node-key="path"
+            default-expand-all
+            @node-click="handleFileNodeClick"
+          >
+            <span slot-scope="{ node, data }" class="file-tree-node">
+              <i :class="data.type === 'directory' ? 'el-icon-folder' : getFileIcon(data.path)" />
+              <span>{{ node.label }}</span>
+              <span v-if="data.size" class="tree-file-size">{{ formatFileSize(data.size) }}</span>
+            </span>
+          </el-tree>
+        </div>
+        <div class="file-preview-panel">
+          <div class="file-preview-toolbar" v-if="selectedFilePath">
+            <span class="selected-file-path">{{ selectedFilePath }}</span>
+            <el-button size="mini" type="text" @click="openContainingFolder(selectedFilePath)">所在目录</el-button>
+            <el-button size="mini" type="text" @click="copyFilePath(selectedFilePath)">复制路径</el-button>
+            <el-button size="mini" type="text" @click="downloadFile(selectedFilePath)">下载</el-button>
+            <el-button v-if="isHtmlFile(selectedFilePath)" size="mini" type="text" @click="openWorkspaceFile(selectedFilePath)">打开 HTML</el-button>
+          </div>
+          <div v-else class="file-preview-empty">
+            <i class="el-icon-folder-opened" />
+            <span>选择左侧文件查看内容</span>
+          </div>
+          <div v-if="previewType === 'image'" class="image-preview-wrap">
+            <img :src="previewUrl" class="image-preview" />
+          </div>
+          <iframe v-else-if="previewType === 'html'" :src="previewUrl" class="html-preview" />
+          <iframe v-else-if="previewType === 'pdf'" :src="previewUrl" class="pdf-preview" />
+          <div v-else-if="previewType === 'binary'" class="binary-preview">
+            <i class="el-icon-document" />
+            <p>该文件为二进制或不支持内嵌预览，请下载查看。</p>
+          </div>
+          <pre v-else class="file-preview-content">{{ previewContent }}</pre>
+        </div>
+      </div>
+    </el-dialog>
+
+    <el-drawer
+      title="上传文件"
+      :visible.sync="attachmentsVisible"
+      direction="rtl"
+      size="360px"
+      custom-class="attachments-drawer"
+    >
+      <div class="attachments-body">
+        <el-upload
+          drag
+          action=""
+          :auto-upload="false"
+          :show-file-list="false"
+          :on-change="handleAttachmentPicked"
+          class="attachment-upload"
+        >
+          <i class="el-icon-upload"></i>
+          <div class="el-upload__text">拖拽文件到这里，或点击选择</div>
+          <div class="el-upload__tip" slot="tip">支持图片、PDF、代码、文本等文件</div>
+        </el-upload>
+
+        <div class="attachment-list-header">
+          <span>已上传</span>
+          <el-button size="mini" type="text" @click="loadAttachments">刷新</el-button>
+        </div>
+
+        <div v-loading="attachmentsLoading" class="attachment-list">
+          <div v-if="attachments.length === 0" class="attachment-empty">暂无上传文件</div>
+          <div v-for="file in attachments" :key="file.path" class="attachment-item">
+            <i :class="getFileIcon(file.path)"></i>
+            <div class="attachment-info">
+              <button class="attachment-name" @click="handleOpenFile(file)">{{ file.name }}</button>
+              <span>{{ formatFileSize(file.size) }}</span>
+            </div>
+            <el-button size="mini" type="text" icon="el-icon-delete" @click="handleDeleteAttachment(file)"></el-button>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
 
     <!-- 新建会话对话框 -->
     <el-dialog title="新建会话" :visible.sync="showCreateDialog" width="500px" custom-class="create-conv-dialog" top="8vh">
@@ -121,7 +237,21 @@ import AppSidebar from '../components/Sidebar/index.vue'
 import ConversationList from '../components/ConversationList/index.vue'
 import ChatWindow from '../components/ChatWindow/index.vue'
 import { getCategories, getAgents } from '../api/agent'
-import { sendMessage as apiSendMessage, pollMessages } from '../api/message'
+import { sendMessage as apiSendMessage } from '../api/message'
+import {
+  stopConversationAgent,
+  getConversationAttachments,
+  uploadConversationAttachment,
+  deleteConversationAttachment,
+} from '../api/conversation'
+import {
+  getFileTree,
+  readAgentFile,
+  getSessionRawFileUrl,
+  getWorkspaceFileUrl,
+  getSessionDownloadUrl,
+} from '../api/sandbox'
+import socketClient from '../utils/socket'
 
 // ---------- localStorage helpers ----------
 function loadAgentMeta() {
@@ -147,10 +277,23 @@ export default {
         type: 'single',
         selectedAgents: [],
       },
-      pollTimer: null,
-      pollAfterId: null,
-      eventSource: null,
+      socketHandlers: [],
       isAgentResponding: false,
+      previewVisible: false,
+      previewTitle: '',
+      previewContent: '',
+      previewLoading: false,
+      previewType: 'text',
+      previewUrl: '',
+      selectedFilePath: '',
+      fileTreeData: [],
+      fileTreeRoot: '/workspace',
+      fileScope: 'workspace',
+      fileTreeProps: { children: 'children', label: 'name' },
+      attachmentsVisible: false,
+      attachments: [],
+      attachmentsLoading: false,
+      messageRefreshTimer: null,
     }
   },
   computed: {
@@ -193,17 +336,38 @@ export default {
         .map(id => this.findAgentWithMeta(id))
         .filter(Boolean)
     },
+    currentSessionId() {
+      return this.currentConversation?.sandbox_session_id || this.currentConversation?.id || ''
+    },
+    currentSessionAgents() {
+      const participants = this.currentConversation?.participants_info || []
+      return participants
+        .filter(p => p.participant_type === 'agent')
+        .map(p => ({
+          agent_id: p.participant_id,
+          role: p.name,
+          name: p.name,
+          workspace_name: this.safeWorkspaceName(p.name || p.participant_id),
+          avatar: p.avatar,
+          color: p.color,
+        }))
+    },
   },
   async created() {
+    socketClient.connect()
+    this.registerSocketHandlers()
     await Promise.all([
       this.$store.dispatch('conversation/fetchConversations'),
       this.$store.dispatch('agent/fetchAgents'),
     ])
   },
-  beforeDestroy() {
-    this.stopPolling()
-    this.stopSSE()
-  },
+    beforeDestroy() {
+      if (this.currentConversation?.id) {
+        socketClient.leaveConversation(this.currentConversation.id)
+      }
+      this.stopMessageRefresh()
+      this.unregisterSocketHandlers()
+    },
   watch: {
     showCreateDialog(open) {
       if (open) {
@@ -231,19 +395,15 @@ export default {
   },
   methods: {
     handleSelectConversation(conversation) {
+      const oldId = this.currentConversation?.id
+      if (oldId && oldId !== conversation.id) {
+        socketClient.leaveConversation(oldId)
+      }
       this.$store.commit('conversation/SET_CURRENT_CONVERSATION', conversation)
-      this.pollAfterId = null
       this.isAgentResponding = false
-      this.stopPolling()
-      this.stopSSE()
+      socketClient.joinConversation(conversation.id)
       this.$store.dispatch('message/fetchMessages', {
         conversationId: conversation.id,
-      }).then(() => {
-        const msgs = this.$store.getters['message/getMessagesByConversation'](conversation.id)
-        if (msgs.length > 0) {
-          this.pollAfterId = msgs[msgs.length - 1].id
-        }
-        this.startPolling()
       })
     },
 
@@ -283,103 +443,131 @@ export default {
             realId: res.data.id,
           })
 
-          // Start SSE streaming for agent responses
-          this.pollAfterId = res.data.id
-          this.stopPolling()
-          this.startSSE(convId, res.data.id)
           this.$store.dispatch('conversation/fetchConversations')
+          this.startMessageRefresh(convId)
         }
       } catch (e) {
         this.$message.error('发送失败')
         this.isAgentResponding = false
+        this.stopMessageRefresh()
       }
     },
 
-    startPolling() {
-      this.stopPolling()
-      this.pollTimer = setInterval(() => this._doPoll(), 1500)
-    },
-    stopPolling() {
-      if (this.pollTimer) {
-        clearInterval(this.pollTimer)
-        this.pollTimer = null
+    registerSocketHandlers() {
+      const onCreated = (message) => {
+        const convId = message.conversation_id
+        this.$store.commit('message/UPSERT_MESSAGE', {
+          conversationId: convId,
+          message,
+        })
+        this.isAgentResponding = this.hasStreamingMessages(convId)
+        this.$store.dispatch('conversation/fetchConversations')
       }
-    },
-    async _doPoll() {
-      if (!this.currentConversation || this.eventSource) {
-        // Don't poll while SSE is active
-        return
+      const onDelta = (event) => {
+        this.$store.commit('message/UPDATE_MESSAGE', {
+          conversationId: event.conversation_id,
+          messageId: event.message_id,
+          patch: {
+            content: event.content,
+            elements: event.elements,
+            raw_output: event.raw_output,
+            status: event.status,
+            sender_name: event.sender_name,
+          },
+        })
+        this.isAgentResponding = this.hasStreamingMessages(event.conversation_id)
       }
-      try {
-        const res = await pollMessages(this.currentConversation.id, this.pollAfterId)
-        if (res.code === 200 && res.data.items.length > 0) {
-          for (const msg of res.data.items) {
-            this.$store.commit('message/APPEND_MESSAGE', {
-              conversationId: this.currentConversation.id,
-              message: msg,
-            })
-          }
-          this.pollAfterId = res.data.items[res.data.items.length - 1].id
-          this.$store.dispatch('conversation/fetchConversations')
+      const onElement = (event) => {
+        this.$store.commit('message/APPEND_MESSAGE_ELEMENT', {
+          conversationId: event.conversation_id,
+          messageId: event.message_id,
+          element: event.element,
+          patch: {
+            content: event.content,
+            raw_output: event.raw_output,
+            status: event.status,
+            sender_name: event.sender_name,
+          },
+        })
+        this.$store.commit('message/ADD_MESSAGE_EVENT', {
+          conversationId: event.conversation_id,
+          messageId: event.message_id,
+          events: event.events,
+        })
+      }
+      const onStep = (event) => {
+        this.$store.commit('message/ADD_MESSAGE_EVENT', {
+          conversationId: event.conversation_id,
+          messageId: event.message_id,
+          event: event.event,
+          events: event.events,
+        })
+      }
+      const onElementStream = onElement
+      const onStatus = (event) => {
+        const patch = {
+          content: event.content,
+          elements: event.elements,
+          raw_output: event.raw_output,
+          status: event.status,
+          sender_name: event.sender_name,
         }
-      } catch (e) {
-        // Silently ignore polling errors
-      }
-    },
-
-    // ====== SSE streaming ======
-    startSSE(conversationId, afterId) {
-      this.stopSSE()
-      let cleanedUp = false
-
-      const token = localStorage.getItem('access_token')
-      if (!token) {
-        this.startPolling()
-        return
-      }
-
-      const url = `http://localhost:5000/api/messages/stream/${conversationId}?after=${afterId}&token=${token}`
-      this.eventSource = new EventSource(url)
-
-      const cleanup = () => {
-        if (cleanedUp) return
-        cleanedUp = true
-        this.isAgentResponding = false
-        this.stopSSE()
-        this.startPolling()
-      }
-
-      this.eventSource.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          // Deduplicate: skip if message already exists in store
-          const existing = this.$store.getters['message/getMessagesByConversation'](conversationId)
-          if (existing.some(m => m.id === msg.id)) return
-          this.$store.commit('message/APPEND_MESSAGE', {
-            conversationId,
-            message: msg,
-          })
-          this.pollAfterId = msg.id
-          this.$store.dispatch('conversation/fetchConversations')
-        } catch (e) {
-          console.error('[SSE] parse error:', e)
+        if (event.events) {
+          patch.meta = { events: event.events }
+        }
+        this.$store.commit('message/UPDATE_MESSAGE', {
+          conversationId: event.conversation_id,
+          messageId: event.message_id,
+          patch,
+        })
+        this.isAgentResponding = this.hasStreamingMessages(event.conversation_id)
+        this.$store.dispatch('conversation/fetchConversations')
+        if (!this.isAgentResponding) {
+          this.stopMessageRefresh()
         }
       }
 
-      this.eventSource.addEventListener('done', () => {
-        cleanup()
-      })
-
-      this.eventSource.onerror = () => {
-        if (!this.eventSource) return
-        cleanup()
-      }
+      this.socketHandlers = [
+        ['conversation_message_created', onCreated],
+        ['conversation_message_delta', onDelta],
+        ['conversation_message_element_stream', onElementStream],
+        ['conversation_message_step', onStep],
+        ['conversation_message_status', onStatus],
+      ]
+      this.socketHandlers.forEach(([event, handler]) => socketClient.on(event, handler))
     },
 
-    stopSSE() {
-      if (this.eventSource) {
-        this.eventSource.close()
-        this.eventSource = null
+    unregisterSocketHandlers() {
+      this.socketHandlers.forEach(([event, handler]) => socketClient.off(event, handler))
+      this.socketHandlers = []
+    },
+
+    hasStreamingMessages(conversationId) {
+      const msgs = this.$store.getters['message/getMessagesByConversation'](conversationId)
+      return msgs.some(m => m.sender_type === 'agent' && ['pending', 'streaming'].includes(m.status))
+    },
+
+    startMessageRefresh(conversationId) {
+      this.stopMessageRefresh()
+      let ticks = 0
+      this.messageRefreshTimer = setInterval(async () => {
+        ticks += 1
+        if (!this.currentConversation || this.currentConversation.id !== conversationId) {
+          this.stopMessageRefresh()
+          return
+        }
+        await this.$store.dispatch('message/fetchMessages', { conversationId })
+        this.isAgentResponding = this.hasStreamingMessages(conversationId)
+        if (!this.isAgentResponding || ticks >= 120) {
+          this.stopMessageRefresh()
+        }
+      }, 2000)
+    },
+
+    stopMessageRefresh() {
+      if (this.messageRefreshTimer) {
+        clearInterval(this.messageRefreshTimer)
+        this.messageRefreshTimer = null
       }
     },
 
@@ -396,10 +584,32 @@ export default {
           type: 'warning',
         })
         await this.$store.dispatch('conversation/deleteConversation', this.currentConversation.id)
-        this.stopSSE()
-        this.stopPolling()
         this.$message.success('会话已删除')
       } catch (e) {}
+    },
+
+    async handleStopAgent(message) {
+      if (!this.currentConversation || !message?.sender_id) return
+      try {
+        await stopConversationAgent(this.currentConversation.id, message.sender_id)
+      } catch (e) {
+        this.$message.error('停止 Agent 失败')
+      }
+    },
+
+    async handleOpenWorkspace(scope = 'workspace') {
+      if (!this.currentConversation) return
+      this.previewVisible = true
+      await this.switchFileScope(scope)
+    },
+
+    async handleOpenFile(file) {
+      if (!this.currentConversation || !file?.path) return
+      this.previewVisible = true
+      const path = this.normalizeWorkspacePath(file.path)
+      this.fileTreeRoot = '/workspace'
+      await this.loadFileTree('/workspace')
+      this.previewFile(path)
     },
 
     handleSearchMessages() {
@@ -407,7 +617,7 @@ export default {
     },
 
     handleOpenAttachment() {
-      this.$message.info('附件功能即将上线')
+      this.handleOpenWorkspace('workspace')
     },
 
     handleToggleStar() {
@@ -416,6 +626,220 @@ export default {
 
     handleOpenHistory() {
       this.$message.info('历史记录功能即将上线')
+    },
+
+    async handleOpenAttachments() {
+      if (!this.currentConversation) return
+      this.attachmentsVisible = true
+      await this.loadAttachments()
+    },
+
+    async loadAttachments() {
+      if (!this.currentConversation) return
+      this.attachmentsLoading = true
+      try {
+        const res = await getConversationAttachments(this.currentConversation.id)
+        if (res.code === 200) {
+          this.attachments = res.data.files || []
+        }
+      } catch (e) {
+        this.$message.error('获取上传文件失败')
+      } finally {
+        this.attachmentsLoading = false
+      }
+    },
+
+    async handleAttachmentPicked(file) {
+      if (!this.currentConversation || !file?.raw) return
+      this.attachmentsLoading = true
+      try {
+        await uploadConversationAttachment(this.currentConversation.id, file.raw)
+        this.$message.success('文件已上传到 Agent 工作目录')
+        await this.loadAttachments()
+      } catch (e) {
+        this.$message.error(e?.response?.data?.message || e?.message || '上传失败')
+      } finally {
+        this.attachmentsLoading = false
+      }
+    },
+
+    async handleDeleteAttachment(file) {
+      if (!this.currentConversation || !file?.path) return
+      try {
+        await this.$confirm(`删除 ${file.name}？`, '提示', {
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+        })
+        await deleteConversationAttachment(this.currentConversation.id, file.path, file.agent_id)
+        this.$message.success('文件已删除')
+        await this.loadAttachments()
+      } catch (e) {}
+    },
+
+    async switchFileScope(scope) {
+      if (!this.currentSessionId) return
+      let root = '/workspace'
+      let title = '全部文件'
+      if (scope === 'shared') {
+        root = '/workspace/shared'
+        title = '公共目录'
+      } else if (scope && scope.startsWith('agent:')) {
+        const agentId = scope.slice('agent:'.length)
+        const agent = this.currentSessionAgents.find(a => a.agent_id === agentId)
+        root = `/workspace/agents/${agent?.workspace_name || this.safeWorkspaceName(agent?.role || agentId)}`
+        title = `${agent?.role || agentId} 文件`
+      }
+      this.fileScope = scope || 'workspace'
+      this.previewTitle = title
+      this.previewContent = ''
+      this.previewType = 'text'
+      this.previewUrl = ''
+      this.selectedFilePath = ''
+      await this.loadFileTree(root)
+    },
+
+    async loadFileTree(root) {
+      if (!this.currentSessionId) return
+      this.previewLoading = true
+      try {
+        const res = await getFileTree(this.currentSessionId, root)
+        if (res.code === 200 && res.data?.tree) {
+          this.fileTreeData = [res.data.tree]
+          this.fileTreeRoot = root
+        }
+      } catch (e) {
+        this.$message.error('获取文件树失败')
+      } finally {
+        this.previewLoading = false
+      }
+    },
+
+    handleFileNodeClick(data) {
+      if (data.type === 'directory') {
+        this.selectedFilePath = ''
+        this.previewContent = ''
+        this.previewType = 'text'
+        this.previewUrl = ''
+        this.loadFileTree(data.path)
+        return
+      }
+      this.previewFile(data.path)
+    },
+
+    previewFile(filePath) {
+      if (!this.currentSessionId || !filePath) return
+      this.previewLoading = true
+      this.previewVisible = true
+      this.previewTitle = filePath
+      this.previewContent = ''
+      this.previewUrl = ''
+      this.selectedFilePath = filePath
+
+      const ext = this.getExt(filePath)
+      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
+        this.previewType = 'image'
+        this.previewUrl = getSessionRawFileUrl(this.currentSessionId, filePath)
+        this.previewLoading = false
+        return
+      }
+      if (ext === 'pdf') {
+        this.previewType = 'pdf'
+        this.previewUrl = getSessionRawFileUrl(this.currentSessionId, filePath)
+        this.previewLoading = false
+        return
+      }
+      if (this.isHtmlFile(filePath)) {
+        this.previewType = 'html'
+        this.previewUrl = getWorkspaceFileUrl(this.currentSessionId, filePath)
+        this.previewLoading = false
+        return
+      }
+      if (!['txt', 'md', 'json', 'js', 'css', 'vue', 'html', 'htm', 'py', 'yml', 'yaml', 'xml', 'csv', 'log'].includes(ext)) {
+        this.previewType = 'binary'
+        this.previewLoading = false
+        return
+      }
+
+      const agentId = this.currentSessionAgents[0]?.agent_id || ''
+      this.previewType = 'text'
+      readAgentFile(this.currentSessionId, agentId, filePath)
+        .then(res => {
+          this.previewContent = res.code === 200 && res.data?.content !== undefined
+            ? res.data.content
+            : '无法读取文件'
+        })
+        .catch(e => {
+          this.previewContent = '加载失败: ' + (e?.message || '未知错误')
+        })
+        .finally(() => { this.previewLoading = false })
+    },
+
+    openContainingFolder(path) {
+      if (!path) return
+      const normalized = path.replace(/\\/g, '/')
+      const idx = normalized.lastIndexOf('/')
+      if (idx > 0) this.loadFileTree(normalized.slice(0, idx))
+    },
+
+    openWorkspaceFile(filePath) {
+      if (!this.currentSessionId) return
+      window.open(getWorkspaceFileUrl(this.currentSessionId, filePath), '_blank')
+    },
+
+    downloadFile(path) {
+      if (!this.currentSessionId || !path) return
+      window.open(getSessionDownloadUrl(this.currentSessionId, path), '_blank')
+    },
+
+    copyFilePath(path) {
+      navigator.clipboard?.writeText(path)
+      this.$message.success('已复制路径')
+    },
+
+    getExt(path) {
+      const clean = (path || '').split('?')[0].split('#')[0]
+      const idx = clean.lastIndexOf('.')
+      return idx >= 0 ? clean.slice(idx + 1).toLowerCase() : ''
+    },
+
+    isHtmlFile(path) {
+      return ['html', 'htm'].includes(this.getExt(path))
+    },
+
+    getFileIcon(path) {
+      const ext = this.getExt(path)
+      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'el-icon-picture'
+      if (['html', 'htm'].includes(ext)) return 'el-icon-monitor'
+      if (['js', 'css', 'vue', 'py', 'json', 'md'].includes(ext)) return 'el-icon-document'
+      return 'el-icon-document'
+    },
+
+    formatFileSize(bytes) {
+      if (!bytes) return ''
+      const units = ['B', 'KB', 'MB', 'GB']
+      let i = 0
+      let size = bytes
+      while (size >= 1024 && i < units.length - 1) {
+        size /= 1024
+        i++
+      }
+      return size.toFixed(1) + ' ' + units[i]
+    },
+
+    normalizeWorkspacePath(path) {
+      if (!path) return ''
+      const clean = String(path).replace(/\\/g, '/').replace(/^\/+/, '')
+      return clean.startsWith('workspace/') ? `/${clean}` : `/workspace/${clean}`
+    },
+
+    safeWorkspaceName(name) {
+      return String(name || 'agent')
+        .trim()
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/^[._ ]+|[._ ]+$/g, '')
+        .slice(0, 80) || 'agent'
     },
 
     // ====== 新建会话 ======
@@ -755,6 +1179,233 @@ export default {
   background: #4080ff;
   padding: 8px 20px;
 }
+
+.file-browser-body {
+  display: flex;
+  gap: 12px;
+  height: 70vh;
+  overflow: hidden;
+}
+
+.file-tree-panel {
+  width: 280px;
+  flex-shrink: 0;
+  overflow: auto;
+  padding: 10px;
+  background: #1a2332;
+  border: 1px solid #334155;
+  border-radius: 8px;
+}
+
+.file-scope-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #334155;
+}
+
+.file-scope-tabs .el-button {
+  padding: 4px 8px;
+}
+
+.file-tree-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #94a3b8;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.file-tree-panel :deep(.el-tree) {
+  background: transparent;
+  color: #cbd5e1;
+}
+
+.file-tree-panel :deep(.el-tree-node__content:hover),
+.file-tree-panel :deep(.el-tree-node:focus > .el-tree-node__content) {
+  background: #0f1f3a;
+}
+
+.file-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.tree-file-size {
+  color: #64748b;
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+.file-preview-panel {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.file-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.selected-file-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-empty {
+  height: 62vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #64748b;
+  background: #1a2332;
+  border: 1px dashed #334155;
+  border-radius: 8px;
+}
+
+.file-preview-empty i {
+  font-size: 34px;
+}
+
+.image-preview-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  background: #1a2332;
+  border: 1px solid #334155;
+  border-radius: 8px;
+}
+
+.image-preview {
+  max-width: 100%;
+  max-height: 62vh;
+  object-fit: contain;
+}
+
+.pdf-preview,
+.html-preview {
+  width: 100%;
+  height: 62vh;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.binary-preview {
+  text-align: center;
+  padding: 80px 20px;
+  color: #94a3b8;
+  background: #1a2332;
+  border: 1px solid #334155;
+  border-radius: 8px;
+}
+
+.file-preview-content {
+  margin: 0;
+  padding: 16px;
+  background: #1a2332;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+}
+
+.attachments-body {
+  padding: 0 18px 18px;
+}
+
+.attachment-upload {
+  margin-bottom: 18px;
+}
+
+.attachment-upload :deep(.el-upload),
+.attachment-upload :deep(.el-upload-dragger) {
+  width: 100%;
+}
+
+.attachment-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.attachment-list {
+  min-height: 160px;
+}
+
+.attachment-empty {
+  padding: 28px 0;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.attachment-item i {
+  color: #4080ff;
+  font-size: 18px;
+}
+
+.attachment-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attachment-info span {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.attachment-name {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: #1e293b;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-name:hover {
+  color: #4080ff;
+}
 </style>
 
 <style>
@@ -777,5 +1428,24 @@ export default {
 .create-conv-dialog .el-dialog__footer {
   padding: 0 24px 20px;
   border-top: none;
+}
+
+.file-preview-dialog .el-dialog__header {
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+
+.file-preview-dialog .el-dialog__title {
+  color: #e2e8f0;
+  font-size: 14px;
+}
+
+.file-preview-dialog .el-dialog__body {
+  background: #0f172a;
+  padding: 16px;
+}
+
+.file-preview-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: #64748b;
 }
 </style>
