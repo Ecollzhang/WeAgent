@@ -8,7 +8,7 @@
 - **框架**: Flask 2.3.x + Flask-SQLAlchemy + Flask-Migrate
 - **数据库**: MySQL 8.0 + Redis 7.x
 - **认证**: Flask-JWT-Extended (JWT Token)
-- **实时通信**: Server-Sent Events (SSE) + 内存队列
+- **实时通信**: Flask-SocketIO
 - **架构**: Controller → Service → Repository (分层架构)
 
 ### 前端
@@ -22,6 +22,41 @@
 - Node.js 16+
 - MySQL 8.0+
 - Redis 7.x
+- Docker Desktop（Agent 容器运行必需）
+
+Docker Desktop 需要提前安装并保持运行，后端会通过 Docker SDK 为每个正式对话创建独立容器。启动项目前可先检查 Docker 是否可用：
+
+```bash
+docker version
+docker info
+```
+
+## Agent 容器环境
+
+正式 Agent 对话依赖 `weagent-sandbox:latest` 镜像。该镜像位于 `backend/app/sandbox/Dockerfile`，会安装：
+
+- Python 3.11
+- Node.js 20
+- Claude Code CLI（`@anthropic-ai/claude-code`）
+- 容器内 Orchestrator 运行依赖（Flask、requests）
+
+每个对话对应一个 Docker 容器，容器内工作目录为 `/workspace`。单 Agent 会在 `/workspace/agents/<agent名称>/` 下工作，多 Agent 后续会在此基础上加入共享目录。当前 Docker workspace 不做持久化，删除对话或销毁容器后容器内文件会随之清理。
+
+首次运行或修改了 `backend/app/sandbox/container/`、`backend/app/sandbox/Dockerfile` 后，需要重新构建 Agent 镜像：
+
+```bash
+cd backend
+docker build -t weagent-sandbox:latest -f app/sandbox/Dockerfile app/sandbox
+```
+
+也可以在安装后端依赖后使用项目封装的构建入口：
+
+```bash
+cd backend
+python -c "from app.sandbox import build_image; build_image()"
+```
+
+Agent 调用模型所需的 API Key、Base URL、模型名等配置来自前端 Settings 页面保存的模型配置。创建 Agent 对话前，请先登录系统并在 Settings 中完成模型配置；后端创建容器时会把配置注入到容器环境变量中。
 
 ## 快速开始
 
@@ -56,6 +91,9 @@ source venv/bin/activate  # Linux/Mac
 
 # 安装依赖
 pip install -r requirements.txt
+
+# 构建 Agent 沙箱镜像（Docker Desktop 需处于运行状态）
+docker build -t weagent-sandbox:latest -f app/sandbox/Dockerfile app/sandbox
 
 # 配置环境变量
 cp .env.example .env
@@ -132,14 +170,31 @@ WeAgent/
 | POST | `/api/messages` | 发送消息 |
 | GET | `/api/messages/conversation/<id>` | 获取消息历史 |
 | POST | `/api/messages/<id>/pin` | 置顶/取消置顶消息 |
-| GET | `/api/messages/stream/<id>` | SSE 流式获取新消息 |
-| GET | `/api/messages/poll/<id>` | 轮询新消息 |
+| GET | `/api/messages/stream/<id>` | SSE 兼容接口 |
+| GET | `/api/messages/poll/<id>` | 轮询兼容接口 |
 | GET | `/api/agents` | 获取 Agent 列表 |
 | POST | `/api/agents` | 创建自定义 Agent |
 | GET | `/api/agents/categories` | 获取 Agent 分类 |
 | GET | `/api/artifacts/<id>` | 获取产物详情 |
 | POST | `/api/upload` | 上传文件 |
+| GET | `/api/sandbox/status` | 查看沙箱运行状态 |
+| POST | `/api/sandbox/image/build` | 构建 Agent 沙箱镜像 |
+| GET | `/api/sandbox/sessions/<id>/files/tree` | 查看容器工作目录 |
 | GET | `/api/health` | 健康检查 |
+
+## SocketIO 事件
+
+正式聊天实时通信以 SocketIO 为主。前端加入会话房间后接收 Agent 流式输出和状态变化：
+
+| 事件 | 方向 | 说明 |
+|------|------|------|
+| `join` | 前端 → 后端 | 加入指定 conversation room |
+| `leave` | 前端 → 后端 | 离开指定 conversation room |
+| `send_message` | 前端 → 后端 | 发送用户消息 |
+| `conversation_message_created` | 后端 → 前端 | 创建用户或 Agent 消息 |
+| `conversation_message_element_stream` | 后端 → 前端 | 流式追加结构化消息元素 |
+| `conversation_message_step` | 后端 → 前端 | 推送 Agent 执行步骤 |
+| `conversation_message_status` | 后端 → 前端 | 推送消息状态变化 |
 
 ## 统一响应格式
 
