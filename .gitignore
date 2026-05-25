@@ -25,6 +25,7 @@ frontend/dist/
 backend/*.log
 flask_output.log
 server.log
+.claude/logs/
 
 # ===== 上传文件 =====
 backend/uploads/*
@@ -55,6 +56,5 @@ htmlcov/
 
 # ===== docs =====
 docs/archive-registry.md
-docs/ai-collab/
 .planning/*.lock
 .pycache_verify/
