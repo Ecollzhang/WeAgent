@@ -6,6 +6,7 @@ from app.adapters.types import AgentRequest, resolve_workspace_path
 from app.repositories.conversation_repo import conversation_repo
 from app.repositories.message_repo import message_repo
 from app.repositories.agent_repo import agent_repo
+from app.services.conversation_context_service import conversation_context_service
 from app.services.message_service import broadcast, message_service
 
 
@@ -51,7 +52,7 @@ class OrchestratorService:
 
                 thread = threading.Thread(
                     target=self._invoke_agent_in_context,
-                    args=(app, agent, conversation_id, user_message.content)
+                    args=(app, agent, conversation_id, user_message.content, user_message.id)
                 )
                 threads.append(thread)
                 thread.start()
@@ -61,16 +62,23 @@ class OrchestratorService:
         finally:
             broadcast(conversation_id, {'_type': 'agent_done'})
 
-    def _invoke_agent(self, agent, conversation_id, user_content):
+    def _invoke_agent(self, agent, conversation_id, user_content, user_message_id=None):
         """Invoke a single agent and save its response."""
         try:
             adapter = AgentAdapterFactory.create(agent.adapter_name)
-            request = self._build_agent_request(agent, conversation_id, user_content)
+            request = self._build_agent_request(
+                agent,
+                conversation_id,
+                user_content,
+                user_message_id=user_message_id,
+            )
             response_parts = []
             completed_content = None
 
             for event in adapter.stream(request):
                 broadcast(conversation_id, event)
+                if event.get('type') == 'artifact.created':
+                    conversation_context_service.record_event(conversation_id, event)
 
                 event_type = event.get('type')
                 if event_type == 'message.delta':
@@ -96,7 +104,12 @@ class OrchestratorService:
                 )
         except Exception as e:
             logging.error(f'Agent {agent.name} invocation failed: {str(e)}')
-            request = self._build_agent_request(agent, conversation_id, user_content)
+            request = self._build_agent_request(
+                agent,
+                conversation_id,
+                user_content,
+                user_message_id=user_message_id,
+            )
             broadcast(
                 conversation_id,
                 {
@@ -110,26 +123,44 @@ class OrchestratorService:
                 },
             )
 
-    def _invoke_agent_in_context(self, app, agent, conversation_id, user_content):
+    def _invoke_agent_in_context(self, app, agent, conversation_id, user_content, user_message_id=None):
         if app is None:
-            self._invoke_agent(agent, conversation_id, user_content)
+            if user_message_id is None:
+                self._invoke_agent(agent, conversation_id, user_content)
+            else:
+                self._invoke_agent(agent, conversation_id, user_content, user_message_id)
             return
         with app.app_context():
-            self._invoke_agent(agent, conversation_id, user_content)
+            if user_message_id is None:
+                self._invoke_agent(agent, conversation_id, user_content)
+            else:
+                self._invoke_agent(agent, conversation_id, user_content, user_message_id)
 
-    def _build_agent_request(self, agent, conversation_id, user_content):
+    def _build_agent_request(self, agent, conversation_id, user_content, user_message_id=None):
         agent_config = agent.config if isinstance(getattr(agent, 'config', None), dict) else {}
         workspace_path = agent_config.get('workspace_path') or resolve_workspace_path()
+        context = conversation_context_service.build_context(
+            conversation_id,
+            current_user_message_id=user_message_id,
+        )
+        prompt = conversation_context_service.format_prompt(
+            system_prompt=agent.system_prompt,
+            context=context,
+            current_user_message=user_content,
+        )
         return AgentRequest(
-            prompt=user_content,
+            prompt=prompt,
             conversation_id=conversation_id,
             agent_id=agent.id,
             agent_name=agent.name,
             system_prompt=agent.system_prompt,
+            conversation_history=context.get('transcript'),
             workspace_path=workspace_path,
             metadata={
                 'adapter_name': agent.adapter_name,
                 'agent_type': getattr(agent, 'agent_type', None),
+                'raw_user_message': user_content,
+                'context_summary': context.get('summary'),
             },
         )
 
@@ -148,7 +179,7 @@ class OrchestratorService:
             return
 
         try:
-            self._invoke_agent(agent, conversation_id, user_message.content)
+            self._invoke_agent(agent, conversation_id, user_message.content, user_message.id)
         finally:
             broadcast(conversation_id, {'_type': 'agent_done'})
 

@@ -155,6 +155,24 @@ Frontend Dashboard
   -> ChatWindow / MessageBubble render
 ```
 
+### 2.0 Conversation Context
+
+Phase 2 增加的是 WeAgent-owned conversation context，不是 provider-native session resume。
+
+当前行为：
+
+- 同一个 `conversation_id` 下，后端会在调用 adapter 前加载最近 20 条消息。
+- Orchestrator 会把 agent system prompt、历史 transcript、file/artifact context 和当前用户消息组装成 provider-neutral prompt。
+- Prompt 中包含固定区块：`## Agent Instructions`、`## Conversation Context`、`## File and Artifact Context`、`## Current User Message`。
+- `artifact.created` 中的 `storagePath` 会被记录为后续轮次可用的文件/产物上下文。
+- file-read context 只有在 normalized provider events 暴露文件路径时才能结构化记录；如果 Claude/Codex CLI 没有吐出读文件路径，WeAgent 目前不会凭空知道它读了哪个文件。
+
+边界：
+
+- 这不是 Claude/Codex 原生 thread/session resume。
+- native session resume、interactive choices、后台 agent lifecycle、hook/MCP/plan-mode 完整状态仍然是后续阶段。
+- Codex adapter 仍可通过 `WEAGENT_CODEX_HOME` 指向隔离 runtime home。
+
 ### 2.1 Adapter 层
 
 核心文件：

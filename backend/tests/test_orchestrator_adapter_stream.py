@@ -68,6 +68,23 @@ class _FakeAdapter:
         yield make_event("message.completed", request, content="hello")
 
 
+class _ArtifactAdapter:
+    def __init__(self):
+        self.requests = []
+
+    def stream(self, request):
+        self.requests.append(request)
+        yield make_event(
+            "artifact.created",
+            request,
+            artifact={
+                "title": "Spec",
+                "storagePath": "docs/spec.md",
+            },
+        )
+        yield make_event("message.completed", request, content="done")
+
+
 class _FakeMessageService:
     def __init__(self):
         self.sent = []
@@ -81,6 +98,50 @@ class _FakeMessageService:
             "sender_id": kwargs["sender_id"],
             "content": kwargs["content"],
         }, None
+
+
+class _FakeContextService:
+    def __init__(self):
+        self.recorded = []
+
+    def build_context(self, conversation_id, current_user_message_id=None, max_messages=20):
+        return {
+            "conversation_id": conversation_id,
+            "transcript": [
+                {
+                    "sender_type": "user",
+                    "sender_id": "user-1",
+                    "content": "上一轮请读 docs/spec.md",
+                    "created_at": "2026-05-25T12:00:00",
+                },
+                {
+                    "sender_type": "agent",
+                    "sender_id": "agent-1",
+                    "content": "上一轮已经读完 spec。",
+                    "created_at": "2026-05-25T12:01:00",
+                },
+            ],
+            "file_context": [],
+            "artifact_context": [],
+            "summary": "",
+            "limits": {"max_messages": max_messages},
+        }
+
+    def format_prompt(self, system_prompt, context, current_user_message):
+        return (
+            "## Agent Instructions\n"
+            f"{system_prompt}\n\n"
+            "## Conversation Context\n"
+            "上一轮请读 docs/spec.md\n"
+            "上一轮已经读完 spec。\n\n"
+            "## File and Artifact Context\n"
+            "None\n\n"
+            "## Current User Message\n"
+            f"{current_user_message}"
+        )
+
+    def record_event(self, conversation_id, event):
+        self.recorded.append((conversation_id, event))
 
 
 class _FakeApp:
@@ -136,7 +197,7 @@ class OrchestratorAdapterStreamTest(unittest.TestCase):
 
             self.assertEqual(1, len(adapter.requests))
             request = adapter.requests[0]
-            self.assertEqual("Say hello", request.prompt)
+            self.assertIn("Say hello", request.prompt)
             self.assertEqual("conversation-1", request.conversation_id)
             self.assertEqual("agent-1", request.agent_id)
             self.assertEqual("Mock Agent", request.agent_name)
@@ -165,6 +226,83 @@ class OrchestratorAdapterStreamTest(unittest.TestCase):
             orchestrator_module.AgentAdapterFactory = original_factory
             orchestrator_module.message_service = original_message_service
             orchestrator_module.broadcast = original_broadcast
+
+    def test_build_agent_request_includes_prior_conversation_context(self):
+        fake_context_service = _FakeContextService()
+        original_context_service = orchestrator_module.conversation_context_service
+
+        try:
+            orchestrator_module.conversation_context_service = fake_context_service
+            agent = SimpleNamespace(
+                id="agent-1",
+                name="Mock Agent",
+                adapter_name="mock",
+                system_prompt="Be brief.",
+            )
+
+            request = orchestrator_module.OrchestratorService()._build_agent_request(
+                agent,
+                "conversation-1",
+                "继续说下一步",
+            )
+
+            self.assertIn("## Conversation Context", request.prompt)
+            self.assertIn("上一轮请读 docs/spec.md", request.prompt)
+            self.assertIn("上一轮已经读完 spec。", request.prompt)
+            self.assertIn("## Current User Message", request.prompt)
+            self.assertIn("继续说下一步", request.prompt)
+            self.assertEqual("继续说下一步", request.metadata["raw_user_message"])
+        finally:
+            orchestrator_module.conversation_context_service = original_context_service
+
+    def test_invoke_agent_records_artifact_context_events(self):
+        adapter = _ArtifactAdapter()
+        fake_message_service = _FakeMessageService()
+        fake_context_service = _FakeContextService()
+        broadcasts = []
+
+        original_factory = orchestrator_module.AgentAdapterFactory
+        original_message_service = orchestrator_module.message_service
+        original_broadcast = orchestrator_module.broadcast
+        original_context_service = orchestrator_module.conversation_context_service
+
+        class _Factory:
+            @staticmethod
+            def create(provider):
+                self.assertEqual("mock", provider)
+                return adapter
+
+        try:
+            orchestrator_module.AgentAdapterFactory = _Factory
+            orchestrator_module.message_service = fake_message_service
+            orchestrator_module.conversation_context_service = fake_context_service
+            orchestrator_module.broadcast = lambda conversation_id, event: broadcasts.append(
+                (conversation_id, event)
+            )
+
+            agent = SimpleNamespace(
+                id="agent-1",
+                name="Mock Agent",
+                adapter_name="mock",
+                system_prompt="Be brief.",
+            )
+
+            orchestrator_module.OrchestratorService()._invoke_agent(
+                agent,
+                "conversation-1",
+                "Create artifact",
+            )
+
+            self.assertEqual(1, len(fake_context_service.recorded))
+            conversation_id, event = fake_context_service.recorded[0]
+            self.assertEqual("conversation-1", conversation_id)
+            self.assertEqual("artifact.created", event["type"])
+            self.assertEqual("docs/spec.md", event["artifact"]["storagePath"])
+        finally:
+            orchestrator_module.AgentAdapterFactory = original_factory
+            orchestrator_module.message_service = original_message_service
+            orchestrator_module.broadcast = original_broadcast
+            orchestrator_module.conversation_context_service = original_context_service
 
     def test_invoke_agent_in_context_wraps_worker_with_flask_app_context(self):
         service = orchestrator_module.OrchestratorService()

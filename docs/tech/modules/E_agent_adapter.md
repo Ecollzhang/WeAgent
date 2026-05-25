@@ -128,6 +128,31 @@ localhost smoke 已验证：
 - mock adapter 会发出 `agent.started`、`message.delta`、`message.completed` 和 `done`。
 - 最终会话中包含用户消息和保存后的 agent 消息。
 
+### Conversation Context
+
+WeAgent now provides conversation-scoped context before invoking Claude/Codex adapters.
+This is WeAgent-owned context, not provider-native Claude/Codex session resume.
+
+Current behavior:
+
+- `ConversationContextService.build_context(...)` loads a bounded transcript for the same `conversation_id`.
+- The default transcript window is 20 messages.
+- `orchestrator_service._build_agent_request(...)` assembles a provider-neutral prompt with:
+  - `## Agent Instructions`
+  - `## Conversation Context`
+  - `## File and Artifact Context`
+  - `## Current User Message`
+- `AgentRequest.conversation_history` carries the transcript for tests and future providers.
+- `artifact.created` events with a `storagePath` are recorded as file/artifact context for later turns.
+- File-read context is only captured when normalized provider events expose file paths. If a CLI provider reads a file but emits no path event, WeAgent cannot yet record that read as structured context.
+
+Deferred:
+
+- provider-native session resume for Claude/Codex
+- interactive choices and continuation
+- background agent lifecycle
+- full hook/MCP/plan-mode event surface
+
 ## 6. Codex Adapter
 
 推荐思路：
