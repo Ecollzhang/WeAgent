@@ -58,7 +58,7 @@ class CliStreamingAdaptersTest(unittest.TestCase):
         command = popen.call_args.args[0]
         kwargs = popen.call_args.kwargs
         self.assertTrue(command[0].lower().endswith(("codex", "codex.cmd", "codex.exe")))
-        self.assertEqual(["exec", "--json", "--cd"], command[1:4])
+        self.assertEqual(["exec", "--json", "--ephemeral", "--cd"], command[1:5])
         self.assertIn("--sandbox", command)
         self.assertIn("workspace-write", command)
         self.assertIn("--skip-git-repo-check", command)
@@ -66,6 +66,16 @@ class CliStreamingAdaptersTest(unittest.TestCase):
         self.assertEqual("utf-8", kwargs["encoding"])
         self.assertEqual("replace", kwargs["errors"])
         self.assertEqual(["agent.started", "message.delta", "message.completed"], [event["type"] for event in events])
+
+    def test_codex_uses_configured_codex_home(self):
+        request = AgentRequest(prompt="x", agent_id="codex", agent_name="Codex")
+        process = _FakeProcess([])
+
+        with patch.dict("os.environ", {"WEAGENT_CODEX_HOME": "E:/codex-home"}):
+            with patch("app.adapters.codex_adapter.subprocess.Popen", return_value=process) as popen:
+                list(CodexAdapter().stream(request))
+
+        self.assertEqual("E:/codex-home", popen.call_args.kwargs["env"]["CODEX_HOME"])
 
     def test_claude_streams_jsonl_events_with_expected_command(self):
         request = AgentRequest(

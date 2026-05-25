@@ -71,6 +71,15 @@ class AdapterNormalizerTest(unittest.TestCase):
         self.assertEqual("agent.failed", failed[0]["type"])
         self.assertEqual("CLI failed", failed[0]["error"])
 
+    def test_codex_reconnecting_errors_are_status_events(self):
+        events = normalize_codex_event(
+            {"type": "error", "message": "Reconnecting... 2/5 (timeout waiting for child process to exit)"},
+            self.request,
+        )
+
+        self.assertEqual("agent.status", events[0]["type"])
+        self.assertEqual("reconnecting", events[0]["status"])
+
     def test_claude_normalizes_partial_text_result_tools_and_errors(self):
         delta = normalize_claude_event(
             {"type": "content_block_delta", "delta": {"text": "hi"}}, self.request

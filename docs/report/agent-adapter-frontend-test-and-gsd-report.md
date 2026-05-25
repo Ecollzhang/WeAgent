@@ -27,6 +27,15 @@ $env:PORT="5000"
 python run.py
 ```
 
+如果要测试真实 Codex adapter，并且默认 `C:\Users\<you>\.codex` 目录存在权限或 stale runtime 问题，可以把 Codex runtime home 指到一个可写的隔离目录：
+
+```powershell
+$env:WEAGENT_CODEX_HOME="E:\code for project\seedance-competition\agentshub\.codex-runtime-test"
+$env:CODEX_HOME=$env:WEAGENT_CODEX_HOME
+```
+
+该目录需要至少包含当前 Codex 登录态和配置，例如从默认 Codex home 复制 `auth.json`、`config.toml`。不要把这个目录提交到 git。
+
 前端：
 
 ```powershell
@@ -78,6 +87,8 @@ hello localhost frontend dispatch
 
 - Claude/Codex 需要本机 CLI 已登录并可执行。
 - Codex 在 UI 调度里可能响应较慢，不建议作为快速前端验收路径。
+- Codex adapter 当前使用 `codex exec --json --ephemeral`，并通过后台线程持续读取 stderr，避免 CLI warning 堵塞消息流。
+- 如果本机默认 `.codex` 目录权限异常，可通过 `WEAGENT_CODEX_HOME` 指向 E 盘隔离 runtime home。
 - 真实 CLI 当前只保证 normalized message stream，hook、MCP、plan mode、交互选择等 runtime 状态还没有完整展示。
 
 可选步骤：
@@ -111,6 +122,11 @@ Reply exactly: FRONTEND_SMOKE_OK
 - 持久化结果包含两条消息：
   - 用户消息
   - agent 最终回复
+- Codex adapter 后端真实调用已验证：
+  - `agent.started`
+  - `agent.status`，用于 Codex reconnecting 等可恢复状态
+  - `message.completed`
+  - 示例最终内容：`CODEX_ADAPTER_OK_2`
 
 示例最终 agent 内容：
 

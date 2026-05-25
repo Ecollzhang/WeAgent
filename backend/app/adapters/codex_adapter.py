@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 
 from app.adapters.base_adapter import BaseAgentAdapter
 from app.adapters.normalizers import normalize_codex_event
@@ -17,6 +18,7 @@ class CodexAdapter(BaseAgentAdapter):
             _codex_executable(),
             "exec",
             "--json",
+            "--ephemeral",
             "--cd",
             str(workspace_path),
             "--sandbox",
@@ -34,6 +36,7 @@ class CodexAdapter(BaseAgentAdapter):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=_codex_environment(),
             )
         except OSError as exc:
             yield make_event("agent.failed", request, error=str(exc))
@@ -42,6 +45,9 @@ class CodexAdapter(BaseAgentAdapter):
         yield from self._stream_process_events(process, request)
 
     def _stream_process_events(self, process, request):
+        stderr_lines = []
+        stderr_thread = _start_stderr_collector(process.stderr, stderr_lines)
+
         for line in process.stdout or []:
             line = line.strip()
             if not line:
@@ -62,8 +68,10 @@ class CodexAdapter(BaseAgentAdapter):
                 yield event
 
         return_code = process.wait()
+        if stderr_thread:
+            stderr_thread.join(timeout=1)
         if return_code:
-            stderr = process.stderr.read() if process.stderr else ""
+            stderr = "".join(stderr_lines)
             yield make_event(
                 "agent.failed",
                 request,
@@ -80,6 +88,37 @@ def _codex_executable():
             or "codex"
         )
     return shutil.which("codex") or "codex"
+
+
+def _codex_environment():
+    env = os.environ.copy()
+    codex_home = os.getenv("WEAGENT_CODEX_HOME")
+    if codex_home:
+        env["CODEX_HOME"] = codex_home
+    return env
+
+
+def _start_stderr_collector(stderr, stderr_lines):
+    if not stderr:
+        return None
+
+    thread = threading.Thread(
+        target=_collect_stderr,
+        args=(stderr, stderr_lines),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def _collect_stderr(stderr, stderr_lines):
+    try:
+        text = stderr.read()
+    except Exception as exc:  # pragma: no cover - defensive guard for stream implementations.
+        stderr_lines.append(str(exc))
+        return
+    if text:
+        stderr_lines.append(text)
 
 
 def _is_ignorable_non_json_line(line):

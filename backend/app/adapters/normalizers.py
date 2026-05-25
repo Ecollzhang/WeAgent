@@ -39,7 +39,10 @@ def normalize_codex_event(raw, request):
         return [_artifact_created(request, raw)]
 
     if raw_type == "error":
-        return [_agent_failed(request, raw.get("message") or raw.get("error") or "Codex adapter failed")]
+        message = raw.get("message") or raw.get("error") or "Codex adapter failed"
+        if _is_transient_codex_error(message):
+            return [make_event("agent.status", request, status="reconnecting", message=message)]
+        return [_agent_failed(request, message)]
 
     return []
 
@@ -116,6 +119,11 @@ def _artifact_created(request, raw):
         "storagePath": path,
     }
     return make_event("artifact.created", request, artifact=artifact)
+
+
+def _is_transient_codex_error(message):
+    text = str(message)
+    return text.startswith("Reconnecting...") or "stream disconnected" in text
 
 
 def _claude_message_text(message):
