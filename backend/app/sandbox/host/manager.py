@@ -18,12 +18,29 @@ import tarfile
 import threading
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 from .client import OrchestratorClient
 
 
 # Lock for thread safety
 _lock = threading.Lock()
+
+
+def _clean_config_value(value: str = "") -> str:
+    text = str(value or "").strip()
+    text = text.strip(" \t\r\n'\"")
+    return text
+
+
+def _clean_base_url(value: str = "") -> str:
+    text = _clean_config_value(value).rstrip("/")
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Invalid base URL: {text}")
+    return text
 
 
 class DockerNotAvailableError(RuntimeError):
@@ -149,19 +166,29 @@ class DockerContainerManager:
         container_env = {
             "ORCHESTRATOR_PORT": "8080",
             "SESSION_ID": session_id,
-            "HOST_CALLBACK_URL": "http://host.docker.internal:5000",
+            "HOST_CALLBACK_URL": env_vars.get("HOST_CALLBACK_URL") if env_vars and env_vars.get("HOST_CALLBACK_URL") else f"http://host.docker.internal:{os.getenv('PORT', '5001')}",
         }
         # Pass through Claude-related env vars if provided
         claude_env_keys = [
             "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+            "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-            "API_TIMEOUT_MS", "HTTP_PROXY", "HTTPS_PROXY",
+            "API_TIMEOUT_MS", "CLAUDE_EXEC_TIMEOUT_SECONDS",
+            "HTTP_PROXY", "HTTPS_PROXY",
         ]
         if env_vars:
             for key in claude_env_keys:
                 if key in env_vars:
-                    container_env[key] = env_vars[key]
+                    if key.endswith("BASE_URL"):
+                        container_env[key] = _clean_base_url(env_vars[key])
+                    elif key in {
+                        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_MODEL", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL",
+                    }:
+                        container_env[key] = _clean_config_value(env_vars[key])
+                    else:
+                        container_env[key] = env_vars[key]
 
         # Find free ports: one for orchestrator plus common dev-server ports
         host_port = self._find_free_port()
@@ -177,6 +204,10 @@ class DockerContainerManager:
             port_bindings[f"{container_port}/tcp"] = mapped_port
 
         # Start container (no host volume mount — files stay inside container only)
+        print(
+            f"[SandboxManager] create_session session_id={session_id} "
+            f"agents={len(agents)} image={self.image_name}"
+        )
         container = self.docker.containers.run(
             image=self.image_name,
             detach=True,
@@ -197,9 +228,17 @@ class DockerContainerManager:
 
         # Wait for orchestrator to be ready
         self._wait_for_ready(host_port, timeout=30)
+        print(
+            f"[SandboxManager] container_ready session_id={session_id} "
+            f"container={container.id[:12]} orchestrator=http://localhost:{host_port}"
+        )
 
         # Create agents inside container
         for agent_cfg in agents:
+            print(
+                f"[SandboxManager] create_agent session_id={session_id} "
+                f"agent_id={agent_cfg.get('agent_id')} role={agent_cfg.get('role')}"
+            )
             self._create_agent_in_container(host_port, agent_cfg)
 
         session = SessionContainer(
@@ -221,10 +260,26 @@ class DockerContainerManager:
             session = self._sessions.pop(session_id, None)
 
         if not session:
-            return
+            self.recover_sessions()
+            with _lock:
+                session = self._sessions.pop(session_id, None)
 
         try:
-            container = self.docker.containers.get(session.container_id)
+            if session:
+                container = self.docker.containers.get(session.container_id)
+            else:
+                matches = self.docker.containers.list(
+                    all=True,
+                    filters={
+                        "label": [
+                            "weagent.sandbox=true",
+                            f"weagent.session_id={session_id}",
+                        ],
+                    },
+                )
+                container = matches[0] if matches else None
+            if not container:
+                return
             container.stop(timeout=10)
         except Exception:
             pass
@@ -304,6 +359,10 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
+        print(
+            f"[SandboxManager] send_message session_id={session_id} "
+            f"agent_id={agent_id} message_len={len(message or '')}"
+        )
         return session.client.send_to_agent(agent_id, message)
 
     def send_chain(self, session_id: str, messages: list[dict]) -> list[dict]:
@@ -311,6 +370,10 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
+        print(
+            f"[SandboxManager] send_chain session_id={session_id} "
+            f"message_count={len(messages or [])}"
+        )
         return session.client.send_chain(messages)
 
     def delegate_message(self, session_id: str, message: str,
@@ -320,6 +383,11 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
+        print(
+            f"[SandboxManager] delegate_message session_id={session_id} "
+            f"moderator_id={moderator_id} targets={target_agent_ids} "
+            f"message_len={len(message or '')}"
+        )
         return session.client.delegate(message, moderator_id, target_agent_ids)
 
     def add_agent(self, session_id: str, config: dict) -> dict:
@@ -327,6 +395,10 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
+        print(
+            f"[SandboxManager] add_agent session_id={session_id} "
+            f"agent_id={config.get('agent_id')} role={config.get('role')}"
+        )
         result = session.client.create_agent(
             agent_id=config["agent_id"],
             role=config.get("role", "助手"),
@@ -353,6 +425,63 @@ class DockerContainerManager:
                 if a.get("agent_id") != agent_id
             ]
         return result
+
+    def restart_agent(self, session_id: str, agent_id: str) -> dict:
+        """Restart an agent runtime in a session container."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.restart_agent(agent_id)
+
+    def update_model_config(self, session_id: str, env_vars: dict) -> dict:
+        """Hot-update model configuration in a running session container."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        config = {
+            "api_key": (
+                env_vars.get("ANTHROPIC_API_KEY")
+                or env_vars.get("ANTHROPIC_AUTH_TOKEN")
+                or env_vars.get("DEEPSEEK_API_KEY")
+                or ""
+            ),
+            "base_url": env_vars.get("ANTHROPIC_BASE_URL") or env_vars.get("DEEPSEEK_BASE_URL") or "",
+            "model": env_vars.get("ANTHROPIC_MODEL") or env_vars.get("DEEPSEEK_MODEL") or "",
+        }
+        config["api_key"] = _clean_config_value(config["api_key"])
+        config["base_url"] = _clean_base_url(config["base_url"])
+        config["model"] = _clean_config_value(config["model"])
+        return session.client.update_model_config(config)
+
+    def update_model_config_for_user_sessions(self, user_id: str, env_vars: dict) -> dict:
+        """Hot-update model configuration for all running containers owned by a user."""
+        self.recover_sessions()
+        from app.models.conversation import Conversation
+
+        conversations = Conversation.query.filter(
+            Conversation.owner_id == user_id,
+            Conversation.sandbox_session_id.isnot(None),
+            Conversation.sandbox_status == "running",
+        ).all()
+        results = []
+        for conversation in conversations:
+            session_id = conversation.sandbox_session_id
+            try:
+                result = self.update_model_config(session_id, env_vars)
+                results.append({
+                    "conversation_id": conversation.id,
+                    "session_id": session_id,
+                    "status": result.get("status", "ok"),
+                    "error": result.get("error"),
+                })
+            except Exception as e:
+                results.append({
+                    "conversation_id": conversation.id,
+                    "session_id": session_id,
+                    "status": "error",
+                    "error": str(e),
+                })
+        return {"status": "ok", "updated": results}
 
     def get_agent_history(self, session_id: str, agent_id: str, limit: int = 0) -> list[dict]:
         session = self.get_session(session_id)
@@ -542,7 +671,13 @@ class DockerContainerManager:
                 f"Port {port} is not exposed. Use one of: "
                 + ", ".join(sorted(session.service_ports.keys()))
             )
-        return session.client.start_service(data)
+        result = session.client.start_service(data)
+        host_port = session.service_ports.get(str(port))
+        if host_port:
+            result["container_port"] = port
+            result["host_port"] = host_port
+            result["url"] = f"http://localhost:{host_port}"
+        return result
 
     def stop_service(self, session_id: str, port: int) -> dict:
         session = self.get_session(session_id)

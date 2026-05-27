@@ -10,6 +10,7 @@
       <div class="header-actions">
         <el-button size="mini" icon="el-icon-search" type="text" @click="$emit('search-messages')" title="搜索"></el-button>
         <el-button size="mini" icon="el-icon-folder-opened" type="text" @click="$emit('open-workspace', 'workspace')" title="工作目录"></el-button>
+        <el-button size="mini" icon="el-icon-monitor" type="text" @click="$emit('open-services')" title="预览服务"></el-button>
         <el-button size="mini" icon="el-icon-upload2" type="text" @click="$emit('open-attachments')" title="上传文件"></el-button>
         <el-button size="mini" icon="el-icon-star-off" type="text" @click="$emit('toggle-star')" title="收藏"></el-button>
         <el-button size="mini" icon="el-icon-time" type="text" @click="$emit('open-history')" title="历史"></el-button>
@@ -121,6 +122,7 @@ export default {
     return {
       inputText: '',
       activeTab: 'chat',
+      stickToBottom: true,
       tabs: [
         { key: 'chat', label: '对话' },
         { key: 'agent_config', label: '智能体配置' },
@@ -140,21 +142,45 @@ export default {
   },
   watch: {
     messages() {
-      this.$nextTick(() => this.scrollToBottom())
+      const shouldScroll = this.isNearBottom()
+      this.$nextTick(() => this.scrollToBottom(shouldScroll))
     },
     conversation() {
-      this.$nextTick(() => this.scrollToBottom())
+      this.$nextTick(() => this.scrollToBottom(true))
     },
+  },
+  mounted() {
+    const container = this.$refs.messagesContainer
+    if (container) {
+      container.addEventListener('scroll', this.handleMessagesScroll, { passive: true })
+      this.stickToBottom = this.isNearBottom()
+    }
+  },
+  beforeDestroy() {
+    const container = this.$refs.messagesContainer
+    if (container) {
+      container.removeEventListener('scroll', this.handleMessagesScroll)
+    }
   },
   methods: {
     handleSend() {
       if (!this.inputText.trim()) return
       this.$emit('send-message', this.inputText.trim())
       this.inputText = ''
+      this.$nextTick(() => this.scrollToBottom(true))
     },
-    scrollToBottom() {
+    handleMessagesScroll() {
+      this.stickToBottom = this.isNearBottom()
+    },
+    isNearBottom() {
       const container = this.$refs.messagesContainer
-      if (container) {
+      if (!container) return true
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight
+      return distance <= 80
+    },
+    scrollToBottom(force = false) {
+      const container = this.$refs.messagesContainer
+      if (container && (force || this.stickToBottom)) {
         container.scrollTop = container.scrollHeight
       }
     },

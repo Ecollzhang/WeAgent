@@ -39,7 +39,11 @@ def file_event_element(session_id, file_data):
     if not path:
         return None
 
-    clean_path = path.lstrip('/')
+    normalized_path = str(path).replace('\\', '/')
+    if not (normalized_path.startswith('/workspace/') or normalized_path.startswith('workspace/')):
+        return None
+
+    clean_path = normalized_path.lstrip('/')
     if clean_path.startswith('workspace/'):
         clean_path = clean_path[len('workspace/'):]
 
@@ -69,6 +73,50 @@ def file_event_element(session_id, file_data):
             'path': f'/workspace/{clean_path}',
         },
     }
+
+
+def report_event_element(session_id, report):
+    if not isinstance(report, dict):
+        return None
+
+    element_type = report.get('type') or 'text'
+    data = dict(report.get('data') or {})
+    content = report.get('content', '')
+    title = data.get('title') or report.get('title') or ''
+
+    if element_type in {'file', 'image'}:
+        path = data.get('path') or content
+        if not path:
+            return None
+        element = file_event_element(session_id, {
+            'file': path,
+            'size': data.get('size'),
+        })
+        if not element:
+            return None
+        element['status'] = report.get('status')
+        if report.get('step_id'):
+            element['step_id'] = report.get('step_id')
+            element.setdefault('data', {})['step_id'] = report.get('step_id')
+        if title:
+            element.setdefault('data', {})['title'] = title
+        if content:
+            element['content'] = content
+        return element
+
+    element = {
+        'type': element_type,
+        'content': content,
+        'status': report.get('status'),
+        'data': {
+            **data,
+            'title': title,
+        },
+    }
+    if report.get('step_id'):
+        element['step_id'] = report.get('step_id')
+        element['data']['step_id'] = report.get('step_id')
+    return element
 
 
 def mentioned_file_elements(session_id, text):
@@ -103,4 +151,16 @@ def progress_element(title, status='running', detail=None):
         'content': title or '',
         'status': status,
         'detail': detail,
+    }
+
+
+def result_element(title, content='', detail=None):
+    return {
+        'type': 'result',
+        'content': content or title or '',
+        'data': {
+            'title': title or '执行结果',
+            'content': content or '',
+            **(detail or {}),
+        },
     }

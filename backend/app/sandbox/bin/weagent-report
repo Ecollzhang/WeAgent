@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Report structured progress from Claude Code back to WeAgent.
+
+Usage:
+  weagent-report '{"type":"progress","title":"...","content":"..."}'
+"""
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+
+LOG_DIR = "/workspace/.session/logs"
+SCRIPT_LOG = os.path.join(LOG_DIR, "weagent-report.log")
+REPORT_TYPES = {"progress", "result", "text", "table", "image", "code", "file", "error"}
+REPORT_STATUSES = {"running", "done", "error", "stopped"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
+
+
+def usage_text() -> str:
+    return """WEAGENT_REPORT_USAGE:
+weagent-report only accepts ONE JSON object string.
+
+Required common fields:
+  type: one of progress,result,text,table,image,code,file,error
+  title: non-empty short title
+  content: non-empty text, except table may use content as optional caption
+  status: optional, one of running,done,error,stopped
+  step_id: optional stable id for progress/result pairing
+
+Valid examples:
+  weagent-report '{"type":"progress","title":"分析需求","content":"正在确认页面范围","status":"running","step_id":"step-1"}'
+  weagent-report '{"type":"result","title":"分析完成","content":"已确认使用 HTML/CSS/JS 实现","status":"done","step_id":"step-1"}'
+  weagent-report '{"type":"table","title":"任务分派计划","data":{"headers":["Agent","任务","产出"],"rows":[["frontend","实现登录页","index.html"]]}}'
+  weagent-report '{"type":"file","title":"前端页面","content":"/workspace/agents/frontend/index.html","data":{"path":"/workspace/agents/frontend/index.html"}}'
+  weagent-report '{"type":"image","title":"预览图","content":"/workspace/agents/frontend/preview.png","data":{"path":"/workspace/agents/frontend/preview.png"}}'
+  weagent-report '{"type":"code","title":"关键代码","content":"console.log(1)","data":{"language":"javascript"}}'
+"""
+
+
+def validation_error(message: str) -> str:
+    return f"WEAGENT_REPORT_VALIDATION_ERROR: {message}\n\n{usage_text()}"
+
+
+def validate_payload(payload: object) -> list[str]:
+    errors = []
+    if not isinstance(payload, dict):
+        return ["payload must be a JSON object"]
+
+    report_type = str(payload.get("type") or "").strip().lower()
+    if not report_type:
+        errors.append("missing required field: type")
+    elif report_type not in REPORT_TYPES:
+        errors.append(f"invalid type '{report_type}', allowed: {', '.join(sorted(REPORT_TYPES))}")
+
+    title = payload.get("title")
+    if not isinstance(title, str) or not title.strip():
+        errors.append("missing required non-empty string field: title")
+
+    status = payload.get("status")
+    if status is not None and str(status).strip().lower() not in REPORT_STATUSES:
+        errors.append(f"invalid status '{status}', allowed: {', '.join(sorted(REPORT_STATUSES))}")
+
+    data = payload.get("data")
+    if data is not None and not isinstance(data, dict):
+        errors.append("field data must be an object when provided")
+        data = {}
+    data = data or {}
+
+    content = payload.get("content")
+    if report_type not in {"table"}:
+        if not isinstance(content, str) or not content.strip():
+            errors.append("missing required non-empty string field: content")
+
+    if report_type == "table":
+        headers = data.get("headers")
+        rows = data.get("rows")
+        if not isinstance(headers, list) or not headers or not all(isinstance(h, str) and h.strip() for h in headers):
+            errors.append("table requires data.headers as a non-empty string array")
+        if not isinstance(rows, list):
+            errors.append("table requires data.rows as an array")
+        elif any(not isinstance(row, list) for row in rows):
+            errors.append("table data.rows must contain row arrays")
+
+    if report_type in {"file", "image"}:
+        path = data.get("path") or content
+        if not isinstance(path, str) or not path.strip():
+            errors.append(f"{report_type} requires data.path or content as /workspace/... path")
+        elif not path.startswith("/workspace/"):
+            errors.append(f"{report_type} path must start with /workspace/: {path}")
+        elif not os.path.exists(path):
+            errors.append(f"{report_type} path does not exist: {path}")
+        if report_type == "image":
+            ext = os.path.splitext(str(path or ""))[1].lower()
+            if ext and ext not in IMAGE_EXTS:
+                errors.append(f"image path extension must be one of: {', '.join(sorted(IMAGE_EXTS))}")
+
+    if report_type == "code":
+        language = data.get("language") or payload.get("language")
+        if language is not None and not isinstance(language, str):
+            errors.append("code data.language must be a string")
+
+    return errors
+
+
+def log_line(message: str, **fields):
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        payload = {
+            "ts": time.time(),
+            "message": message,
+            **fields,
+        }
+        with open(SCRIPT_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("usage: weagent-report '<json>'", file=sys.stderr)
+        return 2
+
+    raw = " ".join(sys.argv[1:]).strip()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log_line("invalid_json", error=str(exc), raw_preview=raw[:300])
+        print(validation_error(f"invalid JSON: {exc}"), file=sys.stderr)
+        return 2
+
+    errors = validate_payload(payload)
+    if errors:
+        error_text = "; ".join(errors)
+        log_line("validation_error", error=error_text, payload_preview=raw[:500])
+        print(validation_error(error_text), file=sys.stderr)
+        return 2
+
+    agent_id = os.environ.get("WEAGENT_AGENT_ID") or payload.get("agent_id") or ""
+    if not agent_id:
+        log_line("missing_agent_id", payload_type=payload.get("type"), title=payload.get("title"))
+        print(validation_error("missing agent id; set WEAGENT_AGENT_ID or include agent_id"), file=sys.stderr)
+        return 2
+
+    body = json.dumps({
+        "agent_id": agent_id,
+        "report": payload,
+    }, ensure_ascii=False).encode("utf-8")
+
+    port = os.environ.get("ORCHESTRATOR_PORT", "8080")
+    url = f"http://127.0.0.1:{port}/api/report"
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    log_line(
+        "report_send",
+        agent_id=agent_id,
+        report_type=payload.get("type"),
+        title=payload.get("title"),
+        content_preview=str(payload.get("content", ""))[:300],
+        url=url,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+            log_line("report_ok", agent_id=agent_id, status=getattr(resp, "status", 0), response_preview=text[:300])
+            print(text)
+    except urllib.error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        log_line("report_failed", agent_id=agent_id, error=str(exc), response_preview=body_text[:500], url=url)
+        print(f"WEAGENT_REPORT_SERVER_ERROR: {exc}\n{body_text}", file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, OSError) as exc:
+        log_line("report_failed", agent_id=agent_id, error=str(exc), url=url)
+        print(f"WEAGENT_REPORT_SEND_ERROR: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

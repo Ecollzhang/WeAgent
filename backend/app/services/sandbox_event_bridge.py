@@ -1,5 +1,6 @@
 from datetime import datetime
 import re
+from sqlalchemy.orm.attributes import flag_modified
 
 from app import db, socketio
 from app.models.conversation import Conversation
@@ -9,7 +10,8 @@ from app.services.message_element_builder import (
     file_event_element,
     mentioned_file_elements,
     progress_element,
-    text_delta_element,
+    report_event_element,
+    result_element,
 )
 
 
@@ -44,6 +46,17 @@ class SandboxEventBridge:
             db.session.commit()
             return
 
+        if event_type == 'claude_started':
+            self._append_event(message, event_type, event_data, seq)
+            element = progress_element(self._event_title(event_type, event_data), 'running',
+                                       event_data)
+            self._append_element(message, element)
+            message.status = 'streaming'
+            db.session.commit()
+            self._emit_element(conversation.id, message, run, agent_id, element)
+            self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
+            return
+
         if event_type == 'agent_task_started':
             self._append_event(message, event_type, event_data, seq)
             element = progress_element(self._event_title(event_type, event_data), 'running',
@@ -60,29 +73,62 @@ class SandboxEventBridge:
                 message.raw_output = (message.raw_output or '') + chunk
                 message.status = 'streaming'
                 message.content = self._summary_text(message.raw_output)
-                element = text_delta_element(chunk)
-                self._append_element(message, element)
                 run.last_seq = max(run.last_seq or 0, int(seq or 0))
                 db.session.commit()
-                self._emit_element(conversation.id, message, run, agent_id, element)
+                self._emit_status(conversation.id, message, run, agent_id, 'streaming')
+            return
+
+        if event_type == 'agent_progress':
+            self._append_event(message, event_type, event_data, seq)
+            element = progress_element(self._event_title(event_type, event_data), 'running',
+                                       event_data)
+            self._append_or_replace_progress(message, element, 'agent_progress:heartbeat')
+            message.status = 'streaming'
+            run.last_seq = max(run.last_seq or 0, int(seq or 0))
+            db.session.commit()
+            self._emit_element(conversation.id, message, run, agent_id, element)
+            self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
+            return
+
+        if event_type == 'agent_report_element':
+            element = report_event_element(session_id, event_data)
+            if not element:
+                element = progress_element('无效进度上报', 'error', event_data)
+            self._append_event(message, event_type, event_data, seq)
+            self._append_element(message, element)
+            message.status = 'streaming'
+            if element.get('type') in ('text', 'result', 'error'):
+                message.content = element.get('content') or message.content
+            run.last_seq = max(run.last_seq or 0, int(seq or 0))
+            db.session.commit()
+            self._emit_element(conversation.id, message, run, agent_id, element)
+            self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
         if event_type == 'file_write':
             element = file_event_element(session_id, event_data)
             self._append_event(message, event_type, event_data, seq)
+            progress = progress_element(self._event_title(event_type, event_data), 'done',
+                                        event_data)
+            self._append_element(message, progress)
             if element:
                 key = element.get('data', {}).get('url') or element.get('data', {}).get('name')
                 if self._append_element(message, element, unique_key=key):
                     db.session.commit()
+                    self._emit_element(conversation.id, message, run, agent_id, progress)
                     self._emit_element(conversation.id, message, run, agent_id, element)
             else:
                 db.session.commit()
+                self._emit_element(conversation.id, message, run, agent_id, progress)
                 self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
         if event_type == 'agent_task_completed':
             self._append_event(message, event_type, event_data, seq)
             self._append_mentioned_files(message, run.sandbox_session_id or conversation.sandbox_session_id)
+            summary = self._summary_text(message.raw_output)
+            if summary and summary != '正在处理...':
+                self._append_element(message, result_element('本轮输出结果', summary, event_data))
             self._append_element(message, progress_element(self._event_title(event_type, event_data),
                                                            'done', event_data))
             self._finish(message, run, conversation.id, agent_id, 'done', seq=seq)
@@ -90,8 +136,9 @@ class SandboxEventBridge:
 
         if event_type == 'claude_stopped':
             self._append_event(message, event_type, event_data, seq)
-            self._append_element(message, progress_element(self._event_title(event_type, event_data),
-                                                           'stopped', event_data))
+            element = progress_element(self._event_title(event_type, event_data),
+                                       'stopped', event_data)
+            self._append_or_replace_progress(message, element, 'agent_progress:heartbeat')
             self._finish(message, run, conversation.id, agent_id, 'stopped', seq=seq)
             return
 
@@ -111,15 +158,24 @@ class SandboxEventBridge:
         message = Message.query.get(run.message_id) if run.message_id else None
         conversation = Conversation.query.get(conversation_id)
         if message and conversation:
-            self._finish(message, run, conversation_id, agent_id, 'stopped')
+            message.status = 'stopped'
+            if not (message.raw_output or message.content or message.elements):
+                message.content = '执行已停止'
+                self._append_or_replace_progress(
+                    message,
+                    progress_element('执行已停止', 'stopped'),
+                    'agent_progress:heartbeat',
+                )
+            db.session.commit()
+            self._emit_status(conversation_id, message, run, agent_id, 'stopped')
 
     def _finish(self, message, run, conversation_id, agent_id, status, error=None, seq=None):
         message.status = status
         if message.raw_output:
             message.content = self._summary_text(message.raw_output)
         elif status == 'stopped':
-            message.content = '执行已停止'
-            if not message.elements:
+            if not (message.content or message.elements):
+                message.content = '执行已停止'
                 self._append_element(message, progress_element('执行已停止', 'stopped'))
         run.status = status if status != 'done' else 'done'
         run.finished_at = datetime.utcnow()
@@ -128,6 +184,9 @@ class SandboxEventBridge:
         if seq is not None:
             run.last_seq = max(run.last_seq or 0, int(seq or 0))
         db.session.commit()
+        self._emit_status(conversation_id, message, run, agent_id, status, error=error)
+
+    def _emit_status(self, conversation_id, message, run, agent_id, status, error=None):
         socketio.emit('conversation_message_status', {
             'conversation_id': conversation_id,
             'message_id': message.id,
@@ -153,6 +212,33 @@ class SandboxEventBridge:
                 return False
         elements.append(element)
         message.elements = elements
+        return True
+
+    def _append_or_replace_progress(self, message, element, progress_key):
+        if not element:
+            return False
+        detail = dict(element.get('detail') or {})
+        detail['progress_key'] = progress_key
+        element['detail'] = detail
+        data = dict(element.get('data') or {})
+        data['progress_key'] = progress_key
+        element['data'] = data
+
+        elements = list(message.elements or [])
+        for index, item in enumerate(elements):
+            item_key = (
+                (item.get('data') or {}).get('progress_key')
+                or (item.get('detail') or {}).get('progress_key')
+                or item.get('step_id')
+            )
+            if item.get('type') == 'progress' and item_key == progress_key:
+                elements[index] = element
+                message.elements = elements
+                flag_modified(message, 'elements')
+                return True
+        elements.append(element)
+        message.elements = elements
+        flag_modified(message, 'elements')
         return True
 
     def _emit_element(self, conversation_id, message, run, agent_id, element):
@@ -191,6 +277,7 @@ class SandboxEventBridge:
         })
         meta['events'] = events[-100:]
         message.meta = meta
+        flag_modified(message, 'meta')
 
     def _emit_step(self, conversation_id, message, run, agent_id, event_type, event_data, seq):
         socketio.emit('conversation_message_step', {
@@ -210,6 +297,40 @@ class SandboxEventBridge:
         }, room=conversation_id)
 
     @staticmethod
+    def _event_title(event_type, event_data):
+        if event_type == 'claude_started':
+            return 'Claude Code 已启动'
+        if event_type == 'agent_progress':
+            message = event_data.get('message') or 'Agent 正在执行'
+            elapsed = event_data.get('elapsed')
+            if elapsed is not None:
+                return f'{message}（{elapsed}s）'
+            return message
+        if event_type == 'agent_report_element':
+            return event_data.get('title') or event_data.get('content') or 'Agent 上报进度'
+        if event_type == 'agent_task_started':
+            return event_data.get('message') or '开始执行任务'
+        if event_type == 'file_write':
+            return f"写入文件：{event_data.get('file', '')}"
+        if event_type == 'agent_task_completed':
+            return event_data.get('message') or '任务完成'
+        if event_type == 'claude_stopped':
+            return event_data.get('message') or '执行已停止'
+        if event_type == 'error':
+            return event_data.get('error') or event_data.get('message') or '执行出错'
+        return event_type
+
+    @staticmethod
+    def _summary_text(raw_output):
+        text = (raw_output or '').strip()
+        if not text:
+            return '正在处理...'
+        max_len = 12000
+        if len(text) <= max_len:
+            return text
+        return text[-max_len:]
+
+    @staticmethod
     def _agent_name(conversation, agent_id):
         if not conversation:
             return agent_id
@@ -220,26 +341,6 @@ class SandboxEventBridge:
         )
         return participant.participant_name if participant else agent_id
 
-    @staticmethod
-    def _event_title(event_type, event_data):
-        if event_type == 'agent_task_started':
-            return event_data.get('message') or '开始执行任务'
-        if event_type == 'file_write':
-            return f"写入文件：{event_data.get('file', '')}"
-        if event_type == 'agent_task_completed':
-            return event_data.get('message') or '任务完成'
-        if event_type == 'claude_stopped':
-            return event_data.get('message') or '执行已停止'
-        if event_type == 'error':
-            return event_data.get('error') or '执行出错'
-        return event_type
-
-    @staticmethod
-    def _summary_text(raw_output):
-        text = (raw_output or '').strip()
-        if not text:
-            return '正在处理...'
-        return text[-1200:]
 
 
 sandbox_event_bridge = SandboxEventBridge()

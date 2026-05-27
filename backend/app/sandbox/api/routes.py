@@ -561,6 +561,10 @@ def container_event_callback():
     event_type = data.get("type", "")
     event_data = data.get("data", {})
     seq = data.get("seq", 0)
+    print(
+        f"[SandboxEvent] session={session_id} agent={agent_id} "
+        f"type={event_type} seq={seq}"
+    )
 
     if session_id:
         # Broadcast to all frontend clients in this session's room
@@ -573,8 +577,15 @@ def container_event_callback():
                 "data": event_data,
                 "seq": seq,
             }, room=session_id)
-        except Exception:
-            pass  # SocketIO not available
+            print(
+                f"[SandboxEvent] socket_emit_ok session={session_id} "
+                f"agent={agent_id} type={event_type} seq={seq}"
+            )
+        except Exception as e:
+            print(
+                f"[SandboxEvent] socket_emit_failed session={session_id} "
+                f"agent={agent_id} type={event_type} seq={seq} error={e}"
+            )
 
         try:
             from app.services.sandbox_event_bridge import sandbox_event_bridge

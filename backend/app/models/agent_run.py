@@ -21,6 +21,10 @@ class AgentRun(BaseModel):
     last_seq = db.Column(db.Integer, nullable=False, default=0)
     meta = db.Column(db.JSON, nullable=True)
 
-    conversation = db.relationship('Conversation', backref='agent_runs', lazy='select')
+    conversation = db.relationship(
+        'Conversation',
+        backref=db.backref('agent_runs', lazy='select', cascade='all, delete-orphan'),
+        lazy='select',
+    )
     message = db.relationship('Message', backref=db.backref('agent_run', uselist=False),
                               lazy='select')

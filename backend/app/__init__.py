@@ -11,7 +11,7 @@ db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
 cors = CORS()
-socketio = SocketIO(cors_allowed_origins='*')
+socketio = SocketIO(cors_allowed_origins='*', async_mode='threading')
 
 
 def _migrate_existing_tables():
@@ -110,7 +110,11 @@ def create_app(config_name=None):
     migrate.init_app(app, db)
     jwt.init_app(app)
     cors.init_app(app, resources={r"/api/*": {"origins": "*"}})
-    socketio.init_app(app, cors_allowed_origins=app.config.get('SOCKETIO_CORS_ALLOWED_ORIGINS', '*'))
+    socketio.init_app(
+        app,
+        cors_allowed_origins=app.config.get('SOCKETIO_CORS_ALLOWED_ORIGINS', '*'),
+        async_mode='threading',
+    )
 
     # Register blueprints
     from app.controllers.auth_controller import auth_bp

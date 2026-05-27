@@ -1,12 +1,15 @@
 from app.models.message import Message
 from app.models.user import User
 from app.models.agent import Agent
+from app.models.agent_run import AgentRun
 from app import db
 from app.repositories.conversation_repo import conversation_repo
 from app.repositories.agent_repo import agent_repo
 from app.repositories.message_repo import message_repo
 from app.services.settings_service import settings_service
 from werkzeug.utils import secure_filename
+
+MODERATOR_AGENT_ID = 'moderator'
 
 
 def _safe_workspace_name(name):
@@ -129,8 +132,10 @@ class ConversationService:
             participant_color=info['color'],
         )
 
+        normalized_participant_ids = self._with_auto_moderator(participant_ids or [])
+
         # Add other participants (users or agents)
-        for pid in participant_ids:
+        for pid in normalized_participant_ids:
             if pid.startswith('agent_'):
                 actual_id = pid.replace('agent_', '')
                 agent = agent_repo.get_by_id(actual_id)
@@ -159,30 +164,59 @@ class ConversationService:
             p for p in conversation.participants
             if p.participant_type == 'agent'
         ]
-        if len(agent_participants) == 1:
-            error = self._create_single_agent_sandbox(conversation, agent_participants[0],
-                                                      owner_id)
+        if agent_participants:
+            error = self._create_agent_sandbox(conversation, agent_participants, owner_id)
             if error:
                 conversation.delete()
                 return None, error
 
         return self._conv_to_dict(conversation), None
 
+    def _with_auto_moderator(self, participant_ids):
+        agent_ids = []
+        for pid in participant_ids:
+            if pid.startswith('agent_'):
+                agent_ids.append(pid.replace('agent_', ''))
+        if len([aid for aid in agent_ids if aid != MODERATOR_AGENT_ID]) >= 2:
+            moderator_pid = f'agent_{MODERATOR_AGENT_ID}'
+            participant_ids = [pid for pid in participant_ids if pid != moderator_pid]
+            participant_ids.append(moderator_pid)
+        return participant_ids
+
     def _create_single_agent_sandbox(self, conversation, participant, user_id):
+        return self._create_agent_sandbox(conversation, [participant], user_id)
+
+    def _create_agent_sandbox(self, conversation, participants, user_id):
         env_vars, error = settings_service.get_container_env_vars(user_id)
         if error:
             return error
 
-        agent = Agent.query.get(participant.participant_id)
-        if not agent:
-            return 'Agent not found'
+        agents_config = []
+        for participant in participants:
+            agent = Agent.query.get(participant.participant_id)
+            if not agent:
+                return 'Agent not found'
 
-        workspace_name = _safe_workspace_name(agent.name)
-        work_dir = f'/workspace/agents/{workspace_name}'
-        system_prompt_parts = [agent.system_prompt or '']
-        if agent.skill:
-            system_prompt_parts.append(f'\n\n工作流程:\n{agent.skill}')
-        system_prompt_parts.append(f"""
+            workspace_name = _safe_workspace_name(agent.name)
+            work_dir = f'/workspace/agents/{workspace_name}'
+            system_prompt_parts = [agent.system_prompt or '']
+            if participant.participant_id == MODERATOR_AGENT_ID:
+                worker_infos = []
+                for p in participants:
+                    if p.participant_id == MODERATOR_AGENT_ID:
+                        continue
+                    worker_agent = Agent.query.get(p.participant_id)
+                    if worker_agent:
+                        worker_infos.append(
+                            f'- agent_id: {worker_agent.id}; name: {worker_agent.name}; tags: {", ".join(worker_agent.capability_tags or [])}'
+                        )
+                system_prompt_parts.append(
+                    '\n\n当前可分配 worker_agents:\n' + '\n'.join(worker_infos)
+                    if worker_infos else '\n\n当前没有可分配 worker_agents。'
+                )
+            if agent.skill:
+                system_prompt_parts.append(f'\n\n工作流程:\n{agent.skill}')
+            system_prompt_parts.append(f"""
 
 文件产物要求:
 - 如果任务需要生成页面、代码、文档或其它文件，必须实际写入 {work_dir}/ 下的文件。
@@ -192,12 +226,12 @@ class ConversationService:
 - 如写入了可预览 HTML，请明确提到入口文件 index.html。
 """)
 
-        agents_config = [{
-            'agent_id': agent.id,
-            'role': agent.name,
-            'workspace_name': workspace_name,
-            'system_prompt': '\n'.join(part for part in system_prompt_parts if part),
-        }]
+            agents_config.append({
+                'agent_id': agent.id,
+                'role': agent.name,
+                'workspace_name': workspace_name,
+                'system_prompt': '\n'.join(part for part in system_prompt_parts if part),
+            })
 
         try:
             from app.sandbox import get_manager
@@ -255,7 +289,11 @@ class ConversationService:
                 get_manager().destroy_session(conversation.sandbox_session_id)
             except Exception:
                 pass
-        conversation.delete()
+        AgentRun.query.filter_by(conversation_id=conversation.id).delete(
+            synchronize_session=False
+        )
+        db.session.delete(conversation)
+        db.session.commit()
         return {'deleted': True}, None
 
     def stop_agent(self, conversation_id, agent_id, user_id):

@@ -1,6 +1,19 @@
 from app.models.agent import Agent
 from app.models.agent_category import AgentCategory
 
+MODERATOR_SYSTEM_PROMPT = '''你是 WeAgent 的主持 Agent，负责多 Agent 会话的任务理解、直接回答、任务拆分、调度和汇总。
+
+你的调度输出必须遵循后端传入的 JSON 协议：
+1. 如果你根据当前团队信息可以直接回答用户问题，输出 type=answer，不要创建任务。
+2. 如果你不能直接回答，或任务需要 worker 执行，输出 type=plan，并只安排必要的 worker。
+3. type=plan 时 tasks 必须至少有 1 个元素；type=answer 时 tasks 可以省略或为空数组。
+4. 不要编造 agent_id，只能使用后端提供的 worker_agents。
+5. summary 是给用户看的主持说明，应清楚说明你知道什么、要安排谁做什么。
+
+当用户询问“群里都有谁、各自能做什么”时：
+- 如果 worker_agents 已提供名称、能力标签或 skill，你应直接回答。
+- 如果能力信息不足，你应说明“我知道群里有哪些 agent，但不清楚他们具体能干啥，我帮你问一下他们”，然后生成任务让相关 worker 自我介绍。'''
+
 
 # ── System templates (no user_id) ─────────────────────────────────────
 SYSTEM_CATEGORIES = [
@@ -12,6 +25,36 @@ SYSTEM_CATEGORIES = [
 ]
 
 SYSTEM_AGENTS = [
+    {'id': 'moderator', 'name': '任务主持人', 'class_id': 'cat_doc', 'avatar_color': '#f59e0b',
+     'adapter_name': 'claude',
+     'system_prompt': '''你是 WeAgent 的主持 Agent，固定负责多 Agent 会话的任务理解、拆分、依赖分析和结果汇总。
+
+你的第一轮职责是输出严格 JSON，不要输出 Markdown，不要包裹代码块，不要加入 JSON 之外的说明。
+JSON 格式必须为：
+{
+  "summary": "任务拆解摘要",
+  "tasks": [
+    {
+      "task_id": "短横线命名的任务ID",
+      "agent_id": "必须从可用 worker_agents 中选择一个 agent_id",
+      "title": "任务标题",
+      "instruction": "给该 Agent 的完整执行指令",
+      "depends_on": [],
+      "can_parallel": true
+    }
+  ],
+  "parallel_groups": [["task_id"]],
+  "summary_required": true
+}
+
+规则：
+1. 只能把任务分配给 worker_agents 中列出的 Agent，不要编造 agent_id。
+2. 需要并行的任务放在同一个 parallel_groups 子数组中；需要串行的任务放在后续子数组中。
+3. 如果某任务依赖其它任务，必须在 depends_on 中列出对应 task_id。
+4. 主持 Agent 不直接写最终业务产物；只输出计划或在 summary_required=true 的最终汇总阶段总结 worker 结果。
+5. 如果任务很简单，也至少输出一个 tasks 元素。''',
+     'skill': '1. 理解用户任务\n2. 拆分 worker 可执行任务\n3. 判断依赖关系和并行组\n4. 输出严格 JSON plan\n5. 必要时汇总 worker 结果',
+     'capability_tags': ['主持', '任务分发', '多Agent协作', '计划编排', '结果汇总']},
     # ── 文档 ──
     {'id': '_doc_1', 'name': '文档撰写助手', 'class_id': 'cat_doc', 'avatar_color': '#22c55e',
      'adapter_name': 'claude',
@@ -109,8 +152,25 @@ class AgentService:
                 AgentCategory(**cat_data).save()
 
         for agent_data in SYSTEM_AGENTS:
-            if not Agent.query.get(agent_data['id']):
-                Agent(agent_type='external', **agent_data).save()
+            data = dict(agent_data)
+            if data.get('id') == 'moderator':
+                data['system_prompt'] = MODERATOR_SYSTEM_PROMPT
+                data['skill'] = (
+                    '1. 判断用户问题能否由主持 Agent 直接回答\n'
+                    '2. 在信息不足或需要执行时生成 worker 任务\n'
+                    '3. 选择必要 Agent 并安排并行或串行执行\n'
+                    '4. 输出严格 JSON answer/plan\n'
+                    '5. 必要时汇总 worker 结果'
+                )
+                data['capability_tags'] = ['主持', '任务分发', '多Agent协作', '计划编排', '结果汇总']
+            existing = Agent.query.get(data['id'])
+            if not existing:
+                Agent(agent_type='external', **data).save()
+            elif data.get('id') == 'moderator':
+                existing.system_prompt = MODERATOR_SYSTEM_PROMPT
+                existing.skill = data['skill']
+                existing.capability_tags = data['capability_tags']
+                existing.save()
 
         for agent_data in SYSTEM_LEGACY_AGENTS:
             if not Agent.query.filter_by(name=agent_data['name']).first():
@@ -135,6 +195,8 @@ class AgentService:
 
         # Copy agents — link to the new category IDs
         for tmpl in SYSTEM_AGENTS:
+            if tmpl.get('id') == 'moderator':
+                continue
             old_cid = tmpl.get('class_id')
             agent = Agent(
                 name=tmpl['name'],
@@ -219,7 +281,14 @@ class AgentService:
         if class_id:
             q = q.filter_by(class_id=class_id)
         agents = q.order_by(Agent.created_at.desc()).all()
-        return [a.to_dict() for a in agents], None
+        result = [a.to_dict() for a in agents]
+
+        moderator = Agent.query.get('moderator')
+        if moderator and not class_id:
+            result.insert(0, moderator.to_dict())
+        elif moderator and class_id and moderator.class_id == class_id:
+            result.insert(0, moderator.to_dict())
+        return result, None
 
     def get_agent_detail(self, agent_id):
         """Get agent detail by ID."""
@@ -254,6 +323,8 @@ class AgentService:
 
     def update_agent(self, agent_id, user_id, **kwargs):
         """Update an agent (owner only)."""
+        if agent_id == 'moderator':
+            return None, '主持 Agent 是系统内置 Agent，只允许查看，不能编辑'
         agent = Agent.query.filter_by(id=agent_id, user_id=user_id).first()
         if not agent:
             return None, 'Agent not found'
@@ -268,6 +339,8 @@ class AgentService:
 
     def delete_agent(self, agent_id, user_id):
         """Delete an agent (owner only)."""
+        if agent_id == 'moderator':
+            return None, '主持 Agent 是系统内置 Agent，只允许查看，不能删除'
         agent = Agent.query.filter_by(id=agent_id, user_id=user_id).first()
         if not agent:
             return None, 'Agent not found'

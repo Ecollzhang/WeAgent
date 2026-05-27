@@ -24,6 +24,8 @@ RUN pip install --no-cache-dir flask requests
 
 # ---- 复制容器端代码 (保持 container/ 包结构) ----
 COPY container/ /app/container/
+COPY bin/weagent-report /usr/local/bin/weagent-report
+RUN chmod +x /usr/local/bin/weagent-report
 
 # ---- 工作目录 (volume mount 点) ----
 WORKDIR /workspace

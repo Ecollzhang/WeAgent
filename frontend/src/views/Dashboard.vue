@@ -34,6 +34,7 @@
         @open-workspace="handleOpenWorkspace"
         @open-file="handleOpenFile"
         @open-attachments="handleOpenAttachments"
+        @open-services="handleOpenServices"
       />
     </div>
 
@@ -149,6 +150,71 @@
     </el-drawer>
 
     <!-- 新建会话对话框 -->
+    <el-drawer
+      title="预览服务"
+      :visible.sync="servicesVisible"
+      direction="rtl"
+      size="420px"
+      custom-class="services-drawer"
+    >
+      <div class="services-body">
+        <el-form label-position="top" size="small">
+          <el-form-item label="Agent">
+            <el-select v-model="serviceForm.agent_id" placeholder="选择 Agent" style="width: 100%" @change="syncServiceCwd">
+              <el-option
+                v-for="ag in currentSessionAgents"
+                :key="ag.agent_id"
+                :label="ag.name || ag.role || ag.agent_id"
+                :value="ag.agent_id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="端口">
+            <el-select v-model="serviceForm.port" style="width: 100%" @change="syncServiceCommand">
+              <el-option label="Vite / Vue3: 5173" :value="5173" />
+              <el-option label="Vue CLI: 8081" :value="8081" />
+              <el-option label="React / Node: 3000" :value="3000" />
+              <el-option label="静态文件: 8000" :value="8000" />
+              <el-option label="其他: 9000" :value="9000" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="工作目录">
+            <el-input v-model="serviceForm.cwd" />
+          </el-form-item>
+          <el-form-item label="启动命令">
+            <el-input v-model="serviceForm.command" type="textarea" :rows="3" />
+          </el-form-item>
+          <el-button type="primary" size="small" :loading="serviceStarting" @click="handleStartService">
+            启动服务
+          </el-button>
+          <el-button size="small" @click="loadServices">刷新</el-button>
+        </el-form>
+
+        <div class="service-tip">
+          Vue/Vite 服务必须监听 0.0.0.0，否则只能在容器内访问。
+        </div>
+
+        <div class="service-list" v-loading="servicesLoading">
+          <div v-if="services.length === 0" class="service-empty">暂无服务</div>
+          <div v-for="svc in services" :key="svc.port" class="service-item">
+            <div class="service-main">
+              <div class="service-title">
+                <span>容器端口 {{ svc.port }}</span>
+                <el-tag size="mini" :type="svc.status === 'open' || svc.running ? 'success' : 'info'">
+                  {{ svc.status || (svc.running ? 'open' : 'closed') }}
+                </el-tag>
+              </div>
+              <a v-if="svc.url" :href="svc.url" target="_blank" rel="noopener" class="service-url">
+                {{ svc.url }}
+              </a>
+              <div v-if="svc.command" class="service-command">{{ svc.command }}</div>
+            </div>
+            <el-button v-if="svc.url" size="mini" type="text" @click="copyServiceUrl(svc.url)">复制</el-button>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
+
     <el-dialog title="新建会话" :visible.sync="showCreateDialog" width="500px" custom-class="create-conv-dialog" top="8vh">
       <div class="create-conv-body">
         <div class="conv-field">
@@ -250,6 +316,8 @@ import {
   getSessionRawFileUrl,
   getWorkspaceFileUrl,
   getSessionDownloadUrl,
+  listServices,
+  startService,
 } from '../api/sandbox'
 import socketClient from '../utils/socket'
 
@@ -293,6 +361,16 @@ export default {
       attachmentsVisible: false,
       attachments: [],
       attachmentsLoading: false,
+      servicesVisible: false,
+      servicesLoading: false,
+      serviceStarting: false,
+      services: [],
+      serviceForm: {
+        agent_id: '',
+        port: 5173,
+        cwd: '',
+        command: 'npm run dev -- --host 0.0.0.0 --port 5173',
+      },
       messageRefreshTimer: null,
     }
   },
@@ -399,6 +477,7 @@ export default {
       if (oldId && oldId !== conversation.id) {
         socketClient.leaveConversation(oldId)
       }
+      this.stopMessageRefresh()
       this.$store.commit('conversation/SET_CURRENT_CONVERSATION', conversation)
       this.isAgentResponding = false
       socketClient.joinConversation(conversation.id)
@@ -454,6 +533,7 @@ export default {
     },
 
     registerSocketHandlers() {
+      this.unregisterSocketHandlers()
       const onCreated = (message) => {
         const convId = message.conversation_id
         this.$store.commit('message/UPSERT_MESSAGE', {
@@ -464,30 +544,36 @@ export default {
         this.$store.dispatch('conversation/fetchConversations')
       }
       const onDelta = (event) => {
+        const patch = {
+          content: event.content,
+          elements: event.elements,
+          raw_output: event.raw_output,
+          status: event.status,
+        }
+        if (event.sender_name) {
+          patch.sender_name = event.sender_name
+        }
         this.$store.commit('message/UPDATE_MESSAGE', {
           conversationId: event.conversation_id,
           messageId: event.message_id,
-          patch: {
-            content: event.content,
-            elements: event.elements,
-            raw_output: event.raw_output,
-            status: event.status,
-            sender_name: event.sender_name,
-          },
+          patch,
         })
         this.isAgentResponding = this.hasStreamingMessages(event.conversation_id)
       }
       const onElement = (event) => {
+        const patch = {
+          content: event.content,
+          raw_output: event.raw_output,
+          status: event.status,
+        }
+        if (event.sender_name) {
+          patch.sender_name = event.sender_name
+        }
         this.$store.commit('message/APPEND_MESSAGE_ELEMENT', {
           conversationId: event.conversation_id,
           messageId: event.message_id,
           element: event.element,
-          patch: {
-            content: event.content,
-            raw_output: event.raw_output,
-            status: event.status,
-            sender_name: event.sender_name,
-          },
+          patch,
         })
         this.$store.commit('message/ADD_MESSAGE_EVENT', {
           conversationId: event.conversation_id,
@@ -510,7 +596,9 @@ export default {
           elements: event.elements,
           raw_output: event.raw_output,
           status: event.status,
-          sender_name: event.sender_name,
+        }
+        if (event.sender_name) {
+          patch.sender_name = event.sender_name
         }
         if (event.events) {
           patch.meta = { events: event.events }
@@ -632,6 +720,88 @@ export default {
       if (!this.currentConversation) return
       this.attachmentsVisible = true
       await this.loadAttachments()
+    },
+
+    async handleOpenServices() {
+      if (!this.currentConversation) return
+      this.servicesVisible = true
+      if (!this.serviceForm.agent_id && this.currentSessionAgents.length) {
+        const worker = this.currentSessionAgents.find(a => a.agent_id !== 'moderator') || this.currentSessionAgents[0]
+        this.serviceForm.agent_id = worker.agent_id
+        this.syncServiceCwd()
+      }
+      this.syncServiceCommand()
+      await this.loadServices()
+    },
+
+    async loadServices() {
+      if (!this.currentSessionId) return
+      this.servicesLoading = true
+      try {
+        const res = await listServices(this.currentSessionId)
+        if (res.code === 200) {
+          this.services = res.data?.services || []
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '获取服务列表失败')
+      } finally {
+        this.servicesLoading = false
+      }
+    },
+
+    async handleStartService() {
+      if (!this.currentSessionId) return
+      if (!this.serviceForm.agent_id) {
+        this.$message.warning('请选择 Agent')
+        return
+      }
+      this.serviceStarting = true
+      try {
+        const res = await startService(this.currentSessionId, {
+          agent_id: this.serviceForm.agent_id,
+          port: this.serviceForm.port,
+          cwd: this.serviceForm.cwd,
+          command: this.serviceForm.command,
+        })
+        if (res.code === 200) {
+          const url = res.data?.url
+          this.$message.success(url ? `服务已启动：${url}` : '服务已启动')
+          await this.loadServices()
+          if (url) window.open(url, '_blank')
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '启动服务失败')
+      } finally {
+        this.serviceStarting = false
+      }
+    },
+
+    syncServiceCwd() {
+      const agent = this.currentSessionAgents.find(a => a.agent_id === this.serviceForm.agent_id)
+      if (!agent) return
+      this.serviceForm.cwd = `/workspace/agents/${agent.workspace_name || this.safeWorkspaceName(agent.name || agent.role || agent.agent_id)}`
+    },
+
+    syncServiceCommand() {
+      const port = Number(this.serviceForm.port)
+      if (port === 5173) {
+        this.serviceForm.command = 'npm run dev -- --host 0.0.0.0 --port 5173'
+      } else if (port === 8081) {
+        this.serviceForm.command = 'npm run serve -- --host 0.0.0.0 --port 8081'
+      } else if (port === 3000) {
+        this.serviceForm.command = 'npm start -- --host 0.0.0.0 --port 3000'
+      } else if (port === 8000) {
+        this.serviceForm.command = 'python3 -m http.server 8000 --bind 0.0.0.0'
+      }
+    },
+
+    async copyServiceUrl(url) {
+      try {
+        await navigator.clipboard.writeText(url)
+        this.$message.success('已复制访问链接')
+      } catch (e) {
+        this.$message.info(url)
+      }
     },
 
     async loadAttachments() {
@@ -854,7 +1024,9 @@ export default {
           getAgents(),  // no class_id = all user agents
         ])
         const cats = catRes.code === 200 ? catRes.data : []
-        const agents = agentRes.code === 200 ? agentRes.data : []
+        const agents = agentRes.code === 200
+          ? agentRes.data.filter(agent => agent.id !== 'moderator')
+          : []
 
         for (const cat of cats) {
           const children = []
@@ -913,8 +1085,10 @@ export default {
     },
     handleTreeCheckChange() {
       if (this.$refs.agentTree) {
-        const checked = this.$refs.agentTree.getCheckedKeys()
-        this.newConversation.selectedAgents = checked
+        const checkedAgents = this.$refs.agentTree.getCheckedNodes(true)
+          .filter(node => node.isLeaf && node.id !== 'moderator')
+          .map(node => node.id)
+        this.newConversation.selectedAgents = checkedAgents
       }
     },
 
@@ -1405,6 +1579,79 @@ export default {
 
 .attachment-name:hover {
   color: #4080ff;
+}
+
+.services-body {
+  padding: 0 18px 18px;
+}
+
+.service-tip {
+  margin: 12px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+}
+
+.service-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.service-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.service-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.service-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: #1e293b;
+  margin-bottom: 4px;
+}
+
+.service-url {
+  display: block;
+  color: #4080ff;
+  font-size: 13px;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-command {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+  font-family: Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>
 

@@ -14,8 +14,8 @@ function sortMessages(messages) {
     if (a.parent_message_id && a.parent_message_id === b.id) return 1
     if (b.parent_message_id && b.parent_message_id === a.id) return -1
 
-    const aParentIndex = a.parent_message_id && userIndex[a.parent_message_id]
-    const bParentIndex = b.parent_message_id && userIndex[b.parent_message_id]
+    const aParentIndex = a.parent_message_id ? userIndex[a.parent_message_id] : undefined
+    const bParentIndex = b.parent_message_id ? userIndex[b.parent_message_id] : undefined
     if (aParentIndex !== undefined || bParentIndex !== undefined) {
       const ag = aParentIndex !== undefined ? aParentIndex : userIndex[a.id]
       const bg = bParentIndex !== undefined ? bParentIndex : userIndex[b.id]
@@ -27,6 +27,46 @@ function sortMessages(messages) {
     if (at !== bt) return at - bt
     return (rank[a.sender_type] ?? 2) - (rank[b.sender_type] ?? 2)
   })
+}
+
+function elementKey(element) {
+  if (!element) return ''
+  const content = element.content || element?.data?.content || ''
+  const title = element?.data?.title || element.title || ''
+  return (
+    element?.data?.progress_key ||
+    element?.detail?.progress_key ||
+    element?.step_id ||
+    element?.data?.url ||
+    element?.data?.path ||
+    element?.data?.name ||
+    [
+      element.type || '',
+      element.status || '',
+      title,
+      String(content).slice(0, 240),
+    ].join('|')
+  )
+}
+
+function mergeElements(existing = [], incoming = []) {
+  const merged = []
+  ;(Array.isArray(existing) ? existing : []).forEach(element => {
+    const key = elementKey(element)
+    if (!key || !merged.some(item => elementKey(item) === key)) {
+      merged.push(element)
+    }
+  })
+  ;(Array.isArray(incoming) ? incoming : []).forEach(element => {
+    const key = elementKey(element)
+    const index = key ? merged.findIndex(item => elementKey(item) === key) : -1
+    if (index !== -1) {
+      Vue.set(merged, index, element)
+    } else {
+      merged.push(element)
+    }
+  })
+  return merged
 }
 
 const state = {
@@ -45,7 +85,25 @@ const getters = {
 
 const mutations = {
   SET_MESSAGES(state, { conversationId, messages }) {
-    Vue.set(state.messages, conversationId, sortMessages(messages || []))
+    const existing = state.messages[conversationId] || []
+    const existingById = {}
+    existing.forEach(message => {
+      existingById[message.id] = message
+    })
+    const merged = (messages || []).map(message => {
+      const old = existingById[message.id]
+      if (!old) return message
+      const next = { ...old, ...message }
+      if (!message.content && old.content) next.content = old.content
+      if (!message.raw_output && old.raw_output) next.raw_output = old.raw_output
+      if (Array.isArray(old.elements) && old.elements.length) {
+        next.elements = Array.isArray(message.elements) && message.elements.length
+          ? mergeElements(old.elements, message.elements)
+          : old.elements
+      }
+      return next
+    })
+    Vue.set(state.messages, conversationId, sortMessages(merged))
   },
   APPEND_MESSAGE(state, { conversationId, message }) {
     if (!state.messages[conversationId]) {
@@ -65,7 +123,15 @@ const mutations = {
     if (idx === -1) {
       msgs.push(message)
     } else {
-      Vue.set(msgs, idx, { ...msgs[idx], ...message })
+      const next = { ...msgs[idx], ...message }
+      if (!message.content && msgs[idx].content) next.content = msgs[idx].content
+      if (!message.raw_output && msgs[idx].raw_output) next.raw_output = msgs[idx].raw_output
+      if (Array.isArray(msgs[idx].elements) && msgs[idx].elements.length) {
+        next.elements = Array.isArray(message.elements) && message.elements.length
+          ? mergeElements(msgs[idx].elements, message.elements)
+          : msgs[idx].elements
+      }
+      Vue.set(msgs, idx, next)
     }
     Vue.set(state.messages, conversationId, sortMessages(msgs))
   },
@@ -74,7 +140,18 @@ const mutations = {
     if (!msgs) return
     const idx = msgs.findIndex(m => m.id === messageId)
     if (idx !== -1) {
-      Vue.set(msgs, idx, { ...msgs[idx], ...patch })
+      const cleanedPatch = { ...patch }
+      if (!cleanedPatch.content && msgs[idx].content) delete cleanedPatch.content
+      if (!cleanedPatch.raw_output && msgs[idx].raw_output) delete cleanedPatch.raw_output
+      if (Array.isArray(msgs[idx].elements) && msgs[idx].elements.length) {
+        if (!Array.isArray(cleanedPatch.elements) || !cleanedPatch.elements.length) {
+          delete cleanedPatch.elements
+        } else {
+          cleanedPatch.elements = mergeElements(msgs[idx].elements, cleanedPatch.elements)
+        }
+      }
+      const next = { ...msgs[idx], ...cleanedPatch }
+      Vue.set(msgs, idx, next)
     }
   },
   ADD_MESSAGE_ELEMENT(state, { conversationId, messageId, element }) {
@@ -96,8 +173,20 @@ const mutations = {
     const idx = msgs.findIndex(m => m.id === messageId)
     if (idx === -1) return
     const elements = Array.isArray(msgs[idx].elements) ? msgs[idx].elements.slice() : []
-    elements.push(element)
-    Vue.set(msgs, idx, { ...msgs[idx], ...patch, elements })
+    const progressKey = element?.data?.progress_key || element?.detail?.progress_key || element?.step_id
+    const replaceIndex = progressKey
+      ? elements.findIndex(el => (
+        el?.data?.progress_key || el?.detail?.progress_key || el?.step_id
+      ) === progressKey)
+      : -1
+    if (replaceIndex !== -1) {
+      Vue.set(elements, replaceIndex, element)
+    } else {
+      elements.push(element)
+    }
+    const cleanedPatch = { ...patch }
+    delete cleanedPatch.elements
+    Vue.set(msgs, idx, { ...msgs[idx], ...cleanedPatch, elements })
   },
   ADD_MESSAGE_EVENT(state, { conversationId, messageId, event, events }) {
     const msgs = state.messages[conversationId]

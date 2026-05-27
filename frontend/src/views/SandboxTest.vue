@@ -185,7 +185,7 @@
             </div>
 
             <!-- ===== Agent 任务面板区（替代平铺消息列表） ===== -->
-            <div class="agent-panels" ref="chatRef">
+            <div class="agent-panels" ref="chatRef" @scroll="handleChatScroll">
               <!-- 用户最近一条需求 -->
               <div v-if="lastUserMessage" class="user-request-banner">
                 <i class="el-icon-user" /> {{ lastUserMessage }}
@@ -486,6 +486,7 @@ export default {
       replyExpanded: {}, // { agent_id: true/false }
       agentEventSeq: {},
       eventPollTimer: null,
+      chatStickToBottom: true,
 
       // Add the stopAgent and readAgentFile API functions to the component
       _stopAgentApi: stopAgent,
@@ -689,6 +690,19 @@ export default {
     saveEnv() {
       try { localStorage.setItem('sandbox_env', JSON.stringify(this.envVars)) } catch (e) { /* ignore */ }
     },
+    cleanEnvValue(value) {
+      let text = String(value || '').trim()
+      return text.replace(/^[\s'"]+|[\s'"]+$/g, '')
+    },
+    normalizedEnvVars() {
+      const env = { ...this.envVars }
+      ;['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL'].forEach(key => {
+        if (env[key]) env[key] = this.cleanEnvValue(env[key])
+      })
+      if (env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = env.ANTHROPIC_BASE_URL.replace(/\/+$/, '')
+      if (env.DEEPSEEK_BASE_URL) env.DEEPSEEK_BASE_URL = env.DEEPSEEK_BASE_URL.replace(/\/+$/, '')
+      return env
+    },
 
     // ===== Image =====
     async checkImage() {
@@ -738,7 +752,7 @@ export default {
             agent_id: a.agent_id, role: a.role,
             system_prompt: a.system_prompt || `你是一个${a.role}`,
           })),
-          env_vars: { ...this.envVars },
+          env_vars: this.normalizedEnvVars(),
         })
         if (res.code === 201) {
           this.$message.success('会话创建成功')
@@ -875,6 +889,10 @@ export default {
       } else if (type === 'claude_started') {
         this.updateAgentStatus(agentId, 'working', 'Claude Code 已启动')
         this.updateAgentDisplay(agentId, { status: 'working', statusMessage: '等待 Claude Code 输出...' })
+      } else if (type === 'agent_progress') {
+        const message = data.message || 'Agent 正在执行'
+        this.updateAgentStatus(agentId, 'working', message)
+        this.updateAgentDisplay(agentId, { status: 'working', statusMessage: message })
       } else if (type === 'claude_output') {
         const output = data.output || ''
         this.updateAgentStatus(agentId, 'done', 'Claude Code 已回复')
@@ -1004,7 +1022,6 @@ export default {
             status: 'stopped',
             statusMessage: '已停止',
           })
-          this.pushAgentEvent(agentId, 'complete', '用户已停止执行')
         } else {
           this.$message.warning('停止请求已发送')
         }
@@ -1273,9 +1290,18 @@ export default {
       return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     },
     sleep(ms) { return new Promise(r => setTimeout(r, ms)) },
-    scrollChat() {
+    handleChatScroll() {
+      this.chatStickToBottom = this.isChatNearBottom()
+    },
+    isChatNearBottom() {
       const el = this.$refs.chatRef
-      if (el) el.scrollTop = el.scrollHeight
+      if (!el) return true
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+      return distance <= 100
+    },
+    scrollChat(force = false) {
+      const el = this.$refs.chatRef
+      if (el && (force || this.chatStickToBottom)) el.scrollTop = el.scrollHeight
     },
 
     // ===== Styling =====

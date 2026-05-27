@@ -16,9 +16,11 @@ import time
 from typing import Optional
 
 from .agent import ClaudeRuntime
+from .claude_config import clean_base_url, clean_config_value, claude_env, write_settings, trust_projects
 from .tools import ToolRegistry, register_builtin_tools
 from . import session as session_store
 from .events import push_event
+from .logging_utils import log_agent, log_event, shorten
 
 
 class Orchestrator:
@@ -35,8 +37,11 @@ class Orchestrator:
         self.services: dict[int, dict] = {}
         os.makedirs("/workspace/shared", exist_ok=True)
         os.makedirs("/workspace/agents", exist_ok=True)
+        os.environ.update(claude_env())
+        trust_projects(["/workspace"])
         register_builtin_tools(self.tools)
         self._load_custom_tools()
+        log_event("orchestrator_initialized")
 
     def _snapshot_workspace(self) -> dict[str, dict]:
         """Snapshot files in /workspace for created/modified detection."""
@@ -61,7 +66,15 @@ class Orchestrator:
     def create_agent(self, agent_id: str, role: str, system_prompt: str,
                      workspace_name: str = "") -> dict:
         """Create and start a new agent."""
+        log_agent(
+            agent_id,
+            "create_requested",
+            role=role,
+            workspace_name=workspace_name or role or agent_id,
+            prompt_len=len(system_prompt or ""),
+        )
         if agent_id in self.agents:
+            log_agent(agent_id, "create_rejected", level="warning", reason="already exists")
             return {"error": f"Agent '{agent_id}' already exists"}
 
         # Persist original config (for clean replay)
@@ -76,9 +89,11 @@ class Orchestrator:
         try:
             agent.start()
         except Exception as e:
+            log_agent(agent_id, "create_failed", level="error", role=role, error=str(e))
             return {"error": f"Failed to start agent: {e}"}
 
         self.agents[agent_id] = agent
+        log_agent(agent_id, "created", role=role, workspace_name=agent.workspace_name, work_dir=agent.to_dict().get("work_dir"))
 
         return {"status": "ok", "agent": agent.to_dict()}
 
@@ -86,7 +101,9 @@ class Orchestrator:
         """Stop and remove an agent."""
         agent = self.agents.pop(agent_id, None)
         if agent:
+            log_agent(agent_id, "remove_requested", role=agent.role)
             agent.stop()
+            log_agent(agent_id, "removed", role=agent.role)
         return {"status": "ok"}
 
     def get_agent(self, agent_id: str) -> Optional[ClaudeRuntime]:
@@ -101,6 +118,7 @@ class Orchestrator:
         """Send a message to an agent and get a response."""
         agent = self._get_or_recreate_agent(agent_id)
         if isinstance(agent, dict):
+            log_agent(agent_id, "send_rejected", level="error", error=agent.get("error", "Agent not found"))
             push_event(agent_id, "error", {"error": agent.get("error", "Agent not found")})
             return agent  # error dict
 
@@ -111,6 +129,14 @@ class Orchestrator:
         session_store.save_message(agent_id, "user", message)
 
         role = agent.role or agent_id
+        log_agent(
+            agent_id,
+            "task_start",
+            role=role,
+            message_len=len(message or ""),
+            message_preview=shorten(message, 300),
+            context_len=len(context or ""),
+        )
         push_event(agent_id, "agent_task_started", {
             "agent_id": agent_id,
             "role": role,
@@ -124,10 +150,18 @@ class Orchestrator:
         try:
             prompt = self._with_tool_instructions(agent_id, message)
             reply = agent.send_with_context(prompt, context=context)
+            log_agent(
+                agent_id,
+                "task_reply_received",
+                role=role,
+                reply_len=len(reply or ""),
+                reply_preview=shorten(reply, 300),
+            )
 
             # Save assistant reply
             session_store.save_message(agent_id, "assistant", reply)
             if self._is_agent_runtime_error(reply):
+                log_agent(agent_id, "task_runtime_error", level="error", role=role, error=shorten(reply, 500))
                 push_event(agent_id, "error", {
                     "agent_id": agent_id,
                     "error": reply,
@@ -138,6 +172,7 @@ class Orchestrator:
             start_parse = time.time()
             tool_results = []
             if self._should_collect_agent_files(agent_id):
+                log_agent(agent_id, "artifact_collection_start", role=role)
                 tool_results = self._execute_tool_calls(agent_id, reply)
                 if not tool_results:
                     tool_results = self._parse_and_write_code_blocks(agent_id, reply)
@@ -150,7 +185,15 @@ class Orchestrator:
 
                 # If still nothing, try a second pass (ask Claude to output files)
                 if not tool_results and self._reply_mentions_files(reply):
+                    log_agent(agent_id, "artifact_second_pass_start", role=role)
                     tool_results = self._second_pass_extract_files(agent_id, message, reply)
+                log_agent(
+                    agent_id,
+                    "artifact_collection_done",
+                    role=role,
+                    file_count=len(tool_results or []),
+                    files=[t.get("file", "") for t in (tool_results or [])],
+                )
 
             parse_elapsed = time.time() - start_parse
 
@@ -166,8 +209,16 @@ class Orchestrator:
                 "files": [t.get("file", "") for t in (tool_results or [])],
                 "parse_time": round(parse_elapsed, 1),
             })
+            log_agent(
+                agent_id,
+                "task_completed",
+                role=role,
+                file_count=len(tool_results) if tool_results else 0,
+                parse_time=round(parse_elapsed, 2),
+            )
             return result
         except Exception as e:
+            log_agent(agent_id, "task_exception", level="error", role=role, error=str(e))
             push_event(agent_id, "error", {
                 "agent_id": agent_id,
                 "error": str(e),
@@ -191,11 +242,13 @@ class Orchestrator:
 
             agent = self._get_or_recreate_agent(agent_id)
             if isinstance(agent, dict):
+                log_agent(agent_id, "chain_step_rejected", level="error", error=agent.get("error", "Agent not found"))
                 push_event(agent_id, "error", {"error": agent.get("error", "Agent not found")})
                 results.append({"agent_id": agent_id, "error": agent.get("error")})
                 continue
 
             role = agent.role or agent_id
+            log_agent(agent_id, "chain_step_start", role=role, message_len=len(msg or ""))
             push_event(agent_id, "agent_task_started", {
                 "agent_id": agent_id, "role": role,
                 "message": f"{role} 开始处理链式任务",
@@ -210,6 +263,7 @@ class Orchestrator:
                 chain_baseline = self._snapshot_workspace()
 
                 reply = agent.send(full_msg)
+                log_agent(agent_id, "chain_step_reply_received", role=role, reply_len=len(reply or ""))
                 session_store.save_message(agent_id, "assistant", reply)
                 if self._is_agent_runtime_error(reply):
                     push_event(agent_id, "error", {
@@ -238,10 +292,12 @@ class Orchestrator:
                     "file_count": len(tool_results) if tool_results else 0,
                     "files": [t.get("file", "") for t in (tool_results or [])],
                 })
+                log_agent(agent_id, "chain_step_completed", role=role, file_count=len(tool_results or []))
 
                 accumulated_context += f"\n\n[{role} 的输出]:\n{reply}"
                 results.append(entry)
             except Exception as e:
+                log_agent(agent_id, "chain_step_exception", level="error", role=role, error=str(e))
                 push_event(agent_id, "error", {
                     "agent_id": agent_id, "error": str(e),
                 })
@@ -258,6 +314,7 @@ class Orchestrator:
         used as targets.
         """
         if not self.agents:
+            log_event("delegation_rejected", level="warning", reason="no agents")
             return {"status": "error", "error": "No agents available"}
 
         if moderator_id not in self.agents:
@@ -265,8 +322,16 @@ class Orchestrator:
 
         moderator = self._get_or_recreate_agent(moderator_id)
         if isinstance(moderator, dict):
+            log_agent(moderator_id, "delegation_rejected", level="error", error=moderator.get("error", "Moderator not found"))
             return {"status": "error", "error": moderator.get("error", "Moderator not found")}
 
+        log_agent(
+            moderator_id,
+            "delegation_start",
+            role=moderator.role,
+            message_len=len(message or ""),
+            target_agent_ids=target_agent_ids,
+        )
         push_event(moderator_id, "delegation_started", {
             "agent_id": moderator_id,
             "role": moderator.role,
@@ -284,6 +349,7 @@ class Orchestrator:
         )
         moderator_result = self.send_to_agent(moderator_id, moderator_prompt)
         if moderator_result.get("status") == "error":
+            log_agent(moderator_id, "delegation_moderator_failed", level="error", error=moderator_result.get("error", "Moderator failed"))
             push_event(moderator_id, "delegation_failed", {
                 "agent_id": moderator_id,
                 "error": moderator_result.get("error", "Moderator failed"),
@@ -302,6 +368,13 @@ class Orchestrator:
             "role": moderator.role,
             "plan": plan,
         })
+        log_agent(
+            moderator_id,
+            "delegation_plan_ready",
+            role=moderator.role,
+            plan_len=len(plan or ""),
+            plan_preview=shorten(plan, 300),
+        )
 
         if target_agent_ids is None:
             target_agent_ids = [aid for aid in self.agents.keys() if aid != moderator_id]
@@ -325,9 +398,11 @@ class Orchestrator:
         for target_id in target_agent_ids:
             target = self._get_or_recreate_agent(target_id)
             if isinstance(target, dict):
+                log_agent(target_id, "delegation_target_missing", level="error", error=target.get("error"))
                 results.append({"status": "error", "agent_id": target_id, "error": target.get("error")})
                 continue
 
+            log_agent(target_id, "delegation_target_start", role=target.role, moderator_id=moderator_id)
             push_event(target_id, "delegation_target_started", {
                 "agent_id": target_id,
                 "role": target.role,
@@ -343,7 +418,15 @@ class Orchestrator:
                 f"{self._role_boundary_prompt(target_id, target.role)}\n\n"
                 "请只完成分派给你的部分。"
             )
-            results.append(self.send_to_agent(target_id, delegated_message))
+            target_result = self.send_to_agent(target_id, delegated_message)
+            log_agent(
+                target_id,
+                "delegation_target_done",
+                role=target.role,
+                status=target_result.get("status"),
+                file_count=len(target_result.get("tool_results", []) or []),
+            )
+            results.append(target_result)
 
         push_event(moderator_id, "delegation_complete", {
             "agent_id": moderator_id,
@@ -351,6 +434,7 @@ class Orchestrator:
             "target_count": len(target_agent_ids),
             "targets": target_agent_ids,
         })
+        log_agent(moderator_id, "delegation_complete", role=moderator.role, target_count=len(target_agent_ids), targets=target_agent_ids)
 
         return {
             "status": "ok",
@@ -372,8 +456,7 @@ class Orchestrator:
                 parts.append(f"[{agent.role} ({aid}) 的输出]:\n{recent}")
         return "\n\n".join(parts)
 
-    @staticmethod
-    def _role_boundary_prompt(agent_id: str, role: str) -> str:
+    def _role_boundary_prompt(self, agent_id: str, role: str) -> str:
         role_text = f"{agent_id} {role}".lower()
         work_dir = self._agent_work_dir(agent_id)
         if "writer" in role_text or "文档" in role:
@@ -767,12 +850,19 @@ class Orchestrator:
         # Extract all file references (with and without /workspace/)
         filenames = set()
         for m in self.FILE_MENTION_RE.findall(first_reply):
-            filenames.add(m.strip("`").strip())
+            candidate = m.strip("`").strip()
+            if self._looks_like_reportable_file(candidate):
+                filenames.add(candidate)
         for m in self.FILE_REF_RE.findall(first_reply):
-            filenames.add(m.strip("`").strip())
+            candidate = m.strip("`").strip()
+            if self._looks_like_reportable_file(candidate):
+                filenames.add(candidate)
 
         # Sort and prefix with /workspace/ if missing
         sorted_files = sorted(filenames)
+        if not sorted_files:
+            log_agent(agent_id, "artifact_second_pass_skipped", reason="no concrete file paths")
+            return []
         files_list_lines = []
         for f in sorted_files:
             if f.startswith("/workspace/"):
@@ -801,6 +891,17 @@ class Orchestrator:
         except Exception:
             return []
 
+    @staticmethod
+    def _looks_like_reportable_file(path: str) -> bool:
+        clean = str(path or "").strip().strip("`").rstrip("/")
+        if not clean:
+            return False
+        basename = clean.rsplit("/", 1)[-1]
+        if "." not in basename:
+            return False
+        ext = os.path.splitext(basename)[1].lower()
+        return ext in {".md", ".html", ".htm", ".css", ".js", ".json", ".txt", ".xml", ".svg", ".py", ".jsx", ".ts", ".tsx", ".vue"}
+
     def _detect_written_files(self, agent_id: str, reply: str,
                                baseline: dict[str, dict] = None) -> list[dict]:
         """Detect files that were written by Claude's native tools.
@@ -824,6 +925,13 @@ class Orchestrator:
             for relpath, change_type in sorted(changed_files):
                 policy_path, policy_note = self._apply_native_file_policy(agent_id, relpath)
                 if policy_path is None:
+                    log_agent(
+                        agent_id,
+                        "file_policy_rejected",
+                        level="warning",
+                        file=relpath.replace("\\", "/"),
+                        reason=policy_note,
+                    )
                     push_event(agent_id, "file_policy", {
                         "agent_id": agent_id,
                         "file": relpath.replace("\\", "/"),
@@ -835,6 +943,15 @@ class Orchestrator:
                 full_path = os.path.join("/workspace", relpath)
                 try:
                     size = os.path.getsize(full_path)
+                    log_agent(
+                        agent_id,
+                        "file_detected",
+                        file=relpath.replace("\\", "/"),
+                        change_type=change_type,
+                        size=size,
+                        method="filesystem_scan",
+                        policy_note=policy_note,
+                    )
                     results.append({
                         "tool": "write_file",
                         "file": relpath.replace("\\", "/"),
@@ -873,6 +990,14 @@ class Orchestrator:
                 if os.path.isfile(full_path):
                     try:
                         size = os.path.getsize(full_path)
+                        log_agent(
+                            agent_id,
+                            "file_verified_from_reply",
+                            file=relpath.replace("\\", "/"),
+                            size=size,
+                            method="verify_mention",
+                            policy_note=policy_note,
+                        )
                         results.append({
                             "tool": "write_file",
                             "file": relpath.replace("\\", "/"),
@@ -915,6 +1040,7 @@ class Orchestrator:
             clean_path = re.sub(r"^/workspace/", "", path)
             clean_path, policy_note = self._path_policy(agent_id, clean_path)
             if clean_path is None:
+                log_agent(agent_id, "file_policy_rejected", level="warning", file=path, reason=policy_note)
                 results.append({"error": f"Rejected {path}: {policy_note}"})
                 push_event(agent_id, "file_policy", {
                     "agent_id": agent_id,
@@ -951,6 +1077,14 @@ class Orchestrator:
                 existed = os.path.exists(full_path)
                 self.tools.execute("write_file", path=clean_path, content=content)
                 change_type = "modified" if existed else "created"
+                log_agent(
+                    agent_id,
+                    "file_written_from_codeblock",
+                    file=clean_path,
+                    change_type=change_type,
+                    size=len(content),
+                    policy_note=policy_note,
+                )
                 results.append({
                     "tool": "write_file",
                     "file": clean_path,
@@ -967,6 +1101,7 @@ class Orchestrator:
                     "policy_note": policy_note,
                 })
             except Exception as e:
+                log_agent(agent_id, "file_write_failed", level="error", file=clean_path, error=str(e))
                 results.append({"error": f"Failed to write {clean_path}: {e}"})
 
         return results
@@ -1054,6 +1189,151 @@ class Orchestrator:
         mime_type = mimetypes.guess_type(real_path)[0] or "application/octet-stream"
         filename = os.path.basename(real_path)
         return content, mime_type, filename
+
+    REPORT_TYPES = {"progress", "result", "text", "table", "image", "code", "file", "error"}
+    REPORT_STATUSES = {"running", "done", "error", "stopped"}
+    REPORT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
+
+    def report_element(self, agent_id: str, report: dict) -> dict:
+        """Validate and emit a structured report element from an agent."""
+        log_agent(
+            agent_id,
+            "report_received",
+            report_type=report.get("type") if isinstance(report, dict) else None,
+            title=report.get("title") if isinstance(report, dict) else None,
+            content_preview=shorten(report.get("content", ""), 200) if isinstance(report, dict) else "",
+        )
+        if agent_id not in self.agents:
+            log_agent(agent_id, "report_rejected", level="warning", reason="agent not found")
+            return {"status": "error", "error": f"Agent '{agent_id}' not found"}
+        if not isinstance(report, dict):
+            log_agent(agent_id, "report_rejected", level="warning", reason="report must be object")
+            return {"status": "error", "error": "report must be an object"}
+
+        element, error = self._normalize_report_element(report)
+        if error:
+            log_agent(agent_id, "report_invalid", level="warning", error=error)
+            push_event(agent_id, "agent_report_element", {
+                "type": "error",
+                "title": "进度上报失败",
+                "content": error,
+                "status": "error",
+                "data": {"raw": report},
+            })
+            return {"status": "error", "error": error}
+
+        push_event(agent_id, "agent_report_element", element)
+        log_agent(
+            agent_id,
+            "report_emitted",
+            report_type=element.get("type"),
+            status=element.get("status"),
+            title=(element.get("data") or {}).get("title"),
+        )
+        return {"status": "ok", "element": element}
+
+    def _normalize_report_element(self, report: dict) -> tuple[dict, Optional[str]]:
+        element_type = str(report.get("type") or "").strip().lower()
+        if not element_type:
+            return {}, self._report_usage_error("missing required field: type")
+        if element_type not in self.REPORT_TYPES:
+            return {}, self._report_usage_error(
+                f"invalid report type: {element_type}; allowed: {', '.join(sorted(self.REPORT_TYPES))}"
+            )
+
+        status = str(report.get("status") or ("running" if element_type == "progress" else "done")).strip().lower()
+        if status not in self.REPORT_STATUSES:
+            return {}, self._report_usage_error(
+                f"invalid report status: {status}; allowed: {', '.join(sorted(self.REPORT_STATUSES))}"
+            )
+
+        if "data" in report and report.get("data") is not None and not isinstance(report.get("data"), dict):
+            return {}, self._report_usage_error("field data must be an object when provided")
+        data = report.get("data") if isinstance(report.get("data"), dict) else {}
+        content = report.get("content", "")
+        if content is None:
+            content = ""
+        content = str(content)
+        title = str(report.get("title") or "").strip()
+        if not title:
+            return {}, self._report_usage_error("missing required non-empty string field: title")
+        step_id = str(report.get("step_id") or data.get("step_id") or "").strip()
+
+        if element_type != "table" and not content.strip():
+            return {}, self._report_usage_error("missing required non-empty string field: content")
+
+        normalized = {
+            "type": element_type,
+            "content": content,
+            "status": status,
+            "data": {
+                **data,
+                "title": title,
+            },
+        }
+        if step_id:
+            normalized["step_id"] = step_id
+            normalized["data"]["step_id"] = step_id
+
+        if element_type == "table":
+            headers = data.get("headers")
+            rows = data.get("rows")
+            if not isinstance(headers, list) or not headers or not all(isinstance(h, str) and h.strip() for h in headers):
+                return {}, self._report_usage_error("table requires data.headers as a non-empty string array")
+            if not isinstance(rows, list):
+                return {}, self._report_usage_error("table requires data.rows as an array")
+            if any(not isinstance(row, list) for row in rows):
+                return {}, self._report_usage_error("table data.rows must contain row arrays")
+            normalized["data"]["headers"] = [str(h) for h in headers]
+            normalized["data"]["rows"] = [
+                [str(cell) if cell is not None else "" for cell in row]
+                for row in rows if isinstance(row, list)
+            ]
+            normalized["content"] = content or title
+
+        if element_type in {"file", "image"}:
+            path = data.get("path") or content
+            if not str(path or "").strip():
+                return {}, self._report_usage_error(f"{element_type} requires data.path or content as /workspace/... path")
+            if not str(path).startswith("/workspace/"):
+                return {}, self._report_usage_error(f"{element_type} path must start with /workspace/: {path}")
+            real_path, error = self._resolve_workspace_path(str(path or ""))
+            if error:
+                return {}, self._report_usage_error(error)
+            if not os.path.exists(real_path):
+                return {}, self._report_usage_error(f"reported path not found: {path}")
+            rel_path = os.path.relpath(real_path, "/workspace").replace(os.sep, "/")
+            workspace_path = f"/workspace/{rel_path}"
+            ext = os.path.splitext(real_path)[1].lower()
+            if element_type == "image" and ext not in self.REPORT_IMAGE_EXTS:
+                return {}, self._report_usage_error(f"reported image must be one of: {', '.join(sorted(self.REPORT_IMAGE_EXTS))}")
+            normalized["content"] = content or os.path.basename(real_path)
+            normalized["data"].update({
+                "path": workspace_path,
+                "name": os.path.basename(real_path),
+                "size": os.path.getsize(real_path) if os.path.isfile(real_path) else None,
+            })
+
+        if element_type == "code":
+            normalized["data"]["language"] = str(data.get("language") or report.get("language") or "text")
+
+        if element_type in {"progress", "result", "text", "error"}:
+            normalized["content"] = content or title
+
+        return normalized, None
+
+    @staticmethod
+    def _report_usage_error(message: str) -> str:
+        return (
+            f"WEAGENT_REPORT_VALIDATION_ERROR: {message}\n"
+            "weagent-report 只接受一个 JSON 对象字符串。\n"
+            "必填字段：type、title；除 table 外还必须有非空 content。\n"
+            "type 只能是 progress/result/text/table/image/code/file/error。\n"
+            "status 可选，只能是 running/done/error/stopped。\n"
+            "table 格式：{\"type\":\"table\",\"title\":\"任务分派计划\",\"data\":{\"headers\":[\"Agent\",\"任务\",\"产出\"],\"rows\":[[\"frontend\",\"实现登录页\",\"index.html\"]]}}\n"
+            "file 格式：{\"type\":\"file\",\"title\":\"前端页面\",\"content\":\"/workspace/agents/frontend/index.html\",\"data\":{\"path\":\"/workspace/agents/frontend/index.html\"}}\n"
+            "progress 格式：{\"type\":\"progress\",\"title\":\"分析需求\",\"content\":\"正在确认任务范围\",\"status\":\"running\",\"step_id\":\"step-1\"}"
+        )
 
     def write_binary_file(self, agent_id: str, path: str, content: bytes) -> dict:
         """Write uploaded bytes into the agent workspace userInput directory."""
@@ -1254,6 +1534,59 @@ class Orchestrator:
         agent.stop()
         return {"status": "ok"}
 
+    def restart_agent(self, agent_id: str) -> dict:
+        """Restart one agent runtime while keeping workspace and session history."""
+        agent = self.agents.pop(agent_id, None)
+        if agent:
+            agent.stop()
+        recreated = self._get_or_recreate_agent(agent_id)
+        if isinstance(recreated, dict):
+            return recreated
+        return {"status": "ok", "agent": recreated.to_dict()}
+
+    def update_model_config(self, config: dict) -> dict:
+        """Update shared Claude Code settings used by all agent workspaces."""
+        api_key = (
+            config.get("api_key")
+            or config.get("ANTHROPIC_API_KEY")
+            or config.get("DEEPSEEK_API_KEY")
+            or ""
+        )
+        base_url = (
+            config.get("base_url")
+            or config.get("ANTHROPIC_BASE_URL")
+            or config.get("DEEPSEEK_BASE_URL")
+            or ""
+        )
+        model_name = (
+            config.get("model")
+            or config.get("ANTHROPIC_MODEL")
+            or config.get("DEEPSEEK_MODEL")
+            or ""
+        )
+        api_key = clean_config_value(api_key)
+        base_url = clean_base_url(base_url)
+        model_name = clean_config_value(model_name)
+        if not api_key:
+            return {"error": "api_key required"}
+
+        write_settings(api_key, base_url, model_name)
+        os.environ["ANTHROPIC_API_KEY"] = api_key
+        if base_url:
+            os.environ["ANTHROPIC_BASE_URL"] = base_url
+        if model_name:
+            os.environ["ANTHROPIC_MODEL"] = model_name
+        os.environ.update(claude_env())
+
+        for agent in self.agents.values():
+            agent.start()
+        return {
+            "status": "ok",
+            "model": model_name,
+            "base_url": base_url,
+            "agents": list(self.agents.keys()),
+        }
+
     # ---- Internal ----
 
     def _get_or_recreate_agent(self, agent_id: str):
@@ -1295,4 +1628,17 @@ class Orchestrator:
         if not reply:
             return False
         error_prefixes = ("[Error]", "[AuthError]")
-        return reply.startswith(error_prefixes)
+        if reply.startswith(error_prefixes):
+            return True
+        text = reply.lower()
+        error_markers = (
+            "failed to authenticate",
+            "api error",
+            "insufficient balance",
+            "invalid api key",
+            "missing or invalid",
+            "unauthorized",
+            "permission denied",
+            "rate limit",
+        )
+        return any(marker in text for marker in error_markers)

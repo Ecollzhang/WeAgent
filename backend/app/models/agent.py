@@ -29,6 +29,8 @@ class Agent(BaseModel):
 
     def to_dict(self):
         data = super().to_dict()
+        data['is_system'] = self.id == 'moderator'
+        data['read_only'] = self.id == 'moderator'
         # Mask sensitive config in API responses
         if 'config' in data and data['config']:
             safe_config = data['config'].copy()

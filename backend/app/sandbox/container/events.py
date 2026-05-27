@@ -15,6 +15,8 @@ import time
 import urllib.request
 import urllib.error
 
+from .logging_utils import log_agent, log_event, shorten
+
 EVENTS_DIR = "/workspace/.session/events"
 HOST_URL = os.environ.get("HOST_CALLBACK_URL", "").rstrip("/")
 SESSION_ID = os.environ.get("SESSION_ID", "")
@@ -59,6 +61,15 @@ def push_event(agent_id: str, event_type: str, data: dict) -> int:
     with open(path, "a") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
+    summary = _event_summary(event_type, data)
+    log_agent(
+        agent_id,
+        "event_pushed",
+        event_type=event_type,
+        seq=seq,
+        summary=summary,
+    )
+
     # HTTP callback to host for real-time delivery
     _post_to_host(event)
 
@@ -68,6 +79,12 @@ def push_event(agent_id: str, event_type: str, data: dict) -> int:
 def _post_to_host(event: dict):
     """POST event to host's event endpoint (fire-and-forget)."""
     if not HOST_URL or not SESSION_ID:
+        log_event(
+            "event_callback_skipped",
+            agent_id=event.get("agent_id", ""),
+            event_type=event.get("type", ""),
+            reason="missing HOST_CALLBACK_URL or SESSION_ID",
+        )
         return
 
     payload = {
@@ -84,9 +101,24 @@ def _post_to_host(event: dict):
             method="POST",
         )
         # Short timeout — fire and forget
-        urllib.request.urlopen(req, timeout=3)
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError):
-        pass  # Host might not be ready yet; events are persisted in file
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            status = getattr(resp, "status", 0)
+        log_event(
+            "event_callback_ok",
+            agent_id=event.get("agent_id", ""),
+            event_type=event.get("type", ""),
+            seq=event.get("seq", 0),
+            status=status,
+        )
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+        log_event(
+            "event_callback_failed",
+            level="warning",
+            agent_id=event.get("agent_id", ""),
+            event_type=event.get("type", ""),
+            seq=event.get("seq", 0),
+            error=str(exc),
+        )
 
 
 def get_events(agent_id: str, since: int = 0) -> list[dict]:
@@ -116,3 +148,30 @@ def clear_events(agent_id: str):
     path = _event_path(agent_id)
     if os.path.exists(path):
         os.remove(path)
+        log_agent(agent_id, "events_cleared")
+
+
+def _event_summary(event_type: str, data: dict) -> dict:
+    data = data or {}
+    if event_type in ("claude_output_delta", "claude_error_delta"):
+        chunk = data.get("chunk", "")
+        return {"chunk_len": len(chunk), "chunk_preview": shorten(chunk, 160)}
+    if event_type in ("claude_output", "claude_error"):
+        output = data.get("output", "")
+        return {
+            "output_len": len(output),
+            "elapsed": data.get("elapsed"),
+            "preview": shorten(output, 160),
+        }
+    if event_type == "agent_report_element":
+        return {
+            "report_type": data.get("type"),
+            "status": data.get("status"),
+            "title": (data.get("data") or {}).get("title"),
+            "content_preview": shorten(data.get("content", ""), 160),
+        }
+    return {
+        key: shorten(value, 160)
+        for key, value in data.items()
+        if key in ("message", "error", "file", "progress", "status", "role")
+    }

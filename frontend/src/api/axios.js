@@ -3,7 +3,7 @@ import { Message } from 'element-ui'
 
 const service = axios.create({
   baseURL: '/api',
-  timeout: 30000,
+  timeout: 7500000,
 })
 
 // Request interceptor - attach JWT token
@@ -26,7 +26,7 @@ service.interceptors.response.use(
     return response.data
   },
   error => {
-    const { response } = error
+    const { response, config = {} } = error
 
     if (response) {
       const { status, data } = response

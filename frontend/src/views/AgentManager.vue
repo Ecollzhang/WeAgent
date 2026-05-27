@@ -10,6 +10,15 @@
       </div>
       <div class="cat-list">
         <div
+          class="cat-item"
+          :class="{ active: activeCategory === '__system__' }"
+          @click="selectCategory('__system__')"
+        >
+          <i class="el-icon-s-operation cat-icon"></i>
+          <span class="cat-name">系统内置</span>
+          <span class="cat-count">1</span>
+        </div>
+        <div
           v-for="cat in categories"
           :key="cat.id"
           class="cat-item"
@@ -59,6 +68,7 @@
         <AgentEditForm
           :agent="editingAgent"
           :loading="false"
+          :readonly="isReadOnlyAgent(editingAgent)"
           @back="editingAgent = null"
           @save="handleSaveAgent"
         />
@@ -70,6 +80,7 @@
         <AgentEditForm
           :agent="editingAgent"
           :loading="false"
+          :readonly="isReadOnlyAgent(editingAgent)"
           @back="editingAgent = null"
           @save="handleSaveAgent"
         />
@@ -82,7 +93,12 @@
             <i :class="activeCategoryObj?.icon || 'el-icon-folder-opened'"></i>
             <h2>{{ activeCategoryObj?.name || 'Agent' }}</h2>
           </div>
-          <el-button type="primary" icon="el-icon-plus" @click="handleCreateAgentInCat">
+          <el-button
+            v-if="activeCategory !== '__system__'"
+            type="primary"
+            icon="el-icon-plus"
+            @click="handleCreateAgentInCat"
+          >
             新建Agent
           </el-button>
         </div>
@@ -245,6 +261,9 @@ export default {
     currentUser() { return this.$store.state.user.user },
     userId() { return this.$store.getters['user/userId'] },
     activeCategoryObj() {
+      if (this.activeCategory === '__system__') {
+        return { id: '__system__', name: '系统内置', icon: 'el-icon-s-operation' }
+      }
       return this.categories.find(c => c.id === this.activeCategory)
     },
   },
@@ -257,9 +276,11 @@ export default {
       if (!catId) { this.currentAgents = []; return }
       this.agentLoading = true
       try {
-        const res = await getAgents(catId)
+        const res = await getAgents(catId === '__system__' ? null : catId)
         if (res.code === 200) {
-          this.currentAgents = res.data
+          this.currentAgents = catId === '__system__'
+            ? res.data.filter(agent => agent.id === 'moderator' || agent.read_only)
+            : res.data.filter(agent => agent.id !== 'moderator')
         }
       } catch (e) {
         this.$message.error('加载Agent失败')
@@ -288,9 +309,9 @@ export default {
         if (res.code === 200) {
           this.categories = res.data
           // If there are categories and none selected, select first
-          if (res.data.length > 0 && !this.activeCategory) {
-            this.activeCategory = res.data[0].id
-            this.loadAgentsByCategory(res.data[0].id)
+          if (!this.activeCategory) {
+            this.activeCategory = '__system__'
+            this.loadAgentsByCategory('__system__')
           }
         }
       } catch (e) {
@@ -307,6 +328,9 @@ export default {
     },
     isPreset(agent) {
       return agent.id?.startsWith('_')
+    },
+    isReadOnlyAgent(agent) {
+      return agent?.id === 'moderator' || agent?.read_only === true
     },
     async selectCategoryIcon(icon) {
       if (!this.iconPickerTarget) return
@@ -370,6 +394,11 @@ export default {
     },
     async handleDrop(event, targetCatId) {
       if (!this.dragAgent) return
+      if (this.isReadOnlyAgent(this.dragAgent) || targetCatId === '__system__') {
+        this.$message.warning('系统内置 Agent 不能移动')
+        this.dragAgent = null
+        return
+      }
       try {
         await updateAgent(this.dragAgent.id, { class_id: targetCatId })
         this.$message.success('已移动到新分类')
@@ -423,6 +452,10 @@ export default {
     async handleSaveAgent(formData) {
       const editing = this.editingAgent
       if (!editing) return
+      if (this.isReadOnlyAgent(editing)) {
+        this.$message.warning('主持 Agent 是系统内置 Agent，只允许查看')
+        return
+      }
 
       const apiData = {
         name: formData.name,

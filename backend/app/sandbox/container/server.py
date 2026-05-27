@@ -22,17 +22,40 @@ Endpoints:
 import json
 import os
 import sys
+import time
 
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, g
 
 # Ensure container package is importable
 sys.path.insert(0, "/app")
 
 from container.orchestrator import Orchestrator
 from container.events import get_events
+from container.claude_config import clean_base_url, clean_config_value, claude_env, write_settings, trust_projects
+from container.logging_utils import configure_logging, log_agent, log_event, shorten
 
 app = Flask(__name__)
+configure_logging()
 orchestrator = Orchestrator()
+
+
+@app.before_request
+def _log_request_start():
+    g._request_start = time.time()
+
+
+@app.after_request
+def _log_request_done(response):
+    started = getattr(g, "_request_start", None)
+    elapsed_ms = round((time.time() - started) * 1000, 1) if started else None
+    log_event(
+        "api_request",
+        method=request.method,
+        path=request.path,
+        status=response.status_code,
+        elapsed_ms=elapsed_ms,
+    )
+    return response
 
 
 def _init_claude_settings():
@@ -41,44 +64,27 @@ def _init_claude_settings():
     This is needed because there's no host volume mount anymore —
     all config must be set up inside the container.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
-    base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
-    model_name = os.environ.get("ANTHROPIC_MODEL", "")
+    api_key = (
+        os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        or os.environ.get("DEEPSEEK_API_KEY")
+        or ""
+    )
+    base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("DEEPSEEK_BASE_URL") or ""
+    model_name = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("DEEPSEEK_MODEL") or ""
+    api_key = clean_config_value(api_key)
+    base_url = clean_base_url(base_url)
+    model_name = clean_config_value(model_name)
 
-    if api_key and base_url and model_name:
-        settings = {
-            "apiKey": api_key,  # top-level for our agent.py
-            "baseURL": base_url,
-            "model": model_name,
-            "models": [
-                {
-                    "name": model_name,
-                    "model": model_name,
-                    "provider": "anthropic",
-                    "apiKey": api_key,
-                    "baseURL": base_url,
-                }
-            ],
-            "permissions": {
-                "allow": "all",
-                "allowAlways": "all",
-                "files": {
-                    "allow": "all",
-                    "read": True,
-                    "write": True,
-                    "delete": True,
-                },
-                "execute": {
-                    "allow": True,
-                },
-            },
-            "disableRestrictions": True,
-        }
-        claude_dir = "/workspace/.claude"
-        os.makedirs(claude_dir, exist_ok=True)
-        with open(os.path.join(claude_dir, "settings.local.json"), "w") as f:
-            json.dump(settings, f, indent=2)
-        print(f"[server] Wrote Claude settings (model={model_name})")
+    os.environ.update(claude_env())
+    write_settings(api_key, base_url, model_name)
+    trust_projects(["/workspace"])
+    log_event(
+        "claude_settings_initialized",
+        model=model_name or "env/default",
+        base_url=base_url,
+        has_api_key=bool(api_key),
+    )
 
 
 # Write Claude settings on import
@@ -92,6 +98,7 @@ _init_claude_settings()
 
 @app.route("/api/health", methods=["GET"])
 def health():
+    log_event("api_health", agent_count=len(orchestrator.agents))
     return jsonify({"status": "ok", "agents": len(orchestrator.agents)})
 
 
@@ -109,16 +116,21 @@ def create_agent():
     workspace_name = data.get("workspace_name") or role or agent_id
 
     if not agent_id:
+        log_event("api_create_agent_rejected", level="warning", reason="agent_id required")
         return jsonify({"status": "error", "error": "agent_id required"}), 400
 
+    log_agent(agent_id, "api_create_agent", role=role, workspace_name=workspace_name)
     result = orchestrator.create_agent(agent_id, role, system_prompt, workspace_name)
     if "error" in result:
+        log_agent(agent_id, "api_create_agent_failed", level="error", error=result.get("error"))
         return jsonify(result), 400
+    log_agent(agent_id, "api_create_agent_ok", role=role, workspace_name=result.get("agent", {}).get("workspace_name"))
     return jsonify(result), 201
 
 
 @app.route("/api/agents/<agent_id>", methods=["DELETE"])
 def remove_agent(agent_id: str):
+    log_agent(agent_id, "api_remove_agent")
     result = orchestrator.remove_agent(agent_id)
     return jsonify(result)
 
@@ -126,7 +138,34 @@ def remove_agent(agent_id: str):
 @app.route("/api/agents/<agent_id>/stop", methods=["POST"])
 def stop_agent(agent_id: str):
     """Stop an agent's current execution."""
+    log_agent(agent_id, "api_stop_agent")
     result = orchestrator.stop_agent(agent_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/agents/<agent_id>/restart", methods=["POST"])
+def restart_agent(agent_id: str):
+    """Restart an agent runtime and restore recent context."""
+    log_agent(agent_id, "api_restart_agent")
+    result = orchestrator.restart_agent(agent_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/config/model", methods=["POST"])
+def update_model_config():
+    """Hot-update Claude Code config inside this container."""
+    data = request.get_json(force=True) or {}
+    log_event(
+        "api_update_model_config",
+        model=data.get("ANTHROPIC_MODEL") or data.get("model"),
+        base_url=data.get("ANTHROPIC_BASE_URL") or data.get("baseURL"),
+        has_api_key=bool(data.get("ANTHROPIC_API_KEY") or data.get("apiKey")),
+    )
+    result = orchestrator.update_model_config(data)
     if "error" in result:
         return jsonify(result), 400
     return jsonify(result)
@@ -134,6 +173,7 @@ def stop_agent(agent_id: str):
 
 @app.route("/api/agents", methods=["GET"])
 def list_agents():
+    log_event("api_list_agents", agent_count=len(orchestrator.agents))
     return jsonify({"agents": orchestrator.list_agents()})
 
 
@@ -148,11 +188,15 @@ def send_to_agent(agent_id: str):
     message = data.get("message", "")
 
     if not message:
+        log_agent(agent_id, "api_send_rejected", level="warning", reason="message required")
         return jsonify({"status": "error", "error": "message required"}), 400
 
+    log_agent(agent_id, "api_send", message_len=len(message or ""), message_preview=shorten(message, 300))
     result = orchestrator.send_to_agent(agent_id, message)
     if result.get("status") == "error":
+        log_agent(agent_id, "api_send_failed", level="error", error=result.get("error"))
         return jsonify(result), 400
+    log_agent(agent_id, "api_send_ok", reply_len=len(result.get("reply", "") or ""), file_count=len(result.get("tool_results", []) or []))
     return jsonify(result)
 
 
@@ -166,9 +210,12 @@ def send_chain():
     data = request.get_json(force=True)
     messages = data.get("messages", [])
     if not messages:
+        log_event("api_chain_rejected", level="warning", reason="messages required")
         return jsonify({"status": "error", "error": "messages required"}), 400
 
+    log_event("api_chain", message_count=len(messages), agents=[m.get("agent_id") for m in messages])
     results = orchestrator.send_to_agent_chain(messages)
+    log_event("api_chain_ok", result_count=len(results))
     return jsonify({"results": results})
 
 
@@ -181,15 +228,25 @@ def delegate_task():
     target_agent_ids = data.get("target_agent_ids")
 
     if not message:
+        log_agent(moderator_id, "api_delegate_rejected", level="warning", reason="message required")
         return jsonify({"status": "error", "error": "message required"}), 400
 
+    log_agent(
+        moderator_id,
+        "api_delegate",
+        message_len=len(message or ""),
+        message_preview=shorten(message, 300),
+        target_agent_ids=target_agent_ids,
+    )
     result = orchestrator.delegate_task(
         message=message,
         moderator_id=moderator_id,
         target_agent_ids=target_agent_ids,
     )
     if result.get("status") == "error":
+        log_agent(moderator_id, "api_delegate_failed", level="error", error=result.get("error"))
         return jsonify(result), 400
+    log_agent(moderator_id, "api_delegate_ok", target_count=len(result.get("results", []) or []))
     return jsonify(result)
 
 
@@ -335,6 +392,33 @@ def execute_tool():
         return jsonify({"status": "ok", "result": result})
 
 
+@app.route("/api/report", methods=["POST"])
+def report_element():
+    data = request.get_json(force=True) or {}
+    agent_id = data.get("agent_id", "")
+    report = data.get("report") or {}
+    if not agent_id:
+        log_event("api_report_rejected", level="warning", reason="agent_id required")
+        return jsonify({"status": "error", "error": "agent_id required"}), 400
+    log_agent(
+        agent_id,
+        "api_report",
+        report_type=report.get("type") if isinstance(report, dict) else None,
+        title=report.get("title") if isinstance(report, dict) else None,
+        content_preview=shorten(report.get("content", ""), 200) if isinstance(report, dict) else "",
+    )
+    result = orchestrator.report_element(agent_id, report)
+    if result.get("status") == "error":
+        log_agent(agent_id, "api_report_failed", level="warning", error=result.get("error"))
+        return jsonify({
+            **result,
+            "message": "WEAGENT_REPORT_VALIDATION_ERROR",
+            "hint": "Fix the JSON passed to weagent-report and call it again. See error for valid examples.",
+        }), 400
+    log_agent(agent_id, "api_report_ok", report_type=result.get("element", {}).get("type"))
+    return jsonify(result)
+
+
 @app.route("/api/tools/install", methods=["POST"])
 def install_tool():
     data = request.get_json(force=True)
@@ -434,4 +518,5 @@ def session_info():
 
 if __name__ == "__main__":
     port = int(os.environ.get("ORCHESTRATOR_PORT", 8080))
+    log_event("server_starting", port=port)
     app.run(host="0.0.0.0", port=port, debug=False)

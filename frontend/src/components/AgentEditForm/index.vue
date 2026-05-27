@@ -4,8 +4,9 @@
       <el-button type="text" icon="el-icon-arrow-left" @click="$emit('back')">
         返回
       </el-button>
-      <h2>{{ isNew ? '创建Agent' : '编辑Agent' }}</h2>
-      <el-button type="primary" @click="handleSave" :loading="saving">保存</el-button>
+      <h2>{{ readonly ? '查看Agent' : (isNew ? '创建Agent' : '编辑Agent') }}</h2>
+      <el-tag v-if="readonly" size="mini" type="warning">系统内置，只读</el-tag>
+      <el-button v-else type="primary" @click="handleSave" :loading="saving">保存</el-button>
     </div>
 
     <div class="form-body" v-loading="loading">
@@ -15,6 +16,7 @@
           <div
             class="agent-avatar"
             :style="{ background: form.color || '#4080ff' }"
+            :class="{ readonly: readonly }"
             @click="triggerAvatarUpload"
           >
             <img v-if="form.avatar" :src="form.avatar" class="avatar-img" />
@@ -24,9 +26,9 @@
             </div>
           </div>
           <div class="avatar-actions">
-            <el-color-picker v-model="form.color" size="mini" title="选择颜色"></el-color-picker>
-            <el-button size="mini" type="text" @click="triggerAvatarUpload">上传头像</el-button>
-            <el-button size="mini" type="text" v-if="form.avatar" @click="form.avatar = ''">清除</el-button>
+            <el-color-picker v-model="form.color" size="mini" title="选择颜色" :disabled="readonly"></el-color-picker>
+            <el-button size="mini" type="text" @click="triggerAvatarUpload" :disabled="readonly">上传头像</el-button>
+            <el-button size="mini" type="text" v-if="form.avatar" @click="form.avatar = ''" :disabled="readonly">清除</el-button>
           </div>
           <input ref="fileInput" type="file" accept="image/*" style="display:none" @change="handleAvatarFile" />
         </div>
@@ -36,11 +38,11 @@
       <div class="form-section">
         <el-form label-position="top">
           <el-form-item label="Agent 名称">
-            <el-input v-model="form.name" placeholder="输入Agent名称"></el-input>
+            <el-input v-model="form.name" placeholder="输入Agent名称" :disabled="readonly"></el-input>
           </el-form-item>
 
           <el-form-item label="底层模型">
-            <el-select v-model="form.adapter_name" style="width:100%">
+            <el-select v-model="form.adapter_name" style="width:100%" :disabled="readonly">
               <el-option label="Claude Code" value="claude"></el-option>
               <el-option label="Codex" value="codex"></el-option>
               <el-option label="OpenCode" value="opencode"></el-option>
@@ -48,15 +50,15 @@
           </el-form-item>
 
           <el-form-item label="系统提示词">
-            <el-input type="textarea" :rows="5" v-model="form.system_prompt" placeholder="描述Agent的行为和专业领域..."></el-input>
+            <el-input type="textarea" :rows="5" v-model="form.system_prompt" placeholder="描述Agent的行为和专业领域..." :disabled="readonly"></el-input>
           </el-form-item>
 
           <el-form-item label="技能/工作流 (Skill)">
-            <el-input type="textarea" :rows="4" v-model="form.skill" placeholder="定义Agent完成角色任务的具体步骤、流程或说明书..."></el-input>
+            <el-input type="textarea" :rows="4" v-model="form.skill" placeholder="定义Agent完成角色任务的具体步骤、流程或说明书..." :disabled="readonly"></el-input>
           </el-form-item>
 
           <el-form-item label="工具集">
-            <el-select v-model="form.tool_ids" multiple filterable style="width:100%" placeholder="选择工具">
+            <el-select v-model="form.tool_ids" multiple filterable style="width:100%" placeholder="选择工具" :disabled="readonly">
               <el-option v-for="tool in allTools" :key="tool.id" :label="tool.name" :value="tool.id">
                 <span>{{ tool.name }}</span>
                 <span style="float:right;color:#86909c;font-size:12px">
@@ -71,7 +73,7 @@
               <el-tag
                 v-for="(tag, i) in form.capability_tags"
                 :key="i"
-                closable
+                :closable="!readonly"
                 :disable-transitions="true"
                 :color="tagColor(tag)"
                 @close="handleDeleteTag(i)"
@@ -101,7 +103,7 @@
                 @keydown.enter.native="confirmAddTag"
                 style="width:100px"
               ></el-input>
-              <el-button v-else size="mini" type="text" icon="el-icon-plus" @click="showTagInput = true">
+              <el-button v-else-if="!readonly" size="mini" type="text" icon="el-icon-plus" @click="showTagInput = true">
                 添加标签
               </el-button>
             </div>
@@ -121,6 +123,7 @@ export default {
   props: {
     agent: Object,
     loading: Boolean,
+    readonly: { type: Boolean, default: false },
   },
   data() {
     return {
@@ -190,6 +193,7 @@ export default {
       }
     },
     triggerAvatarUpload() {
+      if (this.readonly) return
       this.$refs.fileInput.click()
     },
     async handleAvatarFile(e) {
@@ -212,6 +216,7 @@ export default {
       e.target.value = ''
     },
     handleDeleteTag(i) {
+      if (this.readonly) return
       this.form.capability_tags.splice(i, 1)
     },
     tagColor(tag) {
@@ -226,6 +231,7 @@ export default {
       return palette[Math.abs(h) % palette.length]
     },
     startEditTag(i) {
+      if (this.readonly) return
       this.editingTagIdx = i
       this.editTagValue = this.form.capability_tags[i]
       this.$nextTick(() => {
@@ -331,6 +337,14 @@ export default {
   transform: scale(1.05);
 }
 
+.agent-avatar.readonly {
+  cursor: default;
+}
+
+.agent-avatar.readonly:hover {
+  transform: none;
+}
+
 .agent-avatar .avatar-img {
   width: 100%;
   height: 100%;
@@ -358,6 +372,10 @@ export default {
 
 .agent-avatar:hover .avatar-overlay {
   opacity: 1;
+}
+
+.agent-avatar.readonly:hover .avatar-overlay {
+  opacity: 0;
 }
 
 .avatar-actions {

@@ -1,10 +1,9 @@
 import axios from 'axios'
 
-// Sandbox API calls can take several minutes (chain execution)
-// so use a much longer timeout than the default 30s
+// Sandbox API calls can run for a long time while Claude Code is working.
 const request = axios.create({
   baseURL: '/api',
-  timeout: 600000, // 10 minutes
+  timeout: 7500000, // 125 minutes
 })
 
 // Response interceptor - unwrap response.data

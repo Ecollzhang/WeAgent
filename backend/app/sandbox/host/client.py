@@ -5,6 +5,7 @@ Used by DockerContainerManager to communicate with running containers.
 """
 
 import json
+import os
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -17,8 +18,10 @@ class OrchestratorClient:
         self.base_url = f"http://{host}:{port}"
 
     def _request(self, method: str, path: str, body: Optional[dict] = None,
-                 timeout: int = 300) -> dict:
+                 timeout: Optional[int] = None) -> dict:
         """Make an HTTP request to the orchestrator."""
+        if timeout is None:
+            timeout = int(os.environ.get("SANDBOX_ORCHESTRATOR_TIMEOUT_SECONDS", "7500"))
         url = f"{self.base_url}{path}"
         data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body else None
 
@@ -194,6 +197,14 @@ class OrchestratorClient:
     def stop_agent(self, agent_id: str) -> dict:
         """Stop an agent's current execution."""
         return self._request("POST", f"/api/agents/{agent_id}/stop")
+
+    def restart_agent(self, agent_id: str) -> dict:
+        """Restart an agent runtime inside the container."""
+        return self._request("POST", f"/api/agents/{agent_id}/restart")
+
+    def update_model_config(self, config: dict) -> dict:
+        """Hot-update model config inside the container."""
+        return self._request("POST", "/api/config/model", config)
 
     # ---- Progress ----
 

@@ -40,8 +40,8 @@
             <el-form-item label="模型名称">
               <el-select v-model="modelConfig.model" style="width: 100%">
                 <el-option label="deepseek-v4-pro" value="deepseek-v4-pro"></el-option>
-                <el-option label="Claude 3 Opus" value="claude-3-opus"></el-option>
-                <el-option label="GPT-4o" value="gpt-4o"></el-option>
+                <el-option label="doubao-seed-2-0-lite-260215" value="doubao-seed-2-0-lite-260215"></el-option>
+                <el-option label="qwen-plus" value="qwen-plus"></el-option>
                 <el-option label="GPT-4o-mini" value="gpt-4o-mini"></el-option>
                 <el-option label="DeepSeek V3" value="deepseek-v3"></el-option>
                 <el-option label="DeepSeek R1" value="deepseek-r1"></el-option>

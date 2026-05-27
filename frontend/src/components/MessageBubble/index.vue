@@ -16,10 +16,19 @@
       ></el-button>
     </div>
     <div class="bubble-inner">
-      <!-- Elements-based rendering -->
-      <div v-if="hasElements" class="bubble-elements">
+      <div v-if="currentProgress" class="current-progress">
+        <span class="progress-dot" :class="'progress-' + (currentProgress.status || 'running')"></span>
+        <span class="current-progress-label">当前进度</span>
+        <span class="current-progress-text">{{ elementContent(currentProgress) }}</span>
+      </div>
+
+      <div v-if="visibleRawOutput" class="raw-rendered">
+        <div class="raw-rendered-content" v-html="renderMarkdown(visibleRawOutput)"></div>
+      </div>
+
+      <div v-else-if="contentElements.length" class="bubble-elements content-section">
         <div
-          v-for="(el, i) in renderedElements"
+          v-for="(el, i) in contentElements"
           :key="i"
           class="el-block"
           :class="'el-' + el.type"
@@ -33,10 +42,39 @@
             <span>{{ elementContent(el) }}</span>
           </div>
 
-          <!-- Code element -->
-          <div v-else-if="el.type === 'code'" class="el-code">
-            <div class="code-header">
-              <span class="code-lang">{{ elementData(el).language || 'code' }}</span>
+          <div v-else-if="el.type === 'error'" class="el-error">
+            <div class="error-title">
+              <i class="el-icon-warning-outline"></i>
+              <span>{{ elementData(el).title || '错误' }}</span>
+            </div>
+            <div class="error-content" v-html="renderText(elementContent(el))"></div>
+          </div>
+
+          <div v-else-if="el.type === 'result'" class="el-result">
+            <div class="result-title">
+              <i class="el-icon-finished"></i>
+              <span>{{ elementData(el).title || '执行结果' }}</span>
+            </div>
+            <div class="result-content" v-html="renderText(elementContent(el))"></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Artifact rendering -->
+      <div v-if="artifactElements.length" class="bubble-elements artifact-section">
+        <div class="section-title">产物</div>
+        <div
+          v-for="(el, i) in artifactElements"
+          :key="i"
+          class="el-block"
+          :class="'el-' + el.type"
+          >
+          <div v-if="el.type === 'code'" class="artifact-block code-card">
+            <div class="artifact-header">
+              <i class="el-icon-tickets"></i>
+              <span>{{ elementData(el).title || elementData(el).filename || '代码产物' }}</span>
+              <span class="artifact-meta">{{ elementData(el).language || 'code' }}</span>
               <div class="code-actions">
                 <el-button size="mini" type="text" @click="copyCode(elementContent(el))">复制</el-button>
                 <el-button size="mini" type="text" @click="previewCode(normalizeElementForPreview(el))">预览</el-button>
@@ -45,85 +83,110 @@
             <pre class="code-body"><code>{{ elementContent(el) }}</code></pre>
           </div>
 
-          <!-- Table element -->
-          <div v-else-if="el.type === 'table'" class="el-table-wrap">
-            <el-table
-              :data="normalizeTable(elementData(el))"
-              size="small"
-              border
-              stripe
-              style="width: 100%"
-            >
-              <el-table-column
-                v-for="(h, hi) in (elementData(el).headers || [])"
-                :key="hi"
-                :prop="'col' + hi"
-                :label="h"
-                min-width="100"
-              ></el-table-column>
-            </el-table>
+          <div v-else-if="el.type === 'table'" class="artifact-block table-block">
+            <div class="artifact-header">
+              <i class="el-icon-s-grid"></i>
+              <span>{{ elementData(el).title || '表格产物' }}</span>
+              <span class="artifact-meta">{{ tableHeaders(el).length }} 列</span>
+            </div>
+            <div class="table-scroll">
+              <el-table
+                v-if="tableHeaders(el).length"
+                :data="normalizeTable(el)"
+                size="small"
+                border
+                stripe
+                style="width: 100%"
+              >
+                <el-table-column
+                  v-for="(h, hi) in tableHeaders(el)"
+                  :key="hi"
+                  :prop="'col' + hi"
+                  :label="h"
+                  min-width="120"
+                ></el-table-column>
+              </el-table>
+              <div v-else class="el-text" v-html="renderText(elementContent(el))"></div>
+            </div>
           </div>
 
-          <!-- Image element -->
-          <div v-else-if="el.type === 'image'" class="el-image-wrap">
-            <img
-              class="artifact-image"
-              :src="imageSrc(el)"
-              :alt="elementData(el).alt || elementData(el).name || ''"
-              @click="previewImage(imageSrc(el))"
-            />
-            <button
-              v-if="imagePath(el)"
-              class="image-file-link"
-              @click="openFilePath(imagePath(el))"
-            >
-              {{ elementData(el).name || elementData(el).alt || imagePath(el) }}
-            </button>
+          <div v-else-if="el.type === 'image'" class="artifact-block image-block">
+            <div class="artifact-header">
+              <i class="el-icon-picture-outline"></i>
+              <button
+                v-if="imagePath(el)"
+                class="artifact-title-btn"
+                @click="openFilePath(imagePath(el))"
+              >
+                {{ elementData(el).name || elementData(el).alt || imagePath(el) }}
+              </button>
+              <span v-else>{{ elementData(el).name || elementData(el).alt || '图片' }}</span>
+              <span class="artifact-meta">image</span>
+            </div>
+            <div class="image-frame">
+              <img
+                class="artifact-image"
+                :src="imageSrc(el)"
+                :alt="elementData(el).alt || elementData(el).name || ''"
+                @click="previewImage(imageSrc(el))"
+              />
+            </div>
           </div>
 
-          <!-- File element -->
-          <div v-else-if="el.type === 'file' && isImageElement(el)" class="el-image-wrap">
-            <img
-              class="artifact-image"
-              :src="imageSrc(el)"
-              :alt="elementData(el).name || ''"
-              @click="previewImage(imageSrc(el))"
-            />
-            <button class="image-file-link" @click="openFileElement(elementData(el))">
-              {{ elementData(el).name || elementContent(el) }}
-            </button>
+          <div v-else-if="el.type === 'file' && isImageElement(el)" class="artifact-block image-block">
+            <div class="artifact-header">
+              <i class="el-icon-picture-outline"></i>
+              <button class="artifact-title-btn" @click="openFileElement(elementData(el))">
+                {{ elementData(el).name || elementContent(el) }}
+              </button>
+              <span class="artifact-meta">image</span>
+            </div>
+            <div class="image-frame">
+              <img
+                class="artifact-image"
+                :src="imageSrc(el)"
+                :alt="elementData(el).name || ''"
+                @click="previewImage(imageSrc(el))"
+              />
+            </div>
           </div>
 
-          <div v-else-if="el.type === 'file'" class="el-file">
-            <i class="el-icon-document"></i>
-            <button class="file-link-btn" @click="openFileElement(elementData(el))">{{ elementData(el).name || elementContent(el) }}</button>
+          <div v-else-if="el.type === 'file'" class="artifact-block file-card" @click="openFileElement(elementData(el))">
+            <div class="file-icon"><i :class="fileIcon(el)"></i></div>
+            <div class="file-main">
+              <button class="file-link-btn">{{ elementData(el).name || elementContent(el) }}</button>
+              <span class="file-path">{{ elementData(el).path || elementData(el).url || elementContent(el) }}</span>
+            </div>
             <span v-if="elementData(el).size" class="file-size">{{ formatFileSize(elementData(el).size) }}</span>
           </div>
         </div>
       </div>
 
-      <div v-if="executionEvents.length" class="steps-panel">
-        <div class="steps-title">执行步骤</div>
-        <div v-for="(event, index) in executionEvents" :key="index" class="step-item">
-          <span class="step-dot" :class="'step-' + event.type"></span>
-          <div class="step-main">
-            <div class="step-title">{{ event.title || event.type }}</div>
-            <button
-              v-if="event.type === 'file_write' && event.data && event.data.file"
-              class="step-file"
-              @click="openFilePath(event.data.file)"
-            >
-              {{ normalizeWorkspacePath(event.data.file) }}
-            </button>
+      <el-collapse v-if="historySteps.length" class="steps-collapse">
+        <el-collapse-item :title="`进度（${historySteps.length}）`" name="steps">
+          <div class="steps-panel">
+            <div v-for="(step, index) in historySteps" :key="index" class="step-item">
+              <span class="step-dot" :class="'step-' + step.statusClass"></span>
+              <div class="step-main">
+                <div class="step-title">{{ step.title }}</div>
+                <button
+                  v-if="step.path"
+                  class="step-file"
+                  @click="openFilePath(step.path)"
+                >
+                  {{ normalizeWorkspacePath(step.path) }}
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </el-collapse-item>
+      </el-collapse>
 
       <!-- Fallback: render content as HTML (backward compat) -->
-      <div v-else class="bubble-content" v-html="renderedContent"></div>
+      <div v-if="!visibleRawOutput && !contentElements.length && !artifactElements.length" class="bubble-content" v-html="renderedContent"></div>
 
       <!-- Meta bar -->
-      <el-collapse v-if="message.sender_type === 'agent' && message.raw_output" class="raw-collapse">
+      <el-collapse v-if="message.sender_type === 'agent' && message.raw_output && showRawSource" class="raw-collapse">
         <el-collapse-item title="Raw output" name="raw">
           <pre class="raw-output">{{ message.raw_output }}</pre>
         </el-collapse-item>
@@ -177,7 +240,6 @@
         <pre class="preview-code"><code>{{ previewData?.content }}</code></pre>
       </div>
     </el-dialog>
-
     <el-dialog
       title="图片预览"
       :visible.sync="imagePreviewVisible"
@@ -218,6 +280,9 @@ export default {
       const elements = Array.isArray(this.message?.elements) ? this.message.elements : []
       const merged = []
       elements.forEach(el => {
+        if (this.shouldHideRawTextElement(el)) {
+          return
+        }
         const last = merged[merged.length - 1]
         if (el?.type === 'text' && last?.type === 'text') {
           const content = this.elementContent(last) + this.elementContent(el)
@@ -235,6 +300,26 @@ export default {
       })
       return merged
     },
+    contentElements() {
+      return this.renderedElements.filter(el => ['text', 'result', 'error'].includes(el?.type))
+    },
+    progressElements() {
+      return this.renderedElements.filter(el => el?.type === 'progress')
+    },
+    currentProgress() {
+      const list = this.progressElements
+      return list.length ? list[list.length - 1] : null
+    },
+    artifactElements() {
+      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file'].includes(el?.type))
+      const seen = new Set()
+      return artifacts.filter(el => {
+        const key = this.artifactKey(el)
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+    },
     isTempMessage() {
       return this.message && typeof this.message.id === 'string' && this.message.id.startsWith('temp_')
     },
@@ -248,8 +333,40 @@ export default {
       if (!this.message || !this.message.content) return ''
       return this.renderMarkdown(this.message.content)
     },
+    visibleRawOutput() {
+      if (!this.message || this.message.sender_type !== 'agent') return ''
+      const raw = String(this.message.raw_output || '').trim()
+      if (!raw) return ''
+      const content = String(this.message.content || '').trim()
+      if (content && content === raw) return ''
+      if (this.contentElements.some(el => this.normalizeDisplayText(this.elementContent(el)) === this.normalizeDisplayText(raw))) {
+        return ''
+      }
+      return this.artifactElements.some(el => el?.type === 'table') ? this.stripMarkdownTables(raw) : raw
+    },
+    showRawSource() {
+      return false
+    },
     executionEvents() {
       return this.message?.meta?.events || []
+    },
+    completedProgressElements() {
+      return this.progressElements.filter(el => (el.status || 'running') !== 'running')
+    },
+    historySteps() {
+      const progressSteps = this.completedProgressElements.map(el => ({
+        title: this.elementContent(el) || this.elementData(el).title || '步骤完成',
+        statusClass: el.status || 'done',
+        path: this.elementData(el).path || this.elementData(el).file || '',
+      }))
+      const eventSteps = this.executionEvents
+        .filter(event => event?.type !== 'agent_progress')
+        .map(event => ({
+          title: event.title || event.type || '执行步骤',
+          statusClass: event.type || 'event',
+          path: event.data?.file || event.data?.path || '',
+        }))
+      return [...progressSteps, ...eventSteps]
     },
   },
   methods: {
@@ -274,6 +391,21 @@ export default {
     showArtifact() {
       this.$emit('show-artifact', this.message.artifact)
     },
+    artifactKey(el) {
+      const data = this.elementData(el)
+      return [
+        el?.type || '',
+        data.url || '',
+        data.path || '',
+        data.file || '',
+        data.name || '',
+        data.title || '',
+        this.elementContent(el).slice(0, 160),
+      ].join('|')
+    },
+    normalizeDisplayText(text) {
+      return String(text || '').replace(/\s+/g, ' ').trim()
+    },
     renderText(content) {
       return this.renderMarkdown(content)
     },
@@ -281,7 +413,7 @@ export default {
       if (!content) return ''
 
       const blocks = []
-      let html = this.escapeHtml(String(content))
+      let html = this.escapeHtml(this.normalizeMarkdown(String(content)))
 
       html = html.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/g, (match, lang, code) => {
         const token = `@@CODE_BLOCK_${blocks.length}@@`
@@ -302,15 +434,21 @@ export default {
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]
-        const nextLine = lines[i + 1] || ''
+        const nextIndex = this.nextNonEmptyLineIndex(lines, i + 1)
+        const nextLine = nextIndex === -1 ? '' : lines[nextIndex]
 
         if (this.isMarkdownTableRow(line) && this.isMarkdownTableSeparator(nextLine)) {
           flushList()
           const headers = this.parseMarkdownTableRow(line)
           const rows = []
-          i += 2
+          i = nextIndex + 1
 
-          while (i < lines.length && this.isMarkdownTableRow(lines[i]) && lines[i].trim() !== '') {
+          while (i < lines.length) {
+            if (lines[i].trim() === '') {
+              i += 1
+              continue
+            }
+            if (!this.isMarkdownTableRow(lines[i])) break
             rows.push(this.parseMarkdownTableRow(lines[i]))
             i += 1
           }
@@ -350,6 +488,73 @@ export default {
       })
       return html
     },
+    normalizeMarkdown(content) {
+      const lines = String(content || '').replace(/\r\n/g, '\n').split('\n')
+      const normalized = []
+      for (let i = 0; i < lines.length; i++) {
+        const current = lines[i]
+        const trimmed = current.trim()
+        if (/^-{3,}$/.test(trimmed)) {
+          const prev = this.lastNonEmptyLine(normalized)
+          const nextIndex = this.nextNonEmptyLineIndex(lines, i + 1)
+          const next = nextIndex === -1 ? '' : lines[nextIndex]
+          if (this.isMarkdownTableRow(prev) || this.isMarkdownTableRow(next)) {
+            continue
+          }
+          normalized.push(current)
+          continue
+        }
+        if (trimmed === '') {
+          const prev = this.lastNonEmptyLine(normalized)
+          const nextIndex = this.nextNonEmptyLineIndex(lines, i + 1)
+          const next = nextIndex === -1 ? '' : lines[nextIndex]
+          if (
+            this.isMarkdownTableRow(prev) &&
+            (this.isMarkdownTableRow(next) || this.isMarkdownTableSeparator(next))
+          ) {
+            continue
+          }
+        }
+        normalized.push(current)
+      }
+      return normalized.join('\n')
+    },
+    lastNonEmptyLine(lines) {
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (String(lines[i] || '').trim() !== '') return lines[i]
+      }
+      return ''
+    },
+    nextNonEmptyLineIndex(lines, start) {
+      for (let i = start; i < lines.length; i++) {
+        if (String(lines[i] || '').trim() !== '') return i
+      }
+      return -1
+    },
+    stripMarkdownTables(content) {
+      const lines = String(content || '').split(/\r?\n/)
+      const kept = []
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        const nextIndex = this.nextNonEmptyLineIndex(lines, i + 1)
+        const nextLine = nextIndex === -1 ? '' : lines[nextIndex]
+        if (this.isMarkdownTableRow(line) && this.isMarkdownTableSeparator(nextLine)) {
+          i = nextIndex + 1
+          while (i < lines.length) {
+            if (String(lines[i] || '').trim() === '') {
+              i += 1
+              continue
+            }
+            if (!this.isMarkdownTableRow(lines[i])) break
+            i += 1
+          }
+          i -= 1
+          continue
+        }
+        kept.push(line)
+      }
+      return kept.join('\n').trim()
+    },
     renderInlineMarkdown(text) {
       let html = text || ''
       html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -366,7 +571,7 @@ export default {
     isMarkdownTableSeparator(line) {
       if (!this.isMarkdownTableRow(line)) return false
       const cells = this.parseMarkdownTableRow(line)
-      return cells.length >= 2 && cells.every(cell => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')))
+      return cells.length >= 2 && cells.every(cell => /^:?-{2,}:?$/.test(cell.replace(/\s+/g, '')))
     },
     parseMarkdownTableRow(line) {
       let text = String(line || '').trim()
@@ -390,12 +595,34 @@ export default {
       const text = String(line || '').trim().replace(/^`|`$/g, '')
       return /^\/?workspace\/.+\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(text)
     },
-    normalizeTable(data) {
-      if (!data || !data.headers || !data.rows) return []
-      return data.rows.map(row => {
+    tablePayload(el) {
+      const data = this.elementData(el)
+      if (Array.isArray(data.headers) || Array.isArray(data.rows)) return data
+      if (data.data && (Array.isArray(data.data.headers) || Array.isArray(data.data.rows))) return data.data
+      const content = this.elementContent(el)
+      if (content) {
+        try {
+          const parsed = JSON.parse(content)
+          if (parsed && (Array.isArray(parsed.headers) || Array.isArray(parsed.rows))) return parsed
+          if (parsed?.data && (Array.isArray(parsed.data.headers) || Array.isArray(parsed.data.rows))) return parsed.data
+        } catch (e) {}
+      }
+      return {}
+    },
+    tableHeaders(el) {
+      const payload = this.tablePayload(el)
+      return Array.isArray(payload.headers) ? payload.headers.map(h => String(h || '')) : []
+    },
+    normalizeTable(el) {
+      const payload = this.tablePayload(el)
+      const headers = this.tableHeaders(el)
+      const rows = Array.isArray(payload.rows) ? payload.rows : []
+      if (!headers.length) return []
+      return rows.map(row => {
+        const cells = Array.isArray(row) ? row : headers.map(h => row?.[h])
         const obj = {}
-        data.headers.forEach((h, i) => {
-          obj['col' + i] = row[i] || ''
+        headers.forEach((h, i) => {
+          obj['col' + i] = cells[i] === undefined || cells[i] === null ? '' : String(cells[i])
         })
         return obj
       })
@@ -408,6 +635,14 @@ export default {
       if (el.content !== undefined && el.content !== null) return el.content
       return el.data?.content || ''
     },
+    shouldHideRawTextElement(el) {
+      if (!el || el.type !== 'text') return false
+      const content = this.elementContent(el)
+      if (!content || content.length < 1200) return false
+      const fileDumpCount = (content.match(/##\s+\/workspace\/agents\//g) || []).length
+      const fenceCount = (content.match(/```/g) || []).length
+      return fileDumpCount >= 1 || fenceCount >= 4
+    },
     normalizeElementForPreview(el) {
       return {
         ...this.elementData(el),
@@ -416,16 +651,16 @@ export default {
     },
     imageSrc(el) {
       const data = this.elementData(el)
-      const candidate = data.url || data.src || data.path || this.elementContent(el)
+      const candidate = data.url || data.src || data.path || data.file || data.name || this.elementContent(el)
       return this.resolveFileUrl(candidate)
     },
     imagePath(el) {
       const data = this.elementData(el)
-      return data.path || this.pathFromUrl(data.url || data.src) || ''
+      return data.path || data.file || this.pathFromUrl(data.url || data.src) || this.workspacePathFromContent(this.elementContent(el)) || ''
     },
     isImageElement(el) {
       const data = this.elementData(el)
-      const value = data.path || data.url || data.src || data.name || this.elementContent(el)
+      const value = data.path || data.file || data.url || data.src || data.name || this.elementContent(el)
       return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(String(value || '').split('?')[0])
     },
     resolveFileUrl(value) {
@@ -474,9 +709,16 @@ export default {
       }
       return size.toFixed(1) + ' ' + units[i]
     },
+    fileIcon(el) {
+      const value = String(this.elementData(el).path || this.elementData(el).name || this.elementContent(el) || '').toLowerCase()
+      if (/\.(html?|vue)$/.test(value)) return 'el-icon-monitor'
+      if (/\.(md|txt|pdf|docx?)$/.test(value)) return 'el-icon-document'
+      if (/\.(css|js|ts|tsx|jsx|json|py|java|go|rs)$/.test(value)) return 'el-icon-tickets'
+      return 'el-icon-folder-opened'
+    },
     openFileElement(data) {
       if (!data) return
-      const path = data.path || this.pathFromUrl(data.url) || data.name
+      const path = data.path || data.file || this.pathFromUrl(data.url) || this.pathFromUrl(data.src) || this.workspacePathFromContent(data.content) || data.name
       this.openFilePath(path)
     },
     openFilePath(path) {
@@ -493,6 +735,12 @@ export default {
       const idx = url.indexOf(marker)
       if (idx === -1) return ''
       return decodeURIComponent(url.slice(idx + marker.length))
+    },
+    workspacePathFromContent(content) {
+      const text = String(content || '').trim()
+      if (!text) return ''
+      if (text.startsWith('/workspace/') || text.startsWith('workspace/')) return text
+      return ''
     },
   },
 }
@@ -560,10 +808,10 @@ export default {
 
 .bubble-inner {
   background: #ffffff;
-  padding: 10px 14px;
+  padding: 12px 14px;
   border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-  border: 1px solid #f0f0f0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  border: 1px solid #e8edf5;
 }
 
 .own .bubble-inner {
@@ -575,19 +823,207 @@ export default {
 .bubble-elements {
   display: flex;
   flex-direction: column;
+  gap: 10px;
+}
+
+.artifact-section {
+  margin-top: 10px;
+}
+
+.content-section + .artifact-section,
+.raw-rendered + .artifact-section {
+  margin-top: 12px;
+}
+
+.section-title {
+  font-size: 12px;
+  line-height: 1;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: -2px;
+}
+
+.current-progress {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #334155;
+  font-size: 12px;
+}
+
+.current-progress-label {
+  color: #2563eb;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.current-progress-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .el-progress {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 9px;
-  background: #f8fafc;
-  border: 1px solid #edf0f5;
+  padding: 7px 10px;
+  background: #f8fbff;
+  border: 1px solid #e2ecf8;
   border-radius: 6px;
   font-size: 12px;
   color: #475569;
+}
+
+.el-result {
+  padding: 10px 12px;
+  border: 1px solid #d7e8ff;
+  border-radius: 8px;
+  background: #f8fbff;
+  max-width: 100%;
+}
+
+.el-error {
+  padding: 10px 12px;
+  border: 1px solid #fde2e2;
+  border-radius: 8px;
+  background: #fff5f5;
+}
+
+.error-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.error-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #7f1d1d;
+}
+
+.result-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.result-content {
+  font-size: 13px;
+  line-height: 1.68;
+  color: #1e293b;
+  max-width: 100%;
+}
+
+.result-content :deep(p) {
+  margin: 0 0 6px;
+}
+
+.result-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.result-content :deep(h1),
+.result-content :deep(h2),
+.result-content :deep(h3) {
+  margin: 10px 0 7px;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.result-content :deep(h1) {
+  font-size: 18px;
+}
+
+.result-content :deep(h2) {
+  font-size: 16px;
+}
+
+.result-content :deep(h3) {
+  font-size: 15px;
+}
+
+.result-content :deep(ul) {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+
+.result-content :deep(li) {
+  margin: 2px 0;
+}
+
+.result-content :deep(blockquote) {
+  margin: 8px 0;
+  padding: 7px 10px;
+  border-left: 3px solid #93c5fd;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.result-content :deep(pre) {
+  background: #111827;
+  color: #e5e7eb;
+  padding: 12px;
+  border-radius: 7px;
+  overflow: auto;
+  max-height: 420px;
+  font-size: 12px;
+  margin: 8px 0;
+  border: 1px solid #1f2937;
+}
+
+.result-content :deep(code) {
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #b45309;
+}
+
+.result-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.result-content :deep(.markdown-table-wrap) {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.result-content :deep(.markdown-table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #fff;
+}
+
+.result-content :deep(.markdown-table th),
+.result-content :deep(.markdown-table td) {
+  border: 1px solid #e2e8f0;
+  padding: 7px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.result-content :deep(.markdown-table th) {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
 }
 
 .progress-dot {
@@ -729,7 +1165,8 @@ export default {
   background: #f8f9fa;
   padding: 12px;
   border-radius: 8px;
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 360px;
   font-size: 13px;
   margin: 8px 0;
 }
@@ -748,29 +1185,6 @@ export default {
   color: inherit;
 }
 
-/* Code element */
-.el-code {
-  border: 1px solid #e8eaed;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.code-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 12px;
-  background: #f8f9fa;
-  border-bottom: 1px solid #e8eaed;
-}
-
-.code-lang {
-  font-size: 11px;
-  color: #666;
-  font-weight: 500;
-  text-transform: uppercase;
-}
-
 .code-actions {
   display: flex;
   gap: 4px;
@@ -785,12 +1199,12 @@ export default {
 .code-body {
   padding: 12px;
   margin: 0;
-  background: #1e293b;
-  color: #e2e8f0;
+  background: #111827;
+  color: #e5e7eb;
   font-size: 12px;
   line-height: 1.5;
   overflow-x: auto;
-  max-height: 300px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
@@ -799,28 +1213,88 @@ export default {
   white-space: pre;
 }
 
-/* Table element */
-.el-table-wrap {
-  overflow-x: auto;
+/* Artifacts */
+.artifact-block {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfdff;
+  overflow: hidden;
 }
 
-/* Image element */
-.el-image-wrap {
+.artifact-header {
+  min-height: 34px;
+  padding: 8px 11px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: flex-start;
-  border-radius: 8px;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid #e8edf5;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+  background: #f8fafc;
+}
+
+.artifact-header i {
+  color: #4080ff;
+  font-size: 15px;
+}
+
+.artifact-meta {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.artifact-title-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  min-width: 0;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-title-btn:hover {
+  text-decoration: underline;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  padding: 10px;
+}
+
+.table-block :deep(.el-table) {
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.table-block :deep(.el-table th.el-table__cell) {
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+}
+
+.image-frame {
+  padding: 10px;
+  background: #ffffff;
 }
 
 .artifact-image {
   display: block;
   max-width: 100%;
-  max-height: 400px;
+  max-height: 420px;
   object-fit: contain;
-  border: 1px solid #e8eaed;
-  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
   background: #f8fafc;
   cursor: zoom-in;
 }
@@ -836,61 +1310,63 @@ export default {
   background: #f8fafc;
 }
 
-.image-file-link {
-  border: none;
-  background: transparent;
-  padding: 0;
-  color: #4080ff;
-  font-size: 12px;
-  cursor: pointer;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.image-file-link:hover {
-  text-decoration: underline;
-}
-
-/* File element */
-.el-file {
+.file-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: #f8f9fa;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.file-card:hover {
+  border-color: #9fc7ff;
+  background: #f7fbff;
+}
+
+.file-icon {
+  width: 34px;
+  height: 34px;
   border-radius: 8px;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eaf3ff;
+  color: #2563eb;
+  flex-shrink: 0;
 }
 
-.el-file i {
-  font-size: 20px;
-  color: #4080ff;
+.file-icon i {
+  font-size: 18px;
 }
 
-.el-file a {
-  color: #4080ff;
-  text-decoration: none;
-  font-weight: 500;
-}
-
-.el-file a:hover {
-  text-decoration: underline;
+.file-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .file-link-btn {
   border: none;
   background: transparent;
   padding: 0;
-  color: #4080ff;
+  color: #1e293b;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.file-link-btn:hover {
-  text-decoration: underline;
+.file-path {
+  color: #94a3b8;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-size {
@@ -899,8 +1375,25 @@ export default {
   margin-left: auto;
 }
 
-.steps-panel {
+.steps-collapse {
   margin-top: 10px;
+  border-top: 1px solid #f0f0f0;
+  border-bottom: none;
+}
+
+.steps-collapse :deep(.el-collapse-item__header) {
+  height: 32px;
+  line-height: 32px;
+  font-size: 12px;
+  color: #64748b;
+  border-bottom: none;
+}
+
+.steps-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.steps-panel {
   padding: 8px 10px;
   border: 1px solid #edf0f5;
   border-radius: 8px;
@@ -982,7 +1475,8 @@ export default {
   background: #f8f9fa;
   padding: 12px;
   border-radius: 8px;
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 360px;
   font-size: 13px;
   margin: 8px 0;
 }
@@ -1034,6 +1528,113 @@ export default {
   margin-top: 10px;
   border-top: 1px solid #f0f0f0;
   border-bottom: none;
+}
+
+.raw-rendered {
+  margin-top: 10px;
+  padding: 12px 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.raw-rendered-content {
+  font-size: 14px;
+  line-height: 1.68;
+  color: #1e293b;
+  word-wrap: break-word;
+}
+
+.raw-rendered-content :deep(p) {
+  margin: 0 0 8px;
+}
+
+.raw-rendered-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.raw-rendered-content :deep(pre) {
+  background: #111827;
+  color: #e5e7eb;
+  padding: 12px;
+  border-radius: 7px;
+  overflow: auto;
+  max-height: 420px;
+  font-size: 12px;
+  margin: 8px 0;
+  border: 1px solid #1f2937;
+}
+
+.raw-rendered-content :deep(code) {
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #b45309;
+}
+
+.raw-rendered-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.raw-rendered-content :deep(.markdown-table-wrap) {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.raw-rendered-content :deep(.markdown-table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #fff;
+}
+
+.raw-rendered-content :deep(.markdown-table th),
+.raw-rendered-content :deep(.markdown-table td) {
+  border: 1px solid #e2e8f0;
+  padding: 7px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.raw-rendered-content :deep(.markdown-table th) {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
+}
+
+.raw-rendered-content :deep(h1),
+.raw-rendered-content :deep(h2),
+.raw-rendered-content :deep(h3) {
+  margin: 10px 0 7px;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.raw-rendered-content :deep(h1) {
+  font-size: 18px;
+}
+
+.raw-rendered-content :deep(h2) {
+  font-size: 16px;
+}
+
+.raw-rendered-content :deep(h3) {
+  font-size: 15px;
+}
+
+.raw-rendered-content :deep(ul) {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+
+.raw-rendered-content :deep(blockquote) {
+  margin: 8px 0;
+  padding: 7px 10px;
+  border-left: 3px solid #93c5fd;
+  background: #f8fafc;
+  color: #475569;
 }
 
 .raw-collapse :deep(.el-collapse-item__header) {
