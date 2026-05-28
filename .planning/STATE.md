@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 1 complete; Checkpoint 2 next
+**Status:** Checkpoint 2 complete; Checkpoint 3 next
 
 ## Completed
 
@@ -19,13 +19,14 @@
 - Confirmed v1 writes only `.weagent/*`.
 - Created SPEC, PLAN, CONTEXT, RESEARCH, PATTERNS, and CHECKPOINTS artifacts for phase 001.
 - Completed Checkpoint 1 data model foundation.
+- Completed Checkpoint 2 service/API foundation.
 
 ## Current Branch Notes
 
 - Local branch has been moved to `feature/toolset`.
-- Upstream should be set with `git push -u origin feature/toolset`.
+- Upstream is `origin/feature/toolset`.
 - Existing untracked `.claude/logs/` should not be included in toolset commits.
 
 ## Next Action
 
-Begin Checkpoint 2: capability service, permission policy, and API foundation.
+Begin Checkpoint 3: frontend Capability Library and Agent binding UI.

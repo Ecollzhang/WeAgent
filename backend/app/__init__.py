@@ -125,6 +125,7 @@ def create_app(config_name=None):
     from app.controllers.tool_controller import tool_bp
     from app.controllers.upload_controller import upload_bp
     from app.controllers.settings_controller import settings_bp
+    from app.controllers.capability_controller import capability_bp, agent_capability_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
@@ -134,6 +135,8 @@ def create_app(config_name=None):
     app.register_blueprint(tool_bp, url_prefix='/api/tools')
     app.register_blueprint(upload_bp, url_prefix='/api/upload')
     app.register_blueprint(settings_bp, url_prefix='/api/settings')
+    app.register_blueprint(capability_bp, url_prefix='/api/capabilities')
+    app.register_blueprint(agent_capability_bp, url_prefix='/api/agents')
 
     # Register sandbox blueprint (optional, for testing)
     try:
@@ -198,6 +201,13 @@ def create_app(config_name=None):
             tool_service.seed_default_tools()
         except Exception as e:
             print(f'[WeAgent] Tool seed note: {e}')
+
+        # Seed capability wrappers for built-in platform tools
+        try:
+            from app.services.capability_service import capability_service
+            capability_service.seed_builtin_tool_capabilities()
+        except Exception as e:
+            print(f'[WeAgent] Capability seed note: {e}')
 
     # Register error handlers
     @app.errorhandler(404)

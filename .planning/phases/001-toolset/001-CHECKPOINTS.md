@@ -22,7 +22,7 @@
 
 ## Checkpoint 2: Service and API
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 
@@ -31,6 +31,8 @@
 - Authenticated API endpoints exist for library, imports, Agent bindings, drafts, and call records.
 
 ## Checkpoint 3: Frontend Capability Management
+
+**Status:** Next
 
 **Exit criteria:**
 
