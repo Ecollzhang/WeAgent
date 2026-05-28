@@ -32,3 +32,12 @@ class BaseModel(db.Model):
         """Delete instance from database."""
         db.session.delete(self)
         db.session.commit()
+
+
+from app.models.capability import (  # noqa: E402,F401
+    AgentCapabilityBinding,
+    Capability,
+    CapabilityCallRecord,
+    CapabilityVersion,
+    SkillRevisionDraft,
+)

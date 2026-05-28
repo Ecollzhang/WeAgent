@@ -12,6 +12,8 @@
 
 ## Checkpoint 1: Data Model Foundation
 
+**Status:** Complete
+
 **Exit criteria:**
 
 - Capability models exist and import cleanly.
@@ -19,6 +21,8 @@
 - Model tests cover all four capability types, versions, bindings, call records, and Skill drafts.
 
 ## Checkpoint 2: Service and API
+
+**Status:** Next
 
 **Exit criteria:**
 
@@ -84,4 +88,3 @@
 - Agent progress display works.
 - Artifact display works.
 - Toolset happy path works from UI through sandbox projection and call record.
-

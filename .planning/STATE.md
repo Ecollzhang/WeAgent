@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Ready for implementation after planning review
+**Status:** Checkpoint 1 complete; Checkpoint 2 next
 
 ## Completed
 
@@ -18,6 +18,7 @@
 - Confirmed npx/MCP execution happens inside sandbox.
 - Confirmed v1 writes only `.weagent/*`.
 - Created SPEC, PLAN, CONTEXT, RESEARCH, PATTERNS, and CHECKPOINTS artifacts for phase 001.
+- Completed Checkpoint 1 data model foundation.
 
 ## Current Branch Notes
 
@@ -27,5 +28,4 @@
 
 ## Next Action
 
-Begin Checkpoint 1: data model and service foundation.
-
+Begin Checkpoint 2: capability service, permission policy, and API foundation.

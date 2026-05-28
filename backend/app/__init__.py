@@ -172,6 +172,13 @@ def create_app(config_name=None):
         from app.models.agent_tool import AgentTool
         from app.models.user_model_config import UserModelConfig
         from app.models.agent_run import AgentRun
+        from app.models.capability import (
+            AgentCapabilityBinding,
+            Capability,
+            CapabilityCallRecord,
+            CapabilityVersion,
+            SkillRevisionDraft,
+        )
 
         db.create_all()
 
