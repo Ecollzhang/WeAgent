@@ -32,7 +32,7 @@
 
 ## Checkpoint 3: Frontend Capability Management
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 
@@ -41,6 +41,8 @@
 - Agent create/edit supports capability selection, pinned version, and permission grants.
 
 ## Checkpoint 4: Runtime Projection
+
+**Status:** Next
 
 **Exit criteria:**
 

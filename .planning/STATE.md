@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 2 complete; Checkpoint 3 next
+**Status:** Checkpoint 3 complete; Checkpoint 4 next
 
 ## Completed
 
@@ -20,6 +20,7 @@
 - Created SPEC, PLAN, CONTEXT, RESEARCH, PATTERNS, and CHECKPOINTS artifacts for phase 001.
 - Completed Checkpoint 1 data model foundation.
 - Completed Checkpoint 2 service/API foundation.
+- Completed Checkpoint 3 frontend Capability Library and Agent binding UI.
 
 ## Current Branch Notes
 
@@ -29,4 +30,4 @@
 
 ## Next Action
 
-Begin Checkpoint 3: frontend Capability Library and Agent binding UI.
+Begin Checkpoint 4: runtime projection plan and `.weagent/*` injection path.

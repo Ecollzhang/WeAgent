@@ -200,6 +200,25 @@ class CapabilityService:
         db.session.commit()
         return self._version_to_dict(version_record), None
 
+    def create_user_version(self, user_id, capability_id, content="", manifest=None,
+                            permissions=None, meta=None, version=None):
+        capability = self._visible_capability_query(user_id).filter(
+            Capability.id == capability_id
+        ).first()
+        if not capability or (not capability.is_builtin and capability.user_id != user_id):
+            return None, "Capability not found"
+        if capability.is_builtin:
+            return None, "Built-in capabilities cannot be edited"
+        return self.create_version(
+            capability_id=capability_id,
+            content=content,
+            manifest=manifest,
+            permissions=permissions,
+            meta=meta,
+            version=version,
+            created_by=user_id,
+        )
+
     def bind_to_agent(self, agent_id, capability_version_id, granted_permissions=None,
                       version_policy="pinned", enabled=True):
         agent = Agent.query.get(agent_id)
@@ -298,6 +317,35 @@ class CapabilityService:
                     "upgrade_available": True,
                 })
         return result, None
+
+    def get_user_agent_upgrade_status(self, user_id, agent_id):
+        agent = Agent.query.filter_by(id=agent_id, user_id=user_id).first()
+        if not agent:
+            return None, "Agent not found"
+        return self.get_upgrade_status(agent_id)
+
+    def update_user_agent_binding(self, user_id, agent_id, binding_id,
+                                  capability_version_id=None, granted_permissions=None,
+                                  version_policy="pinned", enabled=None):
+        agent = Agent.query.filter_by(id=agent_id, user_id=user_id).first()
+        if not agent:
+            return None, "Agent not found"
+        binding = AgentCapabilityBinding.query.filter_by(
+            id=binding_id,
+            agent_id=agent_id,
+        ).first()
+        if not binding:
+            return None, "Agent capability binding not found"
+        version_id = capability_version_id or binding.capability_version_id
+        return self.bind_to_user_agent(
+            user_id=user_id,
+            agent_id=agent_id,
+            capability_version_id=version_id,
+            granted_permissions=granted_permissions
+            if granted_permissions is not None else binding.granted_permissions,
+            version_policy=version_policy or binding.version_policy,
+            enabled=binding.enabled if enabled is None else enabled,
+        )
 
     def list_drafts(self, user_id, status=None):
         query = self._draft_query(user_id)

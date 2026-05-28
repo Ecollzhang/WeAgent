@@ -50,6 +50,31 @@ class BindCapabilitySchema(Schema):
     enabled = fields.Boolean(load_default=True)
 
 
+class UpdateCapabilityBindingSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    capability_version_id = fields.String(load_default=None, allow_none=True)
+    granted_permissions = fields.List(fields.String(), load_default=None, allow_none=True)
+    version_policy = fields.String(
+        validate=validate.OneOf(["pinned", "follow_latest"]),
+        load_default=None,
+        allow_none=True,
+    )
+    enabled = fields.Boolean(load_default=None, allow_none=True)
+
+
+class CreateCapabilityVersionSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    content = fields.String(load_default="")
+    manifest = fields.Dict(load_default=dict)
+    permissions = fields.Nested(PermissionDeclarationSchema, load_default=dict)
+    meta = fields.Dict(load_default=dict)
+    version = fields.String(load_default=None, allow_none=True)
+
+
 class DraftPublishSchema(Schema):
     class Meta:
         unknown = EXCLUDE

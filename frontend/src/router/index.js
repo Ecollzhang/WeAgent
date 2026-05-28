@@ -46,6 +46,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/capabilities',
+    name: 'CapabilityLibrary',
+    component: () => import('../views/CapabilityLibrary.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/sandbox',
     name: 'SandboxTest',
     component: () => import('../views/SandboxTest.vue'),

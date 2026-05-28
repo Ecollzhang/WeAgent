@@ -62,6 +62,47 @@ def test_create_and_list_skill_capability(client_context):
     assert [item["name"] for item in items] == ["Code Review"]
 
 
+def test_create_skill_version_and_report_agent_upgrade(client_context):
+    client, headers, _user, agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Versioned Skill",
+        markdown="# Versioned Skill\nv1",
+    )
+    assert error is None
+    bind_response = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": skill["latest_version"]["id"],
+            "granted_permissions": [],
+        },
+    )
+    assert bind_response.status_code == 201
+
+    version_response = client.post(
+        f"/api/capabilities/{skill['id']}/versions",
+        headers=headers,
+        json={
+            "content": "# Versioned Skill\nv2",
+            "permissions": {"required": [], "optional": []},
+            "meta": {"edited_from": "capability-library"},
+        },
+    )
+
+    assert version_response.status_code == 201
+    assert version_response.get_json()["data"]["content"].endswith("v2")
+
+    upgrades_response = client.get(
+        f"/api/agents/{agent.id}/capabilities/upgrades",
+        headers=headers,
+    )
+    assert upgrades_response.status_code == 200
+    upgrades = upgrades_response.get_json()["data"]
+    assert upgrades[0]["current_version_id"] == skill["latest_version"]["id"]
+    assert upgrades[0]["latest_version_id"] == version_response.get_json()["data"]["id"]
+
+
 def test_import_npx_manifest_and_bind_agent_capability(client_context):
     client, headers, _user, agent = client_context
 
@@ -183,6 +224,50 @@ def test_agent_binding_rejects_other_users_capability(client_context):
 
     assert response.status_code == 400
     assert "Capability version not found" in response.get_json()["message"]
+
+
+def test_update_agent_capability_binding_permissions(client_context):
+    client, headers, _user, agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Optional Reader",
+        markdown="# Optional Reader",
+        permissions={"required": ["read_workspace"], "optional": ["write_workspace"]},
+    )
+    assert error is None
+    bind_response = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": skill["latest_version"]["id"],
+            "granted_permissions": ["read_workspace"],
+        },
+    )
+    assert bind_response.status_code == 201
+    binding_id = bind_response.get_json()["data"]["id"]
+
+    update_response = client.put(
+        f"/api/agents/{agent.id}/capabilities/{binding_id}",
+        headers=headers,
+        json={
+            "granted_permissions": ["read_workspace", "write_workspace"],
+            "enabled": False,
+        },
+    )
+
+    assert update_response.status_code == 200
+    binding = update_response.get_json()["data"]
+    assert binding["enabled"] is False
+    assert binding["granted_permissions"] == ["read_workspace", "write_workspace"]
+
+    preserve_response = client.put(
+        f"/api/agents/{agent.id}/capabilities/{binding_id}",
+        headers=headers,
+        json={"granted_permissions": ["read_workspace"]},
+    )
+
+    assert preserve_response.status_code == 200
+    assert preserve_response.get_json()["data"]["enabled"] is False
 
 
 def test_draft_publish_fork_and_call_record_sync(client_context):

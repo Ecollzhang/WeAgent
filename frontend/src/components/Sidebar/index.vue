@@ -16,6 +16,10 @@
         <i class="el-icon-s-tools"></i>
         <span>工具集</span>
       </router-link>
+      <router-link to="/capabilities" class="nav-item" :class="{ active: $route.path === '/capabilities' }">
+        <i class="el-icon-collection-tag"></i>
+        <span>能力库</span>
+      </router-link>
       <router-link to="/settings" class="nav-item" :class="{ active: $route.path === '/settings' }">
         <i class="el-icon-setting"></i>
         <span>设置</span>

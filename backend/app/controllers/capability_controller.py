@@ -5,11 +5,13 @@ from marshmallow import ValidationError
 from app.schemas.capability_schema import (
     BindCapabilitySchema,
     CallSyncSchema,
+    CreateCapabilityVersionSchema,
     CreateSkillSchema,
     DraftForkSchema,
     DraftPublishSchema,
     ImportMarkdownSchema,
     ImportNpxManifestSchema,
+    UpdateCapabilityBindingSchema,
 )
 from app.services.capability_service import capability_service
 from app.utils.response import error_response, success_response
@@ -191,6 +193,27 @@ def get_capability_versions(capability_id):
     return success_response(result)
 
 
+@capability_bp.route("/<capability_id>/versions", methods=["POST"])
+@jwt_required()
+def create_capability_version(capability_id):
+    user_id = get_jwt_identity()
+    data, validation_error = _load(CreateCapabilityVersionSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    result, error = capability_service.create_user_version(
+        user_id=user_id,
+        capability_id=capability_id,
+        content=data.get("content", ""),
+        manifest=data.get("manifest"),
+        permissions=data.get("permissions"),
+        meta=data.get("meta"),
+        version=data.get("version"),
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Capability version created", code=201)
+
+
 @agent_capability_bp.route("/<agent_id>/capabilities", methods=["POST"])
 @jwt_required()
 def bind_agent_capability(agent_id):
@@ -219,3 +242,34 @@ def list_agent_capabilities(agent_id):
     if error:
         return error_response(error, code=404)
     return success_response(result)
+
+
+@agent_capability_bp.route("/<agent_id>/capabilities/upgrades", methods=["GET"])
+@jwt_required()
+def list_agent_capability_upgrades(agent_id):
+    user_id = get_jwt_identity()
+    result, error = capability_service.get_user_agent_upgrade_status(user_id, agent_id)
+    if error:
+        return error_response(error, code=404)
+    return success_response(result)
+
+
+@agent_capability_bp.route("/<agent_id>/capabilities/<binding_id>", methods=["PUT"])
+@jwt_required()
+def update_agent_capability(agent_id, binding_id):
+    user_id = get_jwt_identity()
+    data, validation_error = _load(UpdateCapabilityBindingSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    result, error = capability_service.update_user_agent_binding(
+        user_id=user_id,
+        agent_id=agent_id,
+        binding_id=binding_id,
+        capability_version_id=data.get("capability_version_id"),
+        granted_permissions=data.get("granted_permissions"),
+        version_policy=data.get("version_policy", "pinned"),
+        enabled=data.get("enabled"),
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Agent capability updated")
