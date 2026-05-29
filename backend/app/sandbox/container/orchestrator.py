@@ -15,12 +15,13 @@ import threading
 import time
 from typing import Optional
 
-from .agent import ClaudeRuntime
+from .agent import AgentRuntime, ClaudeRuntime
 from .claude_config import clean_base_url, clean_config_value, claude_env, write_settings, trust_projects
 from .tools import ToolRegistry, register_builtin_tools
 from . import session as session_store
 from .events import push_event
 from .logging_utils import log_agent, log_event, shorten
+from .providers import ProviderRunnerFactory
 
 
 class Orchestrator:
@@ -31,7 +32,7 @@ class Orchestrator:
     """
 
     def __init__(self):
-        self.agents: dict[str, ClaudeRuntime] = {}
+        self.agents: dict[str, AgentRuntime] = {}
         self.tools = ToolRegistry()
         self.custom_tools_path = "/workspace/.session/tools.json"
         self.services: dict[int, dict] = {}
@@ -64,13 +65,15 @@ class Orchestrator:
     # ---- Agent management ----
 
     def create_agent(self, agent_id: str, role: str, system_prompt: str,
-                     workspace_name: str = "") -> dict:
+                     workspace_name: str = "", adapter_name: str = "claude") -> dict:
         """Create and start a new agent."""
+        adapter_name = (adapter_name or "claude").strip().lower()
         log_agent(
             agent_id,
             "create_requested",
             role=role,
             workspace_name=workspace_name or role or agent_id,
+            adapter_name=adapter_name,
             prompt_len=len(system_prompt or ""),
         )
         if agent_id in self.agents:
@@ -79,13 +82,16 @@ class Orchestrator:
 
         # Persist original config (for clean replay)
         workspace_name = workspace_name or role or agent_id
-        session_store.save_agent_config(agent_id, role, system_prompt, workspace_name)
+        if adapter_name not in ProviderRunnerFactory.providers():
+            log_agent(agent_id, "create_rejected", level="warning", reason="unsupported provider", adapter_name=adapter_name)
+            return {"error": f"Unsupported provider: {adapter_name}"}
+        session_store.save_agent_config(agent_id, role, system_prompt, workspace_name, adapter_name)
 
         # NOTE: system_prompt is passed to ClaudeRuntime which writes agent.md
         # The agent.md file defines the agent's role for claude -p.
         # Tool instructions are embedded in agent.md, not injected here.
 
-        agent = ClaudeRuntime(agent_id, role, system_prompt, workspace_name)
+        agent = AgentRuntime(agent_id, role, system_prompt, workspace_name, provider_name=adapter_name)
         try:
             agent.start()
         except Exception as e:
@@ -93,7 +99,7 @@ class Orchestrator:
             return {"error": f"Failed to start agent: {e}"}
 
         self.agents[agent_id] = agent
-        log_agent(agent_id, "created", role=role, workspace_name=agent.workspace_name, work_dir=agent.to_dict().get("work_dir"))
+        log_agent(agent_id, "created", role=role, workspace_name=agent.workspace_name, adapter_name=adapter_name, work_dir=agent.to_dict().get("work_dir"))
 
         return {"status": "ok", "agent": agent.to_dict()}
 
@@ -106,7 +112,7 @@ class Orchestrator:
             log_agent(agent_id, "removed", role=agent.role)
         return {"status": "ok"}
 
-    def get_agent(self, agent_id: str) -> Optional[ClaudeRuntime]:
+    def get_agent(self, agent_id: str) -> Optional[AgentRuntime]:
         return self.agents.get(agent_id)
 
     def list_agents(self) -> list[dict]:
@@ -1190,7 +1196,7 @@ class Orchestrator:
         filename = os.path.basename(real_path)
         return content, mime_type, filename
 
-    REPORT_TYPES = {"progress", "result", "text", "table", "image", "code", "file", "error"}
+    REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error"}
     REPORT_STATUSES = {"running", "done", "error", "stopped"}
     REPORT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
@@ -1317,7 +1323,7 @@ class Orchestrator:
         if element_type == "code":
             normalized["data"]["language"] = str(data.get("language") or report.get("language") or "text")
 
-        if element_type in {"progress", "result", "text", "error"}:
+        if element_type in {"progress", "result", "summary", "text", "error"}:
             normalized["content"] = content or title
 
         return normalized, None
@@ -1603,11 +1609,12 @@ class Orchestrator:
         # Use saved system prompt (agent.md handles role definition)
         runtime_prompt = config["system_prompt"]
 
-        agent = ClaudeRuntime(
+        agent = AgentRuntime(
             agent_id,
             config["role"],
             runtime_prompt,
             config.get("workspace_name") or config.get("role") or agent_id,
+            provider_name=config.get("adapter_name") or config.get("provider") or "claude",
         )
         try:
             agent.start()

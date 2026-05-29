@@ -153,10 +153,15 @@ def clear_events(agent_id: str):
 
 def _event_summary(event_type: str, data: dict) -> dict:
     data = data or {}
-    if event_type in ("claude_output_delta", "claude_error_delta"):
+    if event_type in (
+        "claude_output_delta",
+        "claude_error_delta",
+        "provider_output_delta",
+        "provider_error_delta",
+    ):
         chunk = data.get("chunk", "")
         return {"chunk_len": len(chunk), "chunk_preview": shorten(chunk, 160)}
-    if event_type in ("claude_output", "claude_error"):
+    if event_type in ("claude_output", "claude_error", "provider_output", "provider_error"):
         output = data.get("output", "")
         return {
             "output_len": len(output),

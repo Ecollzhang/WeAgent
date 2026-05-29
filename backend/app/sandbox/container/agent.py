@@ -13,12 +13,12 @@ import threading
 import time
 from typing import Optional
 
-from .claude_config import claude_env, trust_projects, write_settings
 from .events import push_event
 from .logging_utils import log_agent, shorten
+from .providers import ProviderRunnerFactory
 
 
-class ClaudeRuntime:
+class AgentRuntime:
     """
     Wraps claude -p CLI calls for task execution.
 
@@ -27,16 +27,18 @@ class ClaudeRuntime:
     """
 
     def __init__(self, agent_id: str, role: str, system_prompt: str,
-                 workspace_name: str = ""):
+                 workspace_name: str = "", provider_name: str = "claude"):
         self.agent_id = agent_id
         self.role = role
         self.system_prompt = system_prompt
+        self.provider_name = (provider_name or "claude").strip().lower()
         self.workspace_name = self._safe_workspace_name(workspace_name or role or agent_id)
         self._stop_signaled = False
         self._process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._agent_dir = f"/workspace/agents/{self.workspace_name}"
         self._claude_session_marker = os.path.join(self._agent_dir, ".weagent_claude_session")
+        self.provider_runner = ProviderRunnerFactory.create(self.provider_name, self)
 
     def start(self):
         """Set up agent workspace: create dirs, write agent.md, link settings."""
@@ -47,34 +49,10 @@ class ClaudeRuntime:
             role=self.role,
             workspace_name=self.workspace_name,
             work_dir=agent_dir,
+            provider=self.provider_runner.provider_name,
         )
-        claude_dir = os.path.join(agent_dir, ".claude")
-        os.makedirs(claude_dir, exist_ok=True)
-        write_settings(
-            os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN", ""),
-            os.environ.get("ANTHROPIC_BASE_URL", ""),
-            os.environ.get("ANTHROPIC_MODEL", ""),
-        )
-        trust_projects(["/workspace", agent_dir])
-
-        # Write agent.md — this defines the agent's role for Claude Code
-        agent_md_path = os.path.join(claude_dir, "agent.md")
-        claude_md_path = os.path.join(agent_dir, "CLAUDE.md")
-        for prompt_path in (agent_md_path, claude_md_path):
-            with open(prompt_path, "w", encoding="utf-8") as f:
-                f.write(self._format_agent_md())
-
-        # Link or copy shared settings.local.json from workspace root
-        settings_src = "/workspace/.claude/settings.local.json"
-        settings_dst = os.path.join(claude_dir, "settings.local.json")
-        if os.path.exists(settings_src) and not os.path.exists(settings_dst):
-            try:
-                os.symlink(settings_src, settings_dst)
-            except (OSError, NotImplementedError):
-                # symlink may fail on some systems, copy instead
-                import shutil
-                shutil.copy2(settings_src, settings_dst)
-
+        os.makedirs(agent_dir, exist_ok=True)
+        self.provider_runner.setup()
         os.makedirs("/workspace/shared", exist_ok=True)
         log_agent(
             self.agent_id,
@@ -82,6 +60,7 @@ class ClaudeRuntime:
             role=self.role,
             workspace_name=self.workspace_name,
             work_dir=agent_dir,
+            provider=self.provider_runner.provider_name,
         )
 
     def _format_agent_md(self) -> str:
@@ -94,12 +73,12 @@ class ClaudeRuntime:
 你可以读取 /workspace/agents/ 下其他 Agent 的工作目录内容来协作。
 
 你必须使用 Bash 调用 weagent-report 向前端实时汇报进度和结果。
-执行任务前先上报计划；每个步骤开始前上报 progress；步骤完成后上报 result；生成文件后上报 file；生成图片后上报 image；出错时上报 error。
+执行任务前先上报计划；每个步骤开始前上报 progress；步骤完成后上报 result；生成文件后上报 file；生成图片后上报 image；出错时上报 error；结束前上报 summary。
 
 weagent-report 只接受一个 JSON 字符串参数：
 weagent-report '{{"type":"progress","title":"分析需求","content":"正在确认任务范围","status":"running","step_id":"step-1"}}'
 
-上报类型：progress、result、text、table、image、code、file、error。
+上报类型：progress、result、summary、text、table、image、code、file、error。
 table 固定格式：{{"type":"table","title":"标题","data":{{"headers":["列1"],"rows":[["值1"]]}}}}。
 image/file 只允许上报容器内 /workspace/... 路径。
 大段代码可以用 code 块上报；如果用户要求生成项目或可运行产物，必须把代码写入文件，再上报 file/image。
@@ -112,7 +91,7 @@ image/file 只允许上报容器内 /workspace/... 路径。
 文件内容
 ```
 
-不要请求批准，系统已自动批准工具调用。写入完成后必须上报对应 file/image。
+不要请求批准，系统已自动批准工具调用。写入完成后必须上报对应 file/image，结束前用 summary 上报给用户看的简短结论。
 ========================
 """
         return f"# {self.role}\n\n{self.system_prompt}\n{note}"
@@ -134,6 +113,8 @@ image/file 只允许上报容器内 /workspace/... 路径。
 
     def send(self, message: str) -> str:
         """Send a single message with system prompt (via agent.md)."""
+        if not self.provider_runner.runnable:
+            return self._provider_not_implemented()
         return self._call_claude(message)
 
     def send_with_context(self, message: str, context: str = "") -> str:
@@ -143,7 +124,26 @@ image/file 只允许上报容器内 /workspace/... 路径。
             parts.append(f"## 其他 Agent 的输出上下文\n{context}\n")
         parts.append(message)
         full_message = "\n\n".join(parts)
+        if not self.provider_runner.runnable:
+            return self._provider_not_implemented()
         return self._call_claude(full_message)
+
+    def _provider_not_implemented(self) -> str:
+        msg = f"[Error] {self.provider_runner.unavailable_message()}"
+        push_event(self.agent_id, "error", {
+            "agent_id": self.agent_id,
+            "role": self.role,
+            "provider": self.provider_runner.provider_name,
+            "error": msg,
+        })
+        log_agent(
+            self.agent_id,
+            "provider_not_implemented",
+            level="error",
+            role=self.role,
+            provider=self.provider_runner.provider_name,
+        )
+        return msg
 
     def _runtime_instruction(self) -> str:
         moderator_rule = ""
@@ -159,7 +159,7 @@ image/file 只允许上报容器内 /workspace/... 路径。
 
 强制实时上报规则：
 1. 执行任何任务前，必须先用 Bash 调用 weagent-report 上报 progress。不要只在最终回复里描述进度。
-2. 每个关键步骤开始时调用 progress；步骤完成时调用 result；写入文件后调用 file；生成图片后调用 image；出错时调用 error。
+2. 每个关键步骤开始时调用 progress；步骤完成时调用 result；写入文件后调用 file；生成图片后调用 image；出错时调用 error；所有任务结束前必须调用 summary。
 3. 用户要求生成前端、脚本、项目、文档或任何可运行产物时，绝大多数情况必须真实写入 /workspace/agents/{self.workspace_name}/ 下的文件，再上报 file/image。
 4. image/file 只能上报容器内 /workspace/... 路径，不能上报宿主机路径、base64、data URL。
 5. table 只能使用 data.headers 和 data.rows：{{"type":"table","title":"标题","data":{{"headers":["列"],"rows":[["值"]]}}}}。
@@ -170,6 +170,7 @@ weagent-report 调用示例：
 weagent-report '{{"type":"progress","title":"分析需求","content":"正在确认任务范围","status":"running","step_id":"step-1"}}'
 weagent-report '{{"type":"result","title":"分析完成","content":"已确认实现范围","status":"done","step_id":"step-1"}}'
 weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/agents/{self.workspace_name}/index.html","data":{{"path":"/workspace/agents/{self.workspace_name}/index.html"}}}}'
+weagent-report '{{"type":"summary","title":"完成摘要","content":"已完成用户请求，生成的文件位于 /workspace/agents/{self.workspace_name}/index.html","status":"done"}}'
 
 {moderator_rule}
 下面才是用户任务。先上报 progress，再开始处理。
@@ -184,52 +185,34 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
         Claude Code runs in non-interactive bypass mode because there is no
         frontend path for approving container-local tool prompts.
         """
+        runner = self.provider_runner
         self._stop_signaled = False
         start_time = time.time()
-        exec_timeout = int(os.environ.get("CLAUDE_EXEC_TIMEOUT_SECONDS", "7200"))
+        exec_timeout = runner.timeout_seconds()
         log_agent(
             self.agent_id,
-            "claude_call_start",
+            f"{runner.log_prefix}_call_start",
             role=self.role,
             workspace_name=self.workspace_name,
+            provider=runner.provider_name,
             message_len=len(message or ""),
             message_preview=shorten(message, 300),
             timeout=exec_timeout,
         )
 
-        push_event(self.agent_id, "claude_started", {
-            "agent_id": self.agent_id,
-            "role": self.role,
-            "message": "Claude Code started",
-        })
+        push_event(self.agent_id, runner.started_event, runner.started_payload())
 
-        full_message = f"{self._runtime_instruction()}\n\n用户任务：\n{message}"
-        use_continue = retry_without_continue and os.path.exists(self._claude_session_marker)
-        cmd = ["claude"]
-        if use_continue:
-            cmd.append("-c")
-        cmd.extend([
-            "-p",
-            full_message,
-            "--permission-mode",
-            "bypassPermissions",
-            "--dangerously-skip-permissions",
-        ])
+        cmd, use_continue = runner.build_command(message, retry_with_resume=retry_without_continue)
         log_agent(
             self.agent_id,
-            "claude_context_mode",
+            f"{runner.log_prefix}_context_mode",
             role=self.role,
-            use_continue=use_continue,
-            marker=self._claude_session_marker,
+            provider=runner.provider_name,
+            **runner.context_log_fields(use_continue),
         )
 
         # Disable color/ANSI output for cleaner parsing
-        env = os.environ.copy()
-        env.update({
-            **claude_env(),
-            "WEAGENT_AGENT_ID": self.agent_id,
-            "WEAGENT_WORKSPACE_NAME": self.workspace_name,
-        })
+        env = runner.environment()
 
         try:
             proc = subprocess.Popen(
@@ -248,8 +231,9 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
                 self._process = proc
             log_agent(
                 self.agent_id,
-                "claude_process_started",
+                f"{runner.log_prefix}_process_started",
                 role=self.role,
+                provider=runner.provider_name,
                 pid=proc.pid,
                 cwd=self._agent_dir,
             )
@@ -277,9 +261,10 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
                     return
                 log_agent(
                     self.agent_id,
-                    "claude_prompt_marker_seen",
+                    f"{runner.log_prefix}_prompt_marker_seen",
                     level="warning",
                     role=self.role,
+                    provider=runner.provider_name,
                     chunk_preview=shorten(chunk, 200),
                 )
 
@@ -314,10 +299,7 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
                     elapsed = int(time.time() - start_time)
                     out_len = sum(len(part) for part in stdout_parts)
                     err_len = sum(len(part) for part in stderr_parts)
-                    if out_len or err_len:
-                        stage = f"Claude Code still running, streamed {out_len} chars"
-                    else:
-                        stage = "Claude Code is thinking or using tools"
+                    stage = runner.heartbeat_message(out_len, err_len)
                     if stage == last_stage and elapsed < 30:
                         continue
                     last_stage = stage
@@ -331,8 +313,9 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
                     })
                     log_agent(
                         self.agent_id,
-                        "claude_heartbeat",
+                        f"{runner.log_prefix}_heartbeat",
                         role=self.role,
+                        provider=runner.provider_name,
                         elapsed=elapsed,
                         stdout_chars=out_len,
                         stderr_chars=err_len,
@@ -361,52 +344,58 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
                 if name == "stdout":
                     stdout_parts.append(chunk)
                     _maybe_answer_prompt(chunk)
+                    event_chunk = runner.stream_chunk(chunk, "stdout")
                     log_agent(
                         self.agent_id,
-                        "claude_stdout_chunk",
+                        f"{runner.log_prefix}_stdout_chunk",
                         role=self.role,
+                        provider=runner.provider_name,
                         chunk_len=len(chunk),
                         chunk_preview=shorten(chunk, 200),
                     )
-                    push_event(self.agent_id, "claude_output_delta", {
-                        "agent_id": self.agent_id,
-                        "role": self.role,
-                        "chunk": chunk,
-                    })
+                    if event_chunk:
+                        push_event(self.agent_id, runner.stdout_delta_event, {
+                            "agent_id": self.agent_id,
+                            "role": self.role,
+                            "provider": runner.provider_name,
+                            "chunk": event_chunk,
+                        })
                 else:
                     stderr_parts.append(chunk)
                     _maybe_answer_prompt(chunk)
+                    event_chunk = runner.stream_chunk(chunk, "stderr")
                     log_agent(
                         self.agent_id,
-                        "claude_stderr_chunk",
+                        f"{runner.log_prefix}_stderr_chunk",
                         level="warning",
                         role=self.role,
+                        provider=runner.provider_name,
                         chunk_len=len(chunk),
                         chunk_preview=shorten(chunk, 200),
                     )
-                    push_event(self.agent_id, "claude_error_delta", {
-                        "agent_id": self.agent_id,
-                        "role": self.role,
-                        "chunk": chunk,
-                    })
+                    if event_chunk:
+                        push_event(self.agent_id, runner.stderr_delta_event, {
+                            "agent_id": self.agent_id,
+                            "role": self.role,
+                            "provider": runner.provider_name,
+                            "chunk": event_chunk,
+                        })
 
             proc.wait(timeout=5)
             heartbeat_stop.set()
             stdout = "".join(stdout_parts)
             stderr = "".join(stderr_parts)
+            clean_stderr = runner.clean_error_output(stderr)
             elapsed = time.time() - start_time
 
-            # Clean ANSI escape codes from output
-            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-            output = ansi_escape.sub('', stdout or "")
-
-            # Strip shell prompt artifacts
-            output = re.sub(r'^>\s*', '', output, flags=re.MULTILINE)
-            output = output.strip()
+            output = runner.clean_output(stdout or "")
+            if not output:
+                output = runner.fallback_output(stdout or "", clean_stderr)
             log_agent(
                 self.agent_id,
-                "claude_process_finished",
+                f"{runner.log_prefix}_process_finished",
                 role=self.role,
+                provider=runner.provider_name,
                 returncode=proc.returncode,
                 elapsed=round(elapsed, 2),
                 stdout_chars=len(stdout or ""),
@@ -415,107 +404,103 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
             )
 
             if self._stop_signaled:
-                push_event(self.agent_id, "claude_stopped", {
+                push_event(self.agent_id, runner.stopped_event, {
                     "agent_id": self.agent_id,
                     "role": self.role,
+                    "provider": runner.provider_name,
                     "message": "执行已停止",
                     "status": "stopped",
                 })
-                log_agent(self.agent_id, "claude_call_stopped", level="warning", role=self.role, elapsed=round(elapsed, 2))
-                return f"[Stopped] 执行已停止（{elapsed:.0f}s）"
+                log_agent(self.agent_id, f"{runner.log_prefix}_call_stopped", level="warning", role=self.role, provider=runner.provider_name, elapsed=round(elapsed, 2))
+                return runner.stopped_message(elapsed)
 
-            auth_error_patterns = (
-                "Not logged in",
-                "Please run /login",
-                "Invalid API key",
-                "ANTHROPIC_API_KEY",
-            )
-            if any(pattern in output for pattern in auth_error_patterns):
-                msg = f"[AuthError] {output}"
+            if runner.is_auth_error(output):
+                msg = runner.auth_error_message(output)
                 push_event(self.agent_id, "error", {
                     "agent_id": self.agent_id,
+                    "provider": runner.provider_name,
                     "error": msg,
                 })
-                log_agent(self.agent_id, "claude_auth_error", level="error", role=self.role, error=shorten(msg, 300))
+                log_agent(self.agent_id, f"{runner.log_prefix}_auth_error", level="error", role=self.role, provider=runner.provider_name, error=shorten(msg, 300))
                 return msg
 
             # If output is empty, surface stderr for debugging
             if not output:
-                err_msg = stderr.strip() if stderr else ""
-                if use_continue and self._should_retry_without_continue(err_msg):
+                err_msg = clean_stderr
+                if use_continue and runner.should_retry_without_resume(err_msg):
                     log_agent(
                         self.agent_id,
-                        "claude_continue_retry",
+                        f"{runner.log_prefix}_continue_retry",
                         level="warning",
                         role=self.role,
+                        provider=runner.provider_name,
                         stderr=shorten(err_msg, 500),
                     )
-                    try:
-                        os.remove(self._claude_session_marker)
-                    except OSError:
-                        pass
+                    runner.clear_resume_state()
                     return self._call_claude(message, retry_without_continue=False)
                 if err_msg:
                     push_event(self.agent_id, "error", {
                         "agent_id": self.agent_id,
+                        "provider": runner.provider_name,
                         "error": err_msg[:500],
                     })
-                    log_agent(self.agent_id, "claude_empty_output_with_stderr", level="error", role=self.role, stderr=shorten(err_msg, 500))
+                    log_agent(self.agent_id, f"{runner.log_prefix}_empty_output_with_stderr", level="error", role=self.role, provider=runner.provider_name, stderr=shorten(err_msg, 500))
                     return f"[Error] {err_msg[:500]}"
-                log_agent(self.agent_id, "claude_empty_output", level="error", role=self.role)
-                return "[Error] No output from Claude"
+                log_agent(self.agent_id, f"{runner.log_prefix}_empty_output", level="error", role=self.role, provider=runner.provider_name)
+                return runner.empty_output_message()
 
-            push_event(self.agent_id, "claude_output", {
+            push_event(self.agent_id, runner.output_event, {
                 "agent_id": self.agent_id,
                 "role": self.role,
+                "provider": runner.provider_name,
                 "output": output,
                 "elapsed": elapsed,
                 "char_count": len(output),
             })
-            if stderr and stderr.strip():
-                push_event(self.agent_id, "claude_error", {
+            if clean_stderr:
+                push_event(self.agent_id, runner.error_event, {
                     "agent_id": self.agent_id,
                     "role": self.role,
-                    "output": stderr.strip(),
+                    "provider": runner.provider_name,
+                    "output": clean_stderr,
                 })
 
-            try:
-                with open(self._claude_session_marker, "w", encoding="utf-8") as f:
-                    f.write(str(time.time()))
-            except OSError as e:
-                log_agent(self.agent_id, "claude_session_marker_failed", level="warning", role=self.role, error=str(e))
+            runner.mark_success()
 
             return output
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             try:
                 heartbeat_stop.set()
             except Exception:
                 pass
             proc.kill()
             timeout_seconds = getattr(e, "timeout", exec_timeout) or exec_timeout
-            msg = f"[Error] Claude execution timed out ({timeout_seconds}s)"
+            msg = runner.timeout_message(timeout_seconds)
             push_event(self.agent_id, "error", {
                 "agent_id": self.agent_id,
+                "provider": runner.provider_name,
                 "error": msg,
             })
-            log_agent(self.agent_id, "claude_timeout", level="error", role=self.role, timeout=timeout_seconds)
+            log_agent(self.agent_id, f"{runner.log_prefix}_timeout", level="error", role=self.role, provider=runner.provider_name, timeout=timeout_seconds)
             return msg
         except FileNotFoundError:
-            msg = "[Error] claude CLI not found. Check Docker image."
+            msg = runner.not_found_message()
             push_event(self.agent_id, "error", {
                 "agent_id": self.agent_id,
+                "provider": runner.provider_name,
                 "error": msg,
             })
-            log_agent(self.agent_id, "claude_not_found", level="error", role=self.role)
+            log_agent(self.agent_id, f"{runner.log_prefix}_not_found", level="error", role=self.role, provider=runner.provider_name)
             return msg
         except Exception as e:
             msg = f"[Error] {e}"
             push_event(self.agent_id, "error", {
                 "agent_id": self.agent_id,
+                "provider": runner.provider_name,
                 "error": msg,
             })
-            log_agent(self.agent_id, "claude_call_exception", level="error", role=self.role, error=str(e))
+            log_agent(self.agent_id, f"{runner.log_prefix}_call_exception", level="error", role=self.role, provider=runner.provider_name, error=str(e))
             return msg
         finally:
             try:
@@ -525,27 +510,21 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
             with self._lock:
                 self._process = None
             self._stop_signaled = False
-            log_agent(self.agent_id, "claude_call_cleanup", role=self.role)
+            log_agent(self.agent_id, f"{runner.log_prefix}_call_cleanup", role=self.role, provider=runner.provider_name)
 
     @staticmethod
     def _should_retry_without_continue(stderr: str) -> bool:
-        text = (stderr or "").lower()
-        retry_markers = (
-            "no conversation",
-            "conversation not found",
-            "could not continue",
-            "cannot continue",
-            "no previous",
-            "unknown option",
-            "invalid option",
-        )
-        return any(marker in text for marker in retry_markers)
+        from .providers.claude_code import ClaudeCodeRunner
+
+        return ClaudeCodeRunner._should_retry_without_continue(stderr)
 
     def to_dict(self) -> dict:
         return {
             "agent_id": self.agent_id,
             "role": self.role,
             "workspace_name": self.workspace_name,
+            "provider": self.provider_runner.provider_name,
+            "adapter_name": self.provider_runner.provider_name,
             "alive": True,
             "work_dir": self._agent_dir,
         }
@@ -555,3 +534,11 @@ weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/age
         clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", str(name or "").strip())
         clean = re.sub(r"\s+", "_", clean).strip("._ ")
         return clean[:80] or "agent"
+
+
+class ClaudeRuntime(AgentRuntime):
+    """Backward-compatible Claude runtime facade."""
+
+    def __init__(self, agent_id: str, role: str, system_prompt: str,
+                 workspace_name: str = ""):
+        super().__init__(agent_id, role, system_prompt, workspace_name, provider_name="claude")

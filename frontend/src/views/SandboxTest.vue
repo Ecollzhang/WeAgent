@@ -873,8 +873,19 @@ export default {
     },
 
     // ===== 事件显示 =====
+    normalizeProviderEventType(type) {
+      return {
+        provider_started: 'claude_started',
+        provider_output: 'claude_output',
+        provider_output_delta: 'claude_output_delta',
+        provider_error: 'claude_error',
+        provider_error_delta: 'claude_error_delta',
+        provider_stopped: 'claude_stopped',
+      }[type] || type
+    },
+
     displayEvent(agentId, ev) {
-      const type = ev.type
+      const type = this.normalizeProviderEventType(ev.type)
       const data = ev.data || {}
 
       if (type === 'agent_task_started' || type === 'delegation_target_started' || type === 'delegation_started') {

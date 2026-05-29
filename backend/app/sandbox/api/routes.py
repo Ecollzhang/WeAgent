@@ -222,6 +222,8 @@ def add_agent(session_id: str):
         "agent_id": agent_id,
         "role": data.get("role", "助手"),
         "system_prompt": data.get("system_prompt", ""),
+        "workspace_name": data.get("workspace_name") or data.get("role") or agent_id,
+        "adapter_name": data.get("adapter_name") or data.get("provider") or "claude",
     }
 
     try:

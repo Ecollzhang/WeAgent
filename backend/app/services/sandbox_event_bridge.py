@@ -1,5 +1,5 @@
 from datetime import datetime
-import re
+
 from sqlalchemy.orm.attributes import flag_modified
 
 from app import db, socketio
@@ -15,15 +15,23 @@ from app.services.message_element_builder import (
 )
 
 
+STARTED_EVENTS = {"provider_started", "claude_started"}
+OUTPUT_DELTA_EVENTS = {"provider_output_delta", "claude_output_delta"}
+ERROR_DELTA_EVENTS = {"provider_error_delta", "claude_error_delta"}
+OUTPUT_EVENTS = {"provider_output", "claude_output"}
+ERROR_OUTPUT_EVENTS = {"provider_error", "claude_error"}
+STOPPED_EVENTS = {"provider_stopped", "claude_stopped"}
+
+
 class SandboxEventBridge:
     """Map sandbox runtime events into formal chat messages."""
 
     def handle_event(self, payload):
-        session_id = payload.get('session_id')
-        agent_id = payload.get('agent_id')
-        event_type = payload.get('type')
-        event_data = payload.get('data') or {}
-        seq = payload.get('seq', 0)
+        session_id = payload.get("session_id")
+        agent_id = payload.get("agent_id")
+        event_type = payload.get("type")
+        event_data = payload.get("data") or {}
+        seq = payload.get("seq", 0)
 
         if not session_id or not agent_id:
             return
@@ -46,73 +54,108 @@ class SandboxEventBridge:
             db.session.commit()
             return
 
-        if event_type == 'claude_started':
+        if event_type in STARTED_EVENTS:
             self._append_event(message, event_type, event_data, seq)
-            element = progress_element(self._event_title(event_type, event_data), 'running',
-                                       event_data)
+            element = progress_element(
+                self._event_title(event_type, event_data), "running", event_data
+            )
             self._append_element(message, element)
-            message.status = 'streaming'
+            message.status = "streaming"
             db.session.commit()
             self._emit_element(conversation.id, message, run, agent_id, element)
             self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
-        if event_type == 'agent_task_started':
+        if event_type == "agent_task_started":
             self._append_event(message, event_type, event_data, seq)
-            element = progress_element(self._event_title(event_type, event_data), 'running',
-                                       event_data)
+            element = progress_element(
+                self._event_title(event_type, event_data), "running", event_data
+            )
             self._append_element(message, element)
             db.session.commit()
             self._emit_element(conversation.id, message, run, agent_id, element)
             self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
-        if event_type in ('claude_output_delta', 'claude_error_delta'):
-            chunk = event_data.get('chunk', '')
+        if event_type in OUTPUT_DELTA_EVENTS | ERROR_DELTA_EVENTS:
+            chunk = event_data.get("chunk", "")
             if chunk:
-                message.raw_output = (message.raw_output or '') + chunk
-                message.status = 'streaming'
+                message.raw_output = (message.raw_output or "") + chunk
+                message.status = "streaming"
                 message.content = self._summary_text(message.raw_output)
                 run.last_seq = max(run.last_seq or 0, int(seq or 0))
                 db.session.commit()
-                self._emit_status(conversation.id, message, run, agent_id, 'streaming')
+                self._emit_status(conversation.id, message, run, agent_id, "streaming")
             return
 
-        if event_type == 'agent_progress':
+        if event_type in OUTPUT_EVENTS:
+            output = event_data.get("output") or ""
             self._append_event(message, event_type, event_data, seq)
-            element = progress_element(self._event_title(event_type, event_data), 'running',
-                                       event_data)
-            self._append_or_replace_progress(message, element, 'agent_progress:heartbeat')
-            message.status = 'streaming'
+            if output and not message.raw_output:
+                message.raw_output = output
+                message.content = self._summary_text(message.raw_output)
+            message.status = "streaming"
+            run.last_seq = max(run.last_seq or 0, int(seq or 0))
+            db.session.commit()
+            self._emit_status(conversation.id, message, run, agent_id, "streaming")
+            self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
+            return
+
+        if event_type in ERROR_OUTPUT_EVENTS:
+            output = event_data.get("output") or event_data.get("error") or ""
+            self._append_event(message, event_type, event_data, seq)
+            if output:
+                element = progress_element(output, "error", event_data)
+                self._append_element(message, element)
+            run.last_seq = max(run.last_seq or 0, int(seq or 0))
+            db.session.commit()
+            if output:
+                self._emit_element(conversation.id, message, run, agent_id, element)
+            self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
+            return
+
+        if event_type == "agent_progress":
+            self._append_event(message, event_type, event_data, seq)
+            element = progress_element(
+                self._event_title(event_type, event_data), "running", event_data
+            )
+            self._append_or_replace_progress(message, element, "agent_progress:heartbeat")
+            message.status = "streaming"
             run.last_seq = max(run.last_seq or 0, int(seq or 0))
             db.session.commit()
             self._emit_element(conversation.id, message, run, agent_id, element)
             self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
-        if event_type == 'agent_report_element':
+        if event_type == "agent_report_element":
             element = report_event_element(session_id, event_data)
             if not element:
-                element = progress_element('无效进度上报', 'error', event_data)
+                element = progress_element("无效进度上报", "error", event_data)
             self._append_event(message, event_type, event_data, seq)
-            self._append_element(message, element)
-            message.status = 'streaming'
-            if element.get('type') in ('text', 'result', 'error'):
-                message.content = element.get('content') or message.content
+            if element.get("type") == "summary":
+                self._set_report_summary(message, element)
+            else:
+                self._append_element(message, element)
+            message.status = "streaming"
+            if element.get("type") == "summary" and not message.raw_output:
+                message.content = element.get("content") or message.content
+            elif element.get("type") in ("text", "result", "error"):
+                message.content = element.get("content") or message.content
             run.last_seq = max(run.last_seq or 0, int(seq or 0))
             db.session.commit()
             self._emit_element(conversation.id, message, run, agent_id, element)
             self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
-        if event_type == 'file_write':
+        if event_type == "file_write":
             element = file_event_element(session_id, event_data)
             self._append_event(message, event_type, event_data, seq)
-            progress = progress_element(self._event_title(event_type, event_data), 'done',
-                                        event_data)
+            progress = progress_element(
+                self._event_title(event_type, event_data), "done", event_data
+            )
             self._append_element(message, progress)
             if element:
-                key = element.get('data', {}).get('url') or element.get('data', {}).get('name')
+                key = element.get("data", {}).get("url") or element.get("data", {}).get("name")
                 if self._append_element(message, element, unique_key=key):
                     db.session.commit()
                     self._emit_element(conversation.id, message, run, agent_id, progress)
@@ -123,33 +166,39 @@ class SandboxEventBridge:
                 self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
-        if event_type == 'agent_task_completed':
+        if event_type == "agent_task_completed":
             self._append_event(message, event_type, event_data, seq)
-            self._append_mentioned_files(message, run.sandbox_session_id or conversation.sandbox_session_id)
+            self._append_mentioned_files(
+                message, run.sandbox_session_id or conversation.sandbox_session_id
+            )
             summary = self._summary_text(message.raw_output)
-            if summary and summary != '正在处理...':
-                self._append_element(message, result_element('本轮输出结果', summary, event_data))
-            self._append_element(message, progress_element(self._event_title(event_type, event_data),
-                                                           'done', event_data))
-            self._finish(message, run, conversation.id, agent_id, 'done', seq=seq)
+            if summary and summary != "正在处理...":
+                self._append_element(message, result_element("本轮输出结果", summary, event_data))
+            self._append_element(
+                message,
+                progress_element(self._event_title(event_type, event_data), "done", event_data),
+            )
+            self._finish(message, run, conversation.id, agent_id, "done", seq=seq)
             return
 
-        if event_type == 'claude_stopped':
+        if event_type in STOPPED_EVENTS:
             self._append_event(message, event_type, event_data, seq)
-            element = progress_element(self._event_title(event_type, event_data),
-                                       'stopped', event_data)
-            self._append_or_replace_progress(message, element, 'agent_progress:heartbeat')
-            self._finish(message, run, conversation.id, agent_id, 'stopped', seq=seq)
+            element = progress_element(
+                self._event_title(event_type, event_data), "stopped", event_data
+            )
+            self._append_or_replace_progress(message, element, "agent_progress:heartbeat")
+            self._finish(message, run, conversation.id, agent_id, "stopped", seq=seq)
             return
 
-        if event_type == 'error':
-            error = event_data.get('error') or event_data.get('message') or 'Agent execution failed'
+        if event_type == "error":
+            error = event_data.get("error") or event_data.get("message") or "Agent execution failed"
             self._append_event(message, event_type, event_data, seq)
-            message.raw_output = ((message.raw_output or '') + f'\n{error}').strip()
+            message.raw_output = ((message.raw_output or "") + f"\n{error}").strip()
             message.content = error
-            self._append_element(message, progress_element(error, 'error', event_data))
-            self._finish(message, run, conversation.id, agent_id, 'error',
-                         error=error, seq=seq)
+            self._append_element(message, progress_element(error, "error", event_data))
+            self._finish(
+                message, run, conversation.id, agent_id, "error", error=error, seq=seq
+            )
 
     def mark_agent_stopped(self, conversation_id, agent_id):
         run = agent_run_service.find_active_run(conversation_id, agent_id)
@@ -158,26 +207,27 @@ class SandboxEventBridge:
         message = Message.query.get(run.message_id) if run.message_id else None
         conversation = Conversation.query.get(conversation_id)
         if message and conversation:
-            message.status = 'stopped'
+            message.status = "stopped"
             if not (message.raw_output or message.content or message.elements):
-                message.content = '执行已停止'
+                message.content = "执行已停止"
                 self._append_or_replace_progress(
                     message,
-                    progress_element('执行已停止', 'stopped'),
-                    'agent_progress:heartbeat',
+                    progress_element("执行已停止", "stopped"),
+                    "agent_progress:heartbeat",
                 )
             db.session.commit()
-            self._emit_status(conversation_id, message, run, agent_id, 'stopped')
+            self._emit_status(conversation_id, message, run, agent_id, "stopped")
 
     def _finish(self, message, run, conversation_id, agent_id, status, error=None, seq=None):
         message.status = status
         if message.raw_output:
             message.content = self._summary_text(message.raw_output)
-        elif status == 'stopped':
-            if not (message.content or message.elements):
-                message.content = '执行已停止'
-                self._append_element(message, progress_element('执行已停止', 'stopped'))
-        run.status = status if status != 'done' else 'done'
+        elif self._report_summary(message):
+            message.content = self._report_summary(message)
+        elif status == "stopped" and not (message.content or message.elements):
+            message.content = "执行已停止"
+            self._append_element(message, progress_element("执行已停止", "stopped"))
+        run.status = status if status != "done" else "done"
         run.finished_at = datetime.utcnow()
         if error:
             run.error = error
@@ -187,25 +237,31 @@ class SandboxEventBridge:
         self._emit_status(conversation_id, message, run, agent_id, status, error=error)
 
     def _emit_status(self, conversation_id, message, run, agent_id, status, error=None):
-        socketio.emit('conversation_message_status', {
-            'conversation_id': conversation_id,
-            'message_id': message.id,
-            'run_id': run.id,
-            'agent_id': agent_id,
-            'status': status,
-            'content': message.content,
-            'elements': message.elements,
-            'raw_output': message.raw_output,
-            'sender_name': self._agent_name(Conversation.query.get(conversation_id), agent_id),
-            'events': (message.meta or {}).get('events', []),
-            'error': error,
-        }, room=conversation_id)
+        socketio.emit(
+            "conversation_message_status",
+            {
+                "conversation_id": conversation_id,
+                "message_id": message.id,
+                "run_id": run.id,
+                "agent_id": agent_id,
+                "status": status,
+                "content": message.content,
+                "elements": message.elements,
+                "raw_output": message.raw_output,
+                "sender_name": self._agent_name(Conversation.query.get(conversation_id), agent_id),
+                "events": (message.meta or {}).get("events", []),
+                "provider": self._message_provider(message),
+                "error": error,
+            },
+            room=conversation_id,
+        )
 
     def _append_element(self, message, element, unique_key=None):
         elements = list(message.elements or [])
         if unique_key:
             exists = any(
-                (item.get('data', {}).get('url') or item.get('data', {}).get('name')) == unique_key
+                (item.get("data", {}).get("url") or item.get("data", {}).get("name"))
+                == unique_key
                 for item in elements
             )
             if exists:
@@ -217,130 +273,197 @@ class SandboxEventBridge:
     def _append_or_replace_progress(self, message, element, progress_key):
         if not element:
             return False
-        detail = dict(element.get('detail') or {})
-        detail['progress_key'] = progress_key
-        element['detail'] = detail
-        data = dict(element.get('data') or {})
-        data['progress_key'] = progress_key
-        element['data'] = data
+        detail = dict(element.get("detail") or {})
+        detail["progress_key"] = progress_key
+        element["detail"] = detail
+        data = dict(element.get("data") or {})
+        data["progress_key"] = progress_key
+        element["data"] = data
 
         elements = list(message.elements or [])
         for index, item in enumerate(elements):
             item_key = (
-                (item.get('data') or {}).get('progress_key')
-                or (item.get('detail') or {}).get('progress_key')
-                or item.get('step_id')
+                (item.get("data") or {}).get("progress_key")
+                or (item.get("detail") or {}).get("progress_key")
+                or item.get("step_id")
             )
-            if item.get('type') == 'progress' and item_key == progress_key:
+            if item.get("type") == "progress" and item_key == progress_key:
                 elements[index] = element
                 message.elements = elements
-                flag_modified(message, 'elements')
+                flag_modified(message, "elements")
                 return True
         elements.append(element)
         message.elements = elements
-        flag_modified(message, 'elements')
+        flag_modified(message, "elements")
         return True
+
+    def _set_report_summary(self, message, element):
+        summary = (element.get("content") or "").strip()
+        if not summary:
+            return
+        meta = dict(message.meta or {})
+        meta["report_summary"] = summary
+        message.meta = meta
+        flag_modified(message, "meta")
+
+    @staticmethod
+    def _report_summary(message):
+        meta = message.meta if isinstance(message.meta, dict) else {}
+        return (meta.get("report_summary") or "").strip()
 
     def _emit_element(self, conversation_id, message, run, agent_id, element):
         payload = {
-            'conversation_id': conversation_id,
-            'message_id': message.id,
-            'run_id': run.id,
-            'agent_id': agent_id,
-            'sender_name': self._agent_name(Conversation.query.get(conversation_id), agent_id),
-            'element': element,
-            'raw_output': message.raw_output,
-            'content': message.content,
-            'status': message.status,
-            'events': (message.meta or {}).get('events', []),
+            "conversation_id": conversation_id,
+            "message_id": message.id,
+            "run_id": run.id,
+            "agent_id": agent_id,
+            "sender_name": self._agent_name(Conversation.query.get(conversation_id), agent_id),
+            "element": element,
+            "raw_output": message.raw_output,
+            "content": message.content,
+            "status": message.status,
+            "events": (message.meta or {}).get("events", []),
+            "provider": self._message_provider(message),
         }
-        socketio.emit('conversation_message_element_stream', payload, room=conversation_id)
+        socketio.emit("conversation_message_element_stream", payload, room=conversation_id)
 
     def _append_mentioned_files(self, message, session_id):
         if not session_id:
             return
-        text = '\n'.join(part for part in (message.raw_output, message.content) if part)
+        text = "\n".join(part for part in (message.raw_output, message.content) if part)
         for element in mentioned_file_elements(session_id, text):
-            key = element.get('data', {}).get('url') or element.get('data', {}).get('name')
+            key = element.get("data", {}).get("url") or element.get("data", {}).get("name")
             self._append_element(message, element, unique_key=key)
 
     def _append_event(self, message, event_type, event_data, seq=None):
         meta = dict(message.meta or {})
-        events = list(meta.get('events') or [])
+        events = list(meta.get("events") or [])
+        provider = event_data.get("provider") if isinstance(event_data, dict) else None
         title = self._event_title(event_type, event_data)
-        events.append({
-            'type': event_type,
-            'title': title,
-            'data': event_data,
-            'seq': seq,
-            'created_at': datetime.utcnow().isoformat(),
-        })
-        meta['events'] = events[-100:]
+        events.append(
+            {
+                "type": event_type,
+                "title": title,
+                "data": event_data,
+                "provider": provider,
+                "seq": seq,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+        )
+        if provider:
+            meta["provider"] = provider
+        meta["events"] = events[-100:]
         message.meta = meta
-        flag_modified(message, 'meta')
+        flag_modified(message, "meta")
 
     def _emit_step(self, conversation_id, message, run, agent_id, event_type, event_data, seq):
-        socketio.emit('conversation_message_step', {
-            'conversation_id': conversation_id,
-            'message_id': message.id,
-            'run_id': run.id,
-            'agent_id': agent_id,
-            'sender_name': self._agent_name(Conversation.query.get(conversation_id), agent_id),
-            'event': {
-                'type': event_type,
-                'title': self._event_title(event_type, event_data),
-                'data': event_data,
-                'seq': seq,
-                'created_at': datetime.utcnow().isoformat(),
+        socketio.emit(
+            "conversation_message_step",
+            {
+                "conversation_id": conversation_id,
+                "message_id": message.id,
+                "run_id": run.id,
+                "agent_id": agent_id,
+                "sender_name": self._agent_name(Conversation.query.get(conversation_id), agent_id),
+                "event": {
+                    "type": event_type,
+                    "title": self._event_title(event_type, event_data),
+                    "data": event_data,
+                    "provider": event_data.get("provider") if isinstance(event_data, dict) else None,
+                    "seq": seq,
+                    "created_at": datetime.utcnow().isoformat(),
+                },
+                "events": (message.meta or {}).get("events", []),
+                "provider": self._message_provider(message),
             },
-            'events': (message.meta or {}).get('events', []),
-        }, room=conversation_id)
+            room=conversation_id,
+        )
 
     @staticmethod
     def _event_title(event_type, event_data):
-        if event_type == 'claude_started':
-            return 'Claude Code 已启动'
-        if event_type == 'agent_progress':
-            message = event_data.get('message') or 'Agent 正在执行'
-            elapsed = event_data.get('elapsed')
+        if event_type in STARTED_EVENTS:
+            return f"{SandboxEventBridge._provider_label(event_data)} 已启动"
+        if event_type in OUTPUT_EVENTS:
+            return f"{SandboxEventBridge._provider_label(event_data)} 已回复"
+        if event_type in ERROR_OUTPUT_EVENTS:
+            return f"{SandboxEventBridge._provider_label(event_data)} 错误输出"
+        if event_type == "agent_progress":
+            message = event_data.get("message") or "Agent 正在执行"
+            elapsed = event_data.get("elapsed")
             if elapsed is not None:
-                return f'{message}（{elapsed}s）'
+                return f"{message}（{elapsed}s）"
             return message
-        if event_type == 'agent_report_element':
-            return event_data.get('title') or event_data.get('content') or 'Agent 上报进度'
-        if event_type == 'agent_task_started':
-            return event_data.get('message') or '开始执行任务'
-        if event_type == 'file_write':
+        if event_type == "agent_report_element":
+            return event_data.get("title") or event_data.get("content") or "Agent 上报进度"
+        if event_type == "agent_task_started":
+            return event_data.get("message") or "开始执行任务"
+        if event_type == "file_write":
             return f"写入文件：{event_data.get('file', '')}"
-        if event_type == 'agent_task_completed':
-            return event_data.get('message') or '任务完成'
-        if event_type == 'claude_stopped':
-            return event_data.get('message') or '执行已停止'
-        if event_type == 'error':
-            return event_data.get('error') or event_data.get('message') or '执行出错'
+        if event_type == "agent_task_completed":
+            return event_data.get("message") or "任务完成"
+        if event_type in STOPPED_EVENTS:
+            return event_data.get("message") or "执行已停止"
+        if event_type == "error":
+            return event_data.get("error") or event_data.get("message") or "执行出错"
         return event_type
 
     @staticmethod
     def _summary_text(raw_output):
-        text = (raw_output or '').strip()
+        text = (raw_output or "").strip()
         if not text:
-            return '正在处理...'
+            return "正在处理..."
         max_len = 12000
         if len(text) <= max_len:
             return text
         return text[-max_len:]
 
     @staticmethod
+    def _provider_label(event_data):
+        provider = ""
+        if isinstance(event_data, dict):
+            provider = (event_data.get("provider") or "").strip().lower()
+            message = event_data.get("message") or ""
+            if not provider and isinstance(message, str):
+                lower = message.lower()
+                if "claude" in lower:
+                    provider = "claude"
+                elif "codex" in lower:
+                    provider = "codex"
+                elif "opencode" in lower:
+                    provider = "opencode"
+        return {
+            "claude": "Claude Code",
+            "claude_code": "Claude Code",
+            "codex": "Codex",
+            "opencode": "OpenCode",
+        }.get(provider, "Provider")
+
+    @staticmethod
+    def _message_provider(message):
+        meta = message.meta if isinstance(message.meta, dict) else {}
+        provider = meta.get("provider")
+        if provider:
+            return provider
+        for event in reversed(meta.get("events") or []):
+            if isinstance(event, dict):
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                provider = event.get("provider") or data.get("provider")
+                if provider:
+                    return provider
+        return None
+
+    @staticmethod
     def _agent_name(conversation, agent_id):
         if not conversation:
             return agent_id
         participant = next(
-            (p for p in conversation.participants
-             if p.participant_type == 'agent' and p.participant_id == agent_id),
+            (
+                p for p in conversation.participants
+                if p.participant_type == "agent" and p.participant_id == agent_id
+            ),
             None,
         )
         return participant.participant_name if participant else agent_id
-
 
 
 sandbox_event_bridge = SandboxEventBridge()

@@ -1038,7 +1038,7 @@ export default {
                 isLeaf: true,
                 agentColor: agent.avatar_color || '#4080ff',
                 agentAvatar: agent.avatar_url || '',
-                adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' }[agent.adapter_name] || agent.adapter_name,
+                adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock' }[agent.adapter_name] || agent.adapter_name,
               })
             }
           }
@@ -1061,7 +1061,7 @@ export default {
             isLeaf: true,
             agentColor: agent.avatar_color || '#4080ff',
             agentAvatar: agent.avatar_url || '',
-            adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' }[agent.adapter_name] || agent.adapter_name,
+            adapterLabel: { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', mock: 'Mock' }[agent.adapter_name] || agent.adapter_name,
           }))
           treeData.push({
             id: '_uncategorized',

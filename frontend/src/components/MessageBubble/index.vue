@@ -2,6 +2,7 @@
   <div class="message-bubble" :class="{ own: isOwn }">
     <div class="bubble-sender" v-if="message.sender_type === 'agent'">
       <span class="agent-tag">{{ getSenderName() }}</span>
+      <span v-if="providerLabel" class="provider-tag">{{ providerLabel }}</span>
       <span v-if="message.status" class="status-tag" :class="'status-' + message.status">
         {{ statusLabel(message.status) }}
       </span>
@@ -54,6 +55,14 @@
             <div class="result-title">
               <i class="el-icon-finished"></i>
               <span>{{ elementData(el).title || '执行结果' }}</span>
+            </div>
+            <div class="result-content" v-html="renderText(elementContent(el))"></div>
+          </div>
+
+          <div v-else-if="el.type === 'summary'" class="el-result">
+            <div class="result-title">
+              <i class="el-icon-finished"></i>
+              <span>{{ elementData(el).title || '完成摘要' }}</span>
             </div>
             <div class="result-content" v-html="renderText(elementContent(el))"></div>
           </div>
@@ -276,6 +285,15 @@ export default {
     hasElements() {
       return this.message && Array.isArray(this.message.elements) && this.message.elements.length > 0
     },
+    providerLabel() {
+      const provider = this.message?.meta?.provider || this.latestEventProvider()
+      if (!provider) return ''
+      const key = String(provider).toLowerCase()
+      if (key === 'codex') return 'Codex'
+      if (key === 'opencode') return 'OpenCode'
+      if (key === 'claude' || key === 'claude_code') return 'Claude Code'
+      return provider
+    },
     renderedElements() {
       const elements = Array.isArray(this.message?.elements) ? this.message.elements : []
       const merged = []
@@ -301,7 +319,7 @@ export default {
       return merged
     },
     contentElements() {
-      return this.renderedElements.filter(el => ['text', 'result', 'error'].includes(el?.type))
+      return this.renderedElements.filter(el => ['text', 'summary', 'result', 'error'].includes(el?.type))
     },
     progressElements() {
       return this.renderedElements.filter(el => el?.type === 'progress')
@@ -387,6 +405,15 @@ export default {
         error: '错误',
         stopped: '已停止',
       }[status] || status
+    },
+    latestEventProvider() {
+      const events = Array.isArray(this.message?.meta?.events) ? this.message.meta.events : []
+      for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i] || {}
+        const provider = event.provider || event.data?.provider
+        if (provider) return provider
+      }
+      return ''
     },
     showArtifact() {
       this.$emit('show-artifact', this.message.artifact)
@@ -769,6 +796,16 @@ export default {
   font-size: 12px;
   color: #4080ff;
   font-weight: 500;
+}
+
+.provider-tag {
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #eef2ff;
+  color: #475569;
+  border: 1px solid #dbe3ff;
 }
 
 .status-tag {

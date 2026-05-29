@@ -72,6 +72,87 @@ interface AgentAdapter {
 }
 ```
 
+### Python MVP 调用位置
+
+后端 MVP 通过 `AgentAdapterFactory.create(provider)` 创建 adapter，通过
+`AgentRequest.workspace_path` 指定 Claude/Codex 的运行目录。这个字段后续可以由
+sandbox/workspace 层生成并传入。
+
+```py
+from pathlib import Path
+from app.adapters.factory import AgentAdapterFactory
+from app.adapters.types import AgentRequest
+
+adapter = AgentAdapterFactory.create("claude")  # or "codex"
+request = AgentRequest(
+    prompt="Reply briefly.",
+    conversation_id="demo",
+    agent_id="claude-demo",
+    agent_name="Claude Demo",
+    workspace_path=Path(r"E:\code for project\seedance-competition\agentshub\WeAgent"),
+)
+
+for event in adapter.stream(request):
+    print(event)
+```
+
+Workspace 解析顺序：
+
+1. `AgentRequest.workspace_path`
+2. `AGENT_WORKSPACE_ROOT`
+3. WeAgent project root
+
+当前范围只读取并标准化 message 流。hook 失败、MCP 状态、plan mode 提示、
+后台 agent 生命周期等 runtime 事件尚未暴露给 WeAgent。
+
+### Python MVP 后端集成状态
+
+当前后端 `message_service.send_message(... sender_type='user')` 已从 mock demo
+回复切换为触发 `orchestrator_service.dispatch_to_agents(...)`。Orchestrator 会：
+
+1. 读取会话中的 agent participants。
+2. 使用 `AgentAdapterFactory.create(agent.adapter_name)` 创建对应 adapter。
+3. 构造 `AgentRequest`，包含 conversation、agent、system prompt 和 workspace。
+4. 逐条广播 adapter 产出的 normalized events。
+5. 累积 `message.delta`，并在 `message.completed` 后保存一条最终 agent message。
+6. 对 adapter 异常广播 `agent.failed`，避免调用方无响应。
+
+前端已经接入 `agent.started`、`message.delta`、`message.completed`、`agent.failed`
+的最小 SSE 监听，并通过 Vuex 临时消息展示流式文本。后端 SSE 会把 normalized
+agent events 作为 named SSE events 发出，持久化 DB message 仍走默认 data event。
+
+localhost smoke 已验证：
+
+- `http://127.0.0.1:5000/api/health` 返回 200。
+- `http://127.0.0.1:8080` 返回 200。
+- mock adapter 会发出 `agent.started`、`message.delta`、`message.completed` 和 `done`。
+- 最终会话中包含用户消息和保存后的 agent 消息。
+
+### Conversation Context
+
+WeAgent now provides conversation-scoped context before invoking Claude/Codex adapters.
+This is WeAgent-owned context, not provider-native Claude/Codex session resume.
+
+Current behavior:
+
+- `ConversationContextService.build_context(...)` loads a bounded transcript for the same `conversation_id`.
+- The default transcript window is 20 messages.
+- `orchestrator_service._build_agent_request(...)` assembles a provider-neutral prompt with:
+  - `## Agent Instructions`
+  - `## Conversation Context`
+  - `## File and Artifact Context`
+  - `## Current User Message`
+- `AgentRequest.conversation_history` carries the transcript for tests and future providers.
+- `artifact.created` events with a `storagePath` are recorded as file/artifact context for later turns.
+- File-read context is only captured when normalized provider events expose file paths. If a CLI provider reads a file but emits no path event, WeAgent cannot yet record that read as structured context.
+
+Deferred:
+
+- provider-native session resume for Claude/Codex
+- interactive choices and continuation
+- background agent lifecycle
+- full hook/MCP/plan-mode event surface
+
 ## 6. Codex Adapter
 
 推荐思路：
@@ -116,6 +197,14 @@ for line in process.stdout:
 - exit code 非 0。
 - 文件产物识别。
 
+真实 Codex CLI JSONL 中已观察到的消息形状：
+
+```json
+{"type":"item.completed","item":{"type":"agent_message","text":"codex adapter stream ok"}}
+```
+
+MVP normalizer 会将该形状映射为 `message.completed`。
+
 ## 7. Claude Code Adapter
 
 优先路线：SDK 流式读取。
@@ -125,6 +214,7 @@ for line in process.stdout:
 ```bash
 claude -p \
   --output-format stream-json \
+  --verbose \
   --include-partial-messages \
   --permission-mode plan \
   "<user_prompt>"
@@ -196,4 +286,3 @@ Mock 不只是测试用，它也是 Demo 风险控制。
 - [D Orchestrator 编排层](./D_orchestrator.md)
 - [F Runtime 与 Sandbox 层](./F_runtime_sandbox.md)
 - [事件协议附录](../appendices/event_protocol_reference.md)
-

@@ -231,6 +231,7 @@ class ConversationService:
                 'role': agent.name,
                 'workspace_name': workspace_name,
                 'system_prompt': '\n'.join(part for part in system_prompt_parts if part),
+                'adapter_name': agent.adapter_name or 'claude',
             })
 
         try:

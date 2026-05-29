@@ -6,7 +6,7 @@
 FROM python:3.11-slim
 
 # ---- 安装 Node.js + Claude CLI ----
-RUN apt-get update && apt-get install -y curl \
+RUN apt-get update && apt-get install -y curl git ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g @anthropic-ai/claude-code \
@@ -14,10 +14,15 @@ RUN apt-get update && apt-get install -y curl \
     && npm install @anthropic-ai/claude-code-linux-x64 --no-save \
     && node install.cjs \
     && cd / \
+    && npm install -g @openai/codex opencode-ai \
+    && pip install --no-cache-dir codex-relay \
     && npm cache clean --force \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && claude --version
+    && claude --version \
+    && codex --version \
+    && codex-relay --help >/dev/null \
+    && opencode --version
 
 # ---- 安装 Orchestrator Python 依赖 ----
 RUN pip install --no-cache-dir flask requests

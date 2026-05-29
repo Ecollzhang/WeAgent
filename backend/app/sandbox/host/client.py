@@ -48,15 +48,20 @@ class OrchestratorClient:
     def health_check(self) -> dict:
         return self._request("GET", "/api/health")
 
+    def get_providers(self) -> dict:
+        return self._request("GET", "/api/providers")
+
     # ---- Agents ----
 
     def create_agent(self, agent_id: str, role: str = "助手",
-                     system_prompt: str = "", workspace_name: str = "") -> dict:
+                     system_prompt: str = "", workspace_name: str = "",
+                     adapter_name: str = "claude") -> dict:
         return self._request("POST", "/api/agents/create", {
             "agent_id": agent_id,
             "role": role,
             "system_prompt": system_prompt,
             "workspace_name": workspace_name or role or agent_id,
+            "adapter_name": adapter_name or "claude",
         })
 
     def remove_agent(self, agent_id: str) -> dict:

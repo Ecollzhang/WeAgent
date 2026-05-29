@@ -33,6 +33,7 @@ from container.orchestrator import Orchestrator
 from container.events import get_events
 from container.claude_config import clean_base_url, clean_config_value, claude_env, write_settings, trust_projects
 from container.logging_utils import configure_logging, log_agent, log_event, shorten
+from container.provider_health import get_provider_health
 
 app = Flask(__name__)
 configure_logging()
@@ -89,6 +90,8 @@ def _init_claude_settings():
 
 # Write Claude settings on import
 _init_claude_settings()
+PROVIDER_HEALTH = get_provider_health()
+log_event("provider_health_initialized", providers=PROVIDER_HEALTH)
 
 
 # ============================
@@ -98,8 +101,17 @@ _init_claude_settings()
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    log_event("api_health", agent_count=len(orchestrator.agents))
-    return jsonify({"status": "ok", "agents": len(orchestrator.agents)})
+    providers = PROVIDER_HEALTH
+    log_event("api_health", agent_count=len(orchestrator.agents), providers=providers)
+    return jsonify({"status": "ok", "agents": len(orchestrator.agents), "providers": providers})
+
+
+@app.route("/api/providers", methods=["GET"])
+def providers():
+    refresh = request.args.get("refresh", "false").lower() == "true"
+    health = get_provider_health() if refresh else PROVIDER_HEALTH
+    log_event("api_providers", providers=health)
+    return jsonify({"status": "ok", "providers": health})
 
 
 # ============================
@@ -114,13 +126,14 @@ def create_agent():
     role = data.get("role", "助手")
     system_prompt = data.get("system_prompt", "")
     workspace_name = data.get("workspace_name") or role or agent_id
+    adapter_name = data.get("adapter_name") or data.get("provider") or "claude"
 
     if not agent_id:
         log_event("api_create_agent_rejected", level="warning", reason="agent_id required")
         return jsonify({"status": "error", "error": "agent_id required"}), 400
 
-    log_agent(agent_id, "api_create_agent", role=role, workspace_name=workspace_name)
-    result = orchestrator.create_agent(agent_id, role, system_prompt, workspace_name)
+    log_agent(agent_id, "api_create_agent", role=role, workspace_name=workspace_name, adapter_name=adapter_name)
+    result = orchestrator.create_agent(agent_id, role, system_prompt, workspace_name, adapter_name)
     if "error" in result:
         log_agent(agent_id, "api_create_agent_failed", level="error", error=result.get("error"))
         return jsonify(result), 400
@@ -509,7 +522,9 @@ def agent_events(agent_id: str):
 
 @app.route("/api/session", methods=["GET"])
 def session_info():
-    return jsonify(orchestrator.get_session_info())
+    data = orchestrator.get_session_info()
+    data["providers"] = PROVIDER_HEALTH
+    return jsonify(data)
 
 
 # ============================

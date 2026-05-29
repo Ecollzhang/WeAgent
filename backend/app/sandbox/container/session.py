@@ -74,11 +74,16 @@ def get_recent_context(agent_id: str, count: int = 5) -> str:
     return "\n\n".join(parts)
 
 
+def _normalize_adapter_name(adapter_name: str = "") -> str:
+    return (adapter_name or "claude").strip().lower() or "claude"
+
+
 def save_agent_config(agent_id: str, role: str, system_prompt: str,
-                      workspace_name: str = ""):
+                      workspace_name: str = "", adapter_name: str = "claude"):
     """Save agent config to session config."""
     config = load_config()
     agents = config.get("agents", [])
+    adapter_name = _normalize_adapter_name(adapter_name)
     # Update if exists, else append
     for a in agents:
         if a["agent_id"] == agent_id:
@@ -86,6 +91,8 @@ def save_agent_config(agent_id: str, role: str, system_prompt: str,
                 "role": role,
                 "system_prompt": system_prompt,
                 "workspace_name": workspace_name or role or agent_id,
+                "adapter_name": adapter_name,
+                "provider": adapter_name,
             })
             break
     else:
@@ -94,6 +101,8 @@ def save_agent_config(agent_id: str, role: str, system_prompt: str,
             "role": role,
             "system_prompt": system_prompt,
             "workspace_name": workspace_name or role or agent_id,
+            "adapter_name": adapter_name,
+            "provider": adapter_name,
         })
     config["agents"] = agents
     save_config(config)

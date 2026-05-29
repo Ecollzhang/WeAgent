@@ -2,6 +2,7 @@ const { defineConfig } = require('@vue/cli-service')
 
 module.exports = defineConfig({
   transpileDependencies: [],
+  // parallel: false, 根据需要自己开启或关闭
   devServer: {
     port: 8080,
     historyApiFallback: true,

@@ -2,7 +2,6 @@ from flask import request
 from flask_socketio import join_room, leave_room, emit
 from app import socketio
 from app.services.message_service import message_service
-from app.services.orchestrator_service import orchestrator_service
 
 
 @socketio.on('connect')
@@ -90,8 +89,9 @@ def handle_send_message(data):
                 'agents': [{'agent_id': p.participant_id} for p in agent_participants]
             }, room=conversation_id)
 
-            # Dispatch to orchestrator (runs agents in background)
-            orchestrator_service.dispatch_to_agents(conversation_id, result['id'])
+            # message_service.send_message already dispatches agents through
+            # the sandbox runtime. Do not invoke the deprecated host adapter
+            # orchestrator here, or the same user message will run twice.
 
 
 @socketio.on('agent_typing')

@@ -168,23 +168,33 @@ class DockerContainerManager:
             "SESSION_ID": session_id,
             "HOST_CALLBACK_URL": env_vars.get("HOST_CALLBACK_URL") if env_vars and env_vars.get("HOST_CALLBACK_URL") else f"http://host.docker.internal:{os.getenv('PORT', '5001')}",
         }
-        # Pass through Claude-related env vars if provided
-        claude_env_keys = [
+        # Pass through provider env vars if provided. The container runners
+        # translate these into each provider's private home/config.
+        provider_env_keys = [
             "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
             "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
+            "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+            "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL",
+            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML",
+            "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "OPENCODE_MODEL",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
             "API_TIMEOUT_MS", "CLAUDE_EXEC_TIMEOUT_SECONDS",
+            "CODEX_EXEC_TIMEOUT_SECONDS", "OPENCODE_EXEC_TIMEOUT_SECONDS",
+            "AGENT_EXEC_TIMEOUT_SECONDS",
             "HTTP_PROXY", "HTTPS_PROXY",
         ]
         if env_vars:
-            for key in claude_env_keys:
+            for key in provider_env_keys:
                 if key in env_vars:
                     if key.endswith("BASE_URL"):
                         container_env[key] = _clean_base_url(env_vars[key])
                     elif key in {
                         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                         "ANTHROPIC_MODEL", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL",
+                        "OPENAI_API_KEY", "OPENAI_MODEL",
+                        "CODEX_API_KEY", "CODEX_MODEL",
+                        "OPENCODE_API_KEY", "OPENCODE_MODEL",
                     }:
                         container_env[key] = _clean_config_value(env_vars[key])
                     else:
@@ -237,7 +247,8 @@ class DockerContainerManager:
         for agent_cfg in agents:
             print(
                 f"[SandboxManager] create_agent session_id={session_id} "
-                f"agent_id={agent_cfg.get('agent_id')} role={agent_cfg.get('role')}"
+                f"agent_id={agent_cfg.get('agent_id')} role={agent_cfg.get('role')} "
+                f"adapter_name={agent_cfg.get('adapter_name', 'claude')}"
             )
             self._create_agent_in_container(host_port, agent_cfg)
 
@@ -404,6 +415,7 @@ class DockerContainerManager:
             role=config.get("role", "助手"),
             system_prompt=config.get("system_prompt", ""),
             workspace_name=config.get("workspace_name") or config.get("role") or config["agent_id"],
+            adapter_name=config.get("adapter_name") or config.get("provider") or "claude",
         )
         if result.get("status") == "ok":
             session.agents_config = [
@@ -715,6 +727,7 @@ class DockerContainerManager:
             role=config.get("role", "助手"),
             system_prompt=config.get("system_prompt", ""),
             workspace_name=config.get("workspace_name") or config.get("role") or config["agent_id"],
+            adapter_name=config.get("adapter_name") or config.get("provider") or "claude",
         )
 
     @staticmethod
