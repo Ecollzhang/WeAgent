@@ -94,7 +94,7 @@
 
 ## Checkpoint 9: End-to-End Regression
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 

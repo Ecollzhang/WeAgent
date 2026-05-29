@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 8 complete; Checkpoint 9 next
+**Status:** Checkpoint 9 complete; Phase 001 ready for review
 
 ## Completed
 
@@ -26,6 +26,7 @@
 - Completed Checkpoint 6 minimal MCP npx runtime inside the sandbox.
 - Completed Checkpoint 7 Plugin manifest import and install-record visibility.
 - Completed Checkpoint 8 Skill draft sync from workspace runtime changes to DB drafts.
+- Completed Checkpoint 9 end-to-end regression and preservation checks.
 
 ## Current Branch Notes
 
@@ -35,4 +36,4 @@
 
 ## Next Action
 
-Begin Checkpoint 9: end-to-end regression across multi-agent display, progress display, artifact display, and the toolset happy path.
+Review Phase 001 Toolset Capabilities v1, then decide whether to run manual UI acceptance or prepare the phase for merge.

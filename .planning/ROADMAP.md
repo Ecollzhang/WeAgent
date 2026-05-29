@@ -8,7 +8,7 @@
 ### Phase 001: Toolset Capabilities v1
 
 **Directory:** `.planning/phases/001-toolset`
-**Status:** Planned
+**Status:** Complete
 **Goal:** Add DB-backed capability library, Agent default bindings, `.weagent/*` sandbox projection, Skill lifecycle, minimal Tool/MCP call recording, and Plugin manifest import records.
 
 **Canonical references:**
@@ -41,4 +41,3 @@ Map `.weagent/*` to Claude/Codex runtime conventions without changing the DB cap
 ### Phase 003: Sandbox Security Hardening
 
 Harden existing sandbox routes, auth, workspace access, and permission enforcement beyond capability-specific checks.
-
