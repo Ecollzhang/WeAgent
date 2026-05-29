@@ -124,6 +124,8 @@ def _tool_record(binding: AgentCapabilityBinding, runtime_id: str) -> dict:
         "version_id": version.id,
         "name": capability.name,
         "description": capability.description or "",
+        "source": capability.source,
+        "source_ref": capability.source_ref or "",
         "manifest": version.manifest or {},
         "permissions": version.permissions or {"required": [], "optional": []},
     }
@@ -142,6 +144,9 @@ def _binding_view(binding: AgentCapabilityBinding, capability_record: dict) -> d
         "authorization_snapshot": binding.authorization_snapshot or {},
         "path": capability_record.get("path"),
         "runtime_id": capability_record["runtime_id"],
+        "source": binding.capability.source,
+        "source_ref": binding.capability.source_ref or "",
+        "manifest": binding.capability_version.manifest or {},
     }
 
 

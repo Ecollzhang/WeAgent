@@ -53,7 +53,7 @@
 
 ## Checkpoint 5: Built-in Tool Audit
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 
@@ -62,6 +62,8 @@
 - The call sync path persists a DB `CapabilityCallRecord`.
 
 ## Checkpoint 6: Minimal MCP npx Runtime
+
+**Status:** Next
 
 **Exit criteria:**
 

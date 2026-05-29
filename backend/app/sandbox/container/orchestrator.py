@@ -198,7 +198,9 @@ class Orchestrator:
             tool_results = []
             if self._should_collect_agent_files(agent_id):
                 log_agent(agent_id, "artifact_collection_start", role=role)
-                tool_results = self._execute_tool_calls(agent_id, reply)
+                tool_results = self._execute_tool_calls(
+                    agent_id, reply, run_id=capability_run_id
+                )
                 if not tool_results:
                     tool_results = self._parse_and_write_code_blocks(agent_id, reply)
 
@@ -303,7 +305,9 @@ class Orchestrator:
 
                 tool_results = []
                 if self._should_collect_agent_files(agent_id):
-                    tool_results = self._execute_tool_calls(agent_id, reply)
+                    tool_results = self._execute_tool_calls(
+                        agent_id, reply, run_id=capability_run_id
+                    )
                     if not tool_results:
                         tool_results = self._parse_and_write_code_blocks(agent_id, reply)
                     if not tool_results:
@@ -515,7 +519,15 @@ class Orchestrator:
 
     def execute_tool(self, agent_id: str, tool_name: str, args: dict) -> str:
         """Execute a tool on behalf of an agent."""
-        return self.tools.call_from_agent(agent_id, tool_name, args)
+        run_id = self._write_capability_run_snapshot(agent_id)
+        session_id = (self.capability_projection or {}).get("session_id", "")
+        return self.tools.call_from_agent(
+            agent_id,
+            tool_name,
+            args,
+            run_id=run_id,
+            session_id=session_id,
+        )
 
     def list_tools(self) -> list[dict]:
         return self.tools.list_tools()
@@ -627,9 +639,11 @@ class Orchestrator:
         r"<tool_call>\s*({.*?})\s*</tool_call>", re.DOTALL
     )
 
-    def _execute_tool_calls(self, agent_id: str, response: str) -> list[dict]:
+    def _execute_tool_calls(self, agent_id: str, response: str,
+                            run_id: str = None) -> list[dict]:
         """Parse <tool_call> blocks from agent response and execute them."""
         results = []
+        session_id = (self.capability_projection or {}).get("session_id", "")
         for match in self.TOOL_CALL_PATTERN.finditer(response):
             raw = match.group(1)
             try:
@@ -639,7 +653,13 @@ class Orchestrator:
                 if not tool_name:
                     results.append({"error": "Missing 'name' in tool_call"})
                     continue
-                result = self.tools.call_from_agent(agent_id, tool_name, args)
+                result = self.tools.call_from_agent(
+                    agent_id,
+                    tool_name,
+                    args,
+                    run_id=run_id,
+                    session_id=session_id,
+                )
                 results.append({"tool": tool_name, "result": result})
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})

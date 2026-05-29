@@ -10,12 +10,22 @@ import os
 import subprocess
 from typing import Any, Callable
 
+from ..capabilities import (
+    append_tool_call_record,
+    now_iso,
+    permissions_for_tool,
+    resolve_bound_tool_capability,
+    summarize_tool_input,
+    summarize_tool_output,
+)
+
 
 class ToolRegistry:
     """Registry of tools available to agents."""
 
-    def __init__(self):
+    def __init__(self, workspace_root: str = "/workspace"):
         self._tools: dict[str, dict] = {}
+        self.workspace_root = os.path.realpath(workspace_root)
 
     def register(self, name: str, fn: Callable, description: str = ""):
         self._tools[name] = {"fn": fn, "description": description or name}
@@ -24,16 +34,63 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if not tool:
             raise KeyError(f"Tool '{name}' not found")
-        return tool["fn"](**kwargs)
+        global WORKSPACE_ROOT
+        previous_root = WORKSPACE_ROOT
+        WORKSPACE_ROOT = self.workspace_root
+        try:
+            return tool["fn"](**kwargs)
+        finally:
+            WORKSPACE_ROOT = previous_root
 
     def list_tools(self) -> list[dict]:
         return [{"name": n, "description": i["description"]} for n, i in self._tools.items()]
 
-    def call_from_agent(self, agent_id: str, tool_name: str, args: dict) -> str:
+    def call_from_agent(self, agent_id: str, tool_name: str, args: dict,
+                        run_id: str = None, session_id: str = None) -> str:
+        started_at = now_iso()
+        tool_capability = resolve_bound_tool_capability(
+            agent_id,
+            tool_name,
+            workspace_root=self.workspace_root,
+        )
+        permissions_used = permissions_for_tool(tool_name)
+
+        def _record(status: str, result=None, error: str = None):
+            if not tool_capability or not run_id:
+                return
+            append_tool_call_record(
+                {
+                    "session_id": session_id or "",
+                    "run_id": run_id,
+                    "agent_id": agent_id,
+                    "capability_id": tool_capability.get("capability_id"),
+                    "capability_version_id": tool_capability.get("capability_version_id"),
+                    "call_type": "tool",
+                    "tool_name": tool_name,
+                    "permissions_used": permissions_used,
+                    "input_summary": summarize_tool_input(tool_name, args or {}),
+                    "output_summary": summarize_tool_output(result) if error is None else {},
+                    "status": status,
+                    "error": error,
+                    "started_at": started_at,
+                    "completed_at": now_iso(),
+                },
+                workspace_root=self.workspace_root,
+            )
+
         try:
+            if tool_capability:
+                granted = set(tool_capability.get("granted_permissions") or [])
+                missing = sorted(set(permissions_used) - granted)
+                if missing:
+                    raise PermissionError(
+                        f"Missing granted permissions for {tool_name}: {', '.join(missing)}"
+                    )
             result = self.execute(tool_name, **args)
+            _record("completed", result=result)
             return json.dumps({"status": "ok", "result": result}, ensure_ascii=False)
         except Exception as e:
+            _record("failed", error=str(e))
             return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False)
 
 

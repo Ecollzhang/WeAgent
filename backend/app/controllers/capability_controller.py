@@ -13,6 +13,7 @@ from app.schemas.capability_schema import (
     ImportNpxManifestSchema,
     UpdateCapabilityBindingSchema,
 )
+from app.services.capability_call_sync_service import capability_call_sync_service
 from app.services.capability_service import capability_service
 from app.utils.response import error_response, success_response
 
@@ -150,7 +151,7 @@ def sync_call_records():
     data, validation_error = _load(CallSyncSchema)
     if validation_error:
         return error_response(validation_error, code=400)
-    result, error = capability_service.sync_call_records(
+    result, error = capability_call_sync_service.sync_records(
         user_id=user_id,
         records=data["records"],
     )

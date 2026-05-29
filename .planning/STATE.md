@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 4 complete; Checkpoint 5 next
+**Status:** Checkpoint 5 complete; Checkpoint 6 next
 
 ## Completed
 
@@ -22,6 +22,7 @@
 - Completed Checkpoint 2 service/API foundation.
 - Completed Checkpoint 3 frontend Capability Library and Agent binding UI.
 - Completed Checkpoint 4 runtime projection and `.weagent/*` injection path.
+- Completed Checkpoint 5 built-in Tool call audit through capability bindings.
 
 ## Current Branch Notes
 
@@ -31,4 +32,4 @@
 
 ## Next Action
 
-Begin Checkpoint 5: built-in Tool call audit through capability bindings and `.weagent/runs/<run_id>/calls.jsonl`.
+Begin Checkpoint 6: minimal MCP npx runtime inside the sandbox.

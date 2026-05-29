@@ -1,9 +1,22 @@
 import json
 import os
 import re
+from datetime import datetime
 
 
 DEFAULT_WORKSPACE_ROOT = "/workspace"
+
+BUILTIN_TOOL_RUNTIME_NAMES = {
+    "file_operations": {"read_file", "write_file", "list_files"},
+    "terminal": {"run_command"},
+}
+
+TOOL_PERMISSION_USAGE = {
+    "read_file": ["read_workspace"],
+    "list_files": ["read_workspace"],
+    "write_file": ["write_workspace"],
+    "run_command": ["run_command"],
+}
 
 
 def _safe_segment(value) -> str:
@@ -25,6 +38,11 @@ def _write_text(path: str, content: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(content or "")
+
+
+def _read_json(path: str) -> dict:
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def agent_bootstrap_instruction(agent_id: str,
@@ -126,3 +144,88 @@ def write_run_snapshot(projection: dict, run_id: str,
     if not os.path.exists(calls_path):
         _write_text(calls_path, "")
     return {"status": "ok", "run_id": safe_run_id, "snapshot": snapshot_path, "calls": calls_path}
+
+
+def permissions_for_tool(tool_name: str) -> list[str]:
+    return TOOL_PERMISSION_USAGE.get(tool_name, [])
+
+
+def resolve_bound_tool_capability(agent_id: str, tool_name: str,
+                                  workspace_root: str = DEFAULT_WORKSPACE_ROOT) -> dict | None:
+    """Find a Tool capability bound to this Agent that owns tool_name."""
+    agent_path = _weagent_path(
+        workspace_root,
+        "agents",
+        _safe_segment(agent_id),
+        "capabilities.json",
+    )
+    if not os.path.exists(agent_path):
+        return None
+
+    view = _read_json(agent_path)
+    for capability in view.get("capabilities") or []:
+        if capability.get("type") != "tool":
+            continue
+        source_ref = capability.get("source_ref")
+        manifest = capability.get("manifest") or {}
+        if not source_ref:
+            source_ref = (manifest.get("tool") or {}).get("value")
+        runtime_names = set(capability.get("tool_names") or [])
+        runtime_names.update(BUILTIN_TOOL_RUNTIME_NAMES.get(source_ref, set()))
+        if not runtime_names and source_ref:
+            runtime_names.add(source_ref)
+        if tool_name not in runtime_names:
+            continue
+        return {
+            "binding_id": capability.get("binding_id"),
+            "capability_id": capability.get("capability_id"),
+            "capability_version_id": capability.get("capability_version_id"),
+            "runtime_id": capability.get("runtime_id"),
+            "source_ref": source_ref,
+            "granted_permissions": capability.get("granted_permissions") or [],
+        }
+    return None
+
+
+def summarize_tool_input(tool_name: str, args: dict) -> dict:
+    args = args or {}
+    if tool_name in {"read_file", "list_files"}:
+        return {"path": args.get("path", "")}
+    if tool_name == "write_file":
+        return {
+            "path": args.get("path", ""),
+            "content_length": len(args.get("content") or ""),
+        }
+    if tool_name == "run_command":
+        command = args.get("command", "")
+        return {"command": command[:300], "command_length": len(command)}
+    return {"arg_keys": sorted(args.keys())}
+
+
+def summarize_tool_output(result) -> dict:
+    if isinstance(result, str):
+        return {"text_length": len(result), "preview": result[:300]}
+    if isinstance(result, dict):
+        return {"keys": sorted(result.keys())}
+    if isinstance(result, list):
+        return {"items": len(result)}
+    return {"type": type(result).__name__}
+
+
+def append_tool_call_record(record: dict, workspace_root: str = DEFAULT_WORKSPACE_ROOT):
+    run_id = record.get("run_id")
+    if not run_id:
+        return
+    calls_path = _weagent_path(
+        workspace_root,
+        "runs",
+        _safe_segment(run_id),
+        "calls.jsonl",
+    )
+    os.makedirs(os.path.dirname(calls_path), exist_ok=True)
+    with open(calls_path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def now_iso() -> str:
+    return datetime.utcnow().isoformat()
