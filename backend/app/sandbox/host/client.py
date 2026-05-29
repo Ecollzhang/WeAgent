@@ -53,6 +53,11 @@ class OrchestratorClient:
     def apply_capability_projection(self, projection: dict) -> dict:
         return self._request("POST", "/api/capabilities/projection", projection)
 
+    def collect_skill_drafts(self, agent_id: str = "") -> dict:
+        return self._request("POST", "/api/capabilities/drafts/collect", {
+            "agent_id": agent_id,
+        })
+
     # ---- Agents ----
 
     def create_agent(self, agent_id: str, role: str = "助手",

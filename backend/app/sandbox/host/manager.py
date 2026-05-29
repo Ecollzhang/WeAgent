@@ -364,7 +364,9 @@ class DockerContainerManager:
             f"[SandboxManager] send_message session_id={session_id} "
             f"agent_id={agent_id} message_len={len(message or '')}"
         )
-        return session.client.send_to_agent(agent_id, message)
+        result = session.client.send_to_agent(agent_id, message)
+        self._sync_skill_drafts_from_result(session_id, result)
+        return result
 
     def send_chain(self, session_id: str, messages: list[dict]) -> list[dict]:
         """Chain messages across agents."""
@@ -375,7 +377,9 @@ class DockerContainerManager:
             f"[SandboxManager] send_chain session_id={session_id} "
             f"message_count={len(messages or [])}"
         )
-        return session.client.send_chain(messages)
+        result = session.client.send_chain(messages)
+        self._sync_skill_drafts_from_result(session_id, result)
+        return result
 
     def delegate_message(self, session_id: str, message: str,
                          moderator_id: str = "moderator",
@@ -389,7 +393,9 @@ class DockerContainerManager:
             f"moderator_id={moderator_id} targets={target_agent_ids} "
             f"message_len={len(message or '')}"
         )
-        return session.client.delegate(message, moderator_id, target_agent_ids)
+        result = session.client.delegate(message, moderator_id, target_agent_ids)
+        self._sync_skill_drafts_from_result(session_id, result)
+        return result
 
     def add_agent(self, session_id: str, config: dict) -> dict:
         """Add an agent to an existing session container."""
@@ -734,6 +740,52 @@ class DockerContainerManager:
         if result.get("status") not in {"ok", None} or result.get("error"):
             raise RuntimeError(result.get("error") or "Failed to apply capability projection")
         return projection
+
+    def _sync_skill_drafts_from_result(self, session_id: str, result):
+        drafts = self._extract_skill_drafts(result)
+        if not drafts:
+            return
+        try:
+            from app.models.conversation import Conversation
+            from app.services.capability_draft_sync_service import (
+                capability_draft_sync_service,
+            )
+
+            conversation = Conversation.query.get(session_id)
+            if not conversation:
+                return
+            synced, error = capability_draft_sync_service.sync_records(
+                user_id=conversation.owner_id,
+                records=drafts,
+            )
+            if isinstance(result, dict):
+                if error:
+                    result["skill_drafts_sync"] = {"status": "error", "error": error}
+                else:
+                    result["skill_drafts_sync"] = {
+                        "status": "ok",
+                        "count": len(synced or []),
+                    }
+        except Exception as exc:
+            if isinstance(result, dict):
+                result["skill_drafts_sync"] = {
+                    "status": "error",
+                    "error": str(exc),
+                }
+
+    def _extract_skill_drafts(self, result) -> list[dict]:
+        drafts = []
+        if isinstance(result, dict):
+            if isinstance(result.get("skill_drafts"), list):
+                drafts.extend(result["skill_drafts"])
+            nested = result.get("results")
+            if isinstance(nested, list):
+                for item in nested:
+                    drafts.extend(self._extract_skill_drafts(item))
+        elif isinstance(result, list):
+            for item in result:
+                drafts.extend(self._extract_skill_drafts(item))
+        return drafts
 
     @staticmethod
     def _recover_agents_from_labels(labels: dict) -> list[dict]:

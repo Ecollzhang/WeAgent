@@ -18,6 +18,7 @@ from typing import Optional
 from .agent import ClaudeRuntime
 from .capabilities import (
     agent_bootstrap_instruction,
+    collect_skill_draft_payloads,
     write_projection,
     write_run_snapshot,
 )
@@ -230,6 +231,9 @@ class Orchestrator:
             result = {"status": "ok", "agent_id": agent_id, "reply": reply}
             if capability_run_id:
                 result["capability_run_id"] = capability_run_id
+            skill_drafts = self.collect_skill_drafts(agent_id)
+            if skill_drafts:
+                result["skill_drafts"] = skill_drafts
             if tool_results:
                 result["tool_results"] = tool_results
 
@@ -320,6 +324,9 @@ class Orchestrator:
                 entry = {"status": "ok", "agent_id": agent_id, "reply": reply}
                 if capability_run_id:
                     entry["capability_run_id"] = capability_run_id
+                skill_drafts = self.collect_skill_drafts(agent_id)
+                if skill_drafts:
+                    entry["skill_drafts"] = skill_drafts
                 if tool_results:
                     entry["tool_results"] = tool_results
 
@@ -561,6 +568,24 @@ class Orchestrator:
 
     def list_mcp_servers(self) -> dict:
         return {"status": "ok", "servers": self.mcp_runtime.list_running_servers()}
+
+    def collect_skill_drafts(self, agent_id: str = "") -> list[dict]:
+        projection = self.capability_projection or {}
+        session_id = projection.get("session_id", "")
+        if agent_id:
+            return collect_skill_draft_payloads(
+                agent_id,
+                session_id,
+                workspace_root="/workspace",
+            )
+        drafts = []
+        for projected_agent_id in (projection.get("agents") or {}).keys():
+            drafts.extend(collect_skill_draft_payloads(
+                projected_agent_id,
+                session_id,
+                workspace_root="/workspace",
+            ))
+        return drafts
 
     def _load_custom_tools(self):
         """Load persisted command-backed custom tools."""

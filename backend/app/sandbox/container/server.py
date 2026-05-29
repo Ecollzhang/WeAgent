@@ -121,6 +121,14 @@ def apply_capability_projection():
     return jsonify(result)
 
 
+@app.route("/api/capabilities/drafts/collect", methods=["POST"])
+def collect_skill_drafts():
+    data = request.get_json(force=True) or {}
+    agent_id = data.get("agent_id", "")
+    drafts = orchestrator.collect_skill_drafts(agent_id)
+    return jsonify({"status": "ok", "drafts": drafts})
+
+
 # ============================
 # Agent management
 # ============================

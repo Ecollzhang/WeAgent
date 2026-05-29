@@ -7,6 +7,7 @@ from app.schemas.capability_schema import (
     CallSyncSchema,
     CreateCapabilityVersionSchema,
     CreateSkillSchema,
+    DraftSyncSchema,
     DraftForkSchema,
     DraftPublishSchema,
     ImportMarkdownSchema,
@@ -14,6 +15,7 @@ from app.schemas.capability_schema import (
     UpdateCapabilityBindingSchema,
 )
 from app.services.capability_call_sync_service import capability_call_sync_service
+from app.services.capability_draft_sync_service import capability_draft_sync_service
 from app.services.capability_service import capability_service
 from app.utils.response import error_response, success_response
 
@@ -108,6 +110,22 @@ def list_drafts():
     if error:
         return error_response(error, code=400)
     return success_response(result)
+
+
+@capability_bp.route("/drafts/sync", methods=["POST"])
+@jwt_required()
+def sync_skill_drafts():
+    user_id = get_jwt_identity()
+    data, validation_error = _load(DraftSyncSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    result, error = capability_draft_sync_service.sync_records(
+        user_id=user_id,
+        records=data["records"],
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Skill drafts synced", code=201)
 
 
 @capability_bp.route("/drafts/<draft_id>/publish", methods=["POST"])

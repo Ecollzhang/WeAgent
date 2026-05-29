@@ -83,7 +83,7 @@
 
 ## Checkpoint 8: Skill Draft Sync
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 
@@ -93,6 +93,8 @@
 - Existing pinned Agent bindings do not auto-upgrade.
 
 ## Checkpoint 9: End-to-End Regression
+
+**Status:** Next
 
 **Exit criteria:**
 

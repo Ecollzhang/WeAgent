@@ -94,3 +94,10 @@ class CallSyncSchema(Schema):
         unknown = EXCLUDE
 
     records = fields.List(fields.Dict(), required=True)
+
+
+class DraftSyncSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    records = fields.List(fields.Dict(), required=True)

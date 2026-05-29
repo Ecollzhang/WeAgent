@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 7 complete; Checkpoint 8 next
+**Status:** Checkpoint 8 complete; Checkpoint 9 next
 
 ## Completed
 
@@ -25,6 +25,7 @@
 - Completed Checkpoint 5 built-in Tool call audit through capability bindings.
 - Completed Checkpoint 6 minimal MCP npx runtime inside the sandbox.
 - Completed Checkpoint 7 Plugin manifest import and install-record visibility.
+- Completed Checkpoint 8 Skill draft sync from workspace runtime changes to DB drafts.
 
 ## Current Branch Notes
 
@@ -34,4 +35,4 @@
 
 ## Next Action
 
-Begin Checkpoint 8: Skill draft sync from workspace runtime changes to DB drafts.
+Begin Checkpoint 9: end-to-end regression across multi-agent display, progress display, artifact display, and the toolset happy path.

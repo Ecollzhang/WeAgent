@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import hashlib
 from datetime import datetime
 
 
@@ -45,6 +46,16 @@ def _read_json(path: str) -> dict:
         return json.load(handle)
 
 
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _checksum_text(content: str) -> str:
+    digest = hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
 def agent_bootstrap_instruction(agent_id: str,
                                 workspace_root: str = DEFAULT_WORKSPACE_ROOT) -> str:
     safe_agent_id = _safe_segment(agent_id)
@@ -72,6 +83,7 @@ def write_projection(projection: dict,
         skill_path = os.path.join(skill_dir, "SKILL.md")
         manifest_path = os.path.join(skill_dir, "manifest.json")
         _write_text(skill_path, skill.get("content", ""))
+        baseline_content = skill.get("content", "")
         _write_json(manifest_path, {
             "capability_id": skill.get("capability_id") or capability_id,
             "version_id": skill.get("version_id"),
@@ -80,7 +92,24 @@ def write_projection(projection: dict,
             "permissions": skill.get("permissions") or {},
             "manifest": skill.get("manifest") or {},
         })
-        written.extend([skill_path, manifest_path])
+        baseline_path = _weagent_path(
+            workspace_root,
+            "drafts",
+            "skills",
+            safe_id,
+            "baseline.json",
+        )
+        _write_json(baseline_path, {
+            "runtime_id": capability_id,
+            "capability_id": skill.get("capability_id") or capability_id,
+            "version_id": skill.get("version_id"),
+            "name": skill.get("name"),
+            "path": skill_path,
+            "baseline_checksum": _checksum_text(baseline_content),
+            "baseline_content": baseline_content,
+            "last_draft_checksum": None,
+        })
+        written.extend([skill_path, manifest_path, baseline_path])
 
     for capability_id, record in (projection.get("mcp") or {}).items():
         safe_id = _safe_segment(capability_id)
@@ -144,6 +173,78 @@ def write_run_snapshot(projection: dict, run_id: str,
     if not os.path.exists(calls_path):
         _write_text(calls_path, "")
     return {"status": "ok", "run_id": safe_run_id, "snapshot": snapshot_path, "calls": calls_path}
+
+
+def collect_skill_draft_payloads(agent_id: str, session_id: str,
+                                 workspace_root: str = DEFAULT_WORKSPACE_ROOT) -> list[dict]:
+    """Collect Agent-written runtime Skill changes as DB-syncable draft payloads."""
+    agent_path = _weagent_path(
+        workspace_root,
+        "agents",
+        _safe_segment(agent_id),
+        "skill-index.json",
+    )
+    if not os.path.exists(agent_path):
+        return []
+
+    index = _read_json(agent_path)
+    drafts = []
+    for skill in index.get("skills") or []:
+        runtime_id = skill.get("runtime_id") or skill.get("capability_id")
+        if not runtime_id:
+            continue
+        safe_id = _safe_segment(runtime_id)
+        baseline_path = _weagent_path(
+            workspace_root,
+            "drafts",
+            "skills",
+            safe_id,
+            "baseline.json",
+        )
+        if not os.path.exists(baseline_path):
+            continue
+        baseline = _read_json(baseline_path)
+        skill_path = baseline.get("path")
+        if not skill_path or not os.path.exists(skill_path):
+            continue
+        current = _read_text(skill_path)
+        current_checksum = _checksum_text(current)
+        baseline_checksum = baseline.get("baseline_checksum")
+        if current_checksum == baseline_checksum:
+            baseline["last_draft_checksum"] = None
+            _write_json(baseline_path, baseline)
+            continue
+        if current_checksum == baseline.get("last_draft_checksum"):
+            continue
+
+        payload = {
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "source_skill_id": baseline.get("capability_id") or skill.get("capability_id"),
+            "source_version_id": baseline.get("version_id") or skill.get("version_id"),
+            "runtime_id": runtime_id,
+            "diff": {
+                "changed": ["SKILL.md"],
+                "path": skill_path,
+                "old_checksum": baseline_checksum,
+                "new_checksum": current_checksum,
+                "old_length": len(baseline.get("baseline_content") or ""),
+                "new_length": len(current),
+            },
+            "full_markdown": current,
+        }
+        draft_path = _weagent_path(
+            workspace_root,
+            "drafts",
+            "skills",
+            safe_id,
+            f"{_safe_segment(agent_id)}.json",
+        )
+        _write_json(draft_path, payload)
+        baseline["last_draft_checksum"] = current_checksum
+        _write_json(baseline_path, baseline)
+        drafts.append(payload)
+    return drafts
 
 
 def permissions_for_tool(tool_name: str) -> list[str]:
