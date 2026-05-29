@@ -16,6 +16,11 @@ import time
 from typing import Optional
 
 from .agent import ClaudeRuntime
+from .capabilities import (
+    agent_bootstrap_instruction,
+    write_projection,
+    write_run_snapshot,
+)
 from .claude_config import clean_base_url, clean_config_value, claude_env, write_settings, trust_projects
 from .tools import ToolRegistry, register_builtin_tools
 from . import session as session_store
@@ -34,6 +39,8 @@ class Orchestrator:
         self.agents: dict[str, ClaudeRuntime] = {}
         self.tools = ToolRegistry()
         self.custom_tools_path = "/workspace/.session/tools.json"
+        self.capability_projection: Optional[dict] = None
+        self._capability_run_counter = 0
         self.services: dict[int, dict] = {}
         os.makedirs("/workspace/shared", exist_ok=True)
         os.makedirs("/workspace/agents", exist_ok=True)
@@ -42,6 +49,22 @@ class Orchestrator:
         register_builtin_tools(self.tools)
         self._load_custom_tools()
         log_event("orchestrator_initialized")
+
+    # ---- Capability projection ----
+
+    def apply_capability_projection(self, projection: dict) -> dict:
+        """Install the session-local .weagent capability projection."""
+        if not isinstance(projection, dict):
+            return {"status": "error", "error": "Projection must be an object"}
+        result = write_projection(projection, workspace_root="/workspace")
+        self.capability_projection = projection
+        log_event(
+            "capability_projection_applied",
+            capability_count=len(projection.get("capabilities") or {}),
+            agent_count=len(projection.get("agents") or {}),
+            file_count=len(result.get("written") or []),
+        )
+        return result
 
     def _snapshot_workspace(self) -> dict[str, dict]:
         """Snapshot files in /workspace for created/modified detection."""
@@ -85,7 +108,8 @@ class Orchestrator:
         # The agent.md file defines the agent's role for claude -p.
         # Tool instructions are embedded in agent.md, not injected here.
 
-        agent = ClaudeRuntime(agent_id, role, system_prompt, workspace_name)
+        runtime_prompt = self._with_capability_bootstrap(agent_id, system_prompt)
+        agent = ClaudeRuntime(agent_id, role, runtime_prompt, workspace_name)
         try:
             agent.start()
         except Exception as e:
@@ -129,6 +153,7 @@ class Orchestrator:
         session_store.save_message(agent_id, "user", message)
 
         role = agent.role or agent_id
+        capability_run_id = self._write_capability_run_snapshot(agent_id)
         log_agent(
             agent_id,
             "task_start",
@@ -198,6 +223,8 @@ class Orchestrator:
             parse_elapsed = time.time() - start_parse
 
             result = {"status": "ok", "agent_id": agent_id, "reply": reply}
+            if capability_run_id:
+                result["capability_run_id"] = capability_run_id
             if tool_results:
                 result["tool_results"] = tool_results
 
@@ -257,6 +284,7 @@ class Orchestrator:
             prompted_msg = self._with_tool_instructions(agent_id, msg)
             full_msg = accumulated_context + "\n\n" + prompted_msg if accumulated_context else prompted_msg
             session_store.save_message(agent_id, "user", full_msg)
+            capability_run_id = self._write_capability_run_snapshot(agent_id)
 
             try:
                 # Snapshot workspace before each agent in the chain
@@ -283,6 +311,8 @@ class Orchestrator:
                             agent_id, reply, baseline=chain_baseline)
 
                 entry = {"status": "ok", "agent_id": agent_id, "reply": reply}
+                if capability_run_id:
+                    entry["capability_run_id"] = capability_run_id
                 if tool_results:
                     entry["tool_results"] = tool_results
 
@@ -1589,6 +1619,25 @@ class Orchestrator:
 
     # ---- Internal ----
 
+    def _with_capability_bootstrap(self, agent_id: str, system_prompt: str) -> str:
+        projection = self.capability_projection or {}
+        if agent_id not in (projection.get("agents") or {}):
+            return system_prompt or ""
+        bootstrap = agent_bootstrap_instruction(agent_id)
+        prompt = system_prompt or ""
+        if bootstrap in prompt:
+            return prompt
+        return f"{prompt}\n\n{bootstrap}".strip()
+
+    def _write_capability_run_snapshot(self, agent_id: str) -> Optional[str]:
+        projection = self.capability_projection or {}
+        if agent_id not in (projection.get("agents") or {}):
+            return None
+        self._capability_run_counter += 1
+        run_id = f"{agent_id}-{int(time.time() * 1000)}-{self._capability_run_counter}"
+        result = write_run_snapshot(projection, run_id, workspace_root="/workspace")
+        return result.get("run_id")
+
     def _get_or_recreate_agent(self, agent_id: str):
         """Get agent, or recreate from saved config if missing."""
         agent = self.agents.get(agent_id)
@@ -1601,7 +1650,7 @@ class Orchestrator:
             return {"error": f"Agent '{agent_id}' not found and no saved config"}
 
         # Use saved system prompt (agent.md handles role definition)
-        runtime_prompt = config["system_prompt"]
+        runtime_prompt = self._with_capability_bootstrap(agent_id, config["system_prompt"])
 
         agent = ClaudeRuntime(
             agent_id,

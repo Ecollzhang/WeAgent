@@ -103,6 +103,25 @@ def health():
 
 
 # ============================
+# Capability projection
+# ============================
+
+
+@app.route("/api/capabilities/projection", methods=["POST"])
+def apply_capability_projection():
+    data = request.get_json(force=True) or {}
+    log_event(
+        "api_capability_projection",
+        agent_count=len((data.get("agents") or {}) if isinstance(data, dict) else {}),
+        capability_count=len((data.get("capabilities") or {}) if isinstance(data, dict) else {}),
+    )
+    result = orchestrator.apply_capability_projection(data)
+    if result.get("status") == "error" or "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+# ============================
 # Agent management
 # ============================
 

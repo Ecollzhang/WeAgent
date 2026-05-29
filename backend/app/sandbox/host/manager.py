@@ -232,6 +232,7 @@ class DockerContainerManager:
             f"[SandboxManager] container_ready session_id={session_id} "
             f"container={container.id[:12]} orchestrator=http://localhost:{host_port}"
         )
+        self._project_capabilities_to_container(host_port, session_id, agents)
 
         # Create agents inside container
         for agent_cfg in agents:
@@ -398,6 +399,11 @@ class DockerContainerManager:
         print(
             f"[SandboxManager] add_agent session_id={session_id} "
             f"agent_id={config.get('agent_id')} role={config.get('role')}"
+        )
+        self._project_capabilities_to_container(
+            session.host_port,
+            session_id,
+            [*session.agents_config, config],
         )
         result = session.client.create_agent(
             agent_id=config["agent_id"],
@@ -716,6 +722,18 @@ class DockerContainerManager:
             system_prompt=config.get("system_prompt", ""),
             workspace_name=config.get("workspace_name") or config.get("role") or config["agent_id"],
         )
+
+    def _project_capabilities_to_container(self, port: int, session_id: str,
+                                           agents: list[dict]) -> dict:
+        """Build DB-backed capability projection and install it before agent startup."""
+        from app.services.capability_projection_service import build_capability_projection
+
+        projection = build_capability_projection(session_id=session_id, agents=agents)
+        client = OrchestratorClient(host="localhost", port=port)
+        result = client.apply_capability_projection(projection)
+        if result.get("status") not in {"ok", None} or result.get("error"):
+            raise RuntimeError(result.get("error") or "Failed to apply capability projection")
+        return projection
 
     @staticmethod
     def _recover_agents_from_labels(labels: dict) -> list[dict]:

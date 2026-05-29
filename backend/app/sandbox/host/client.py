@@ -48,6 +48,11 @@ class OrchestratorClient:
     def health_check(self) -> dict:
         return self._request("GET", "/api/health")
 
+    # ---- Capabilities ----
+
+    def apply_capability_projection(self, projection: dict) -> dict:
+        return self._request("POST", "/api/capabilities/projection", projection)
+
     # ---- Agents ----
 
     def create_agent(self, agent_id: str, role: str = "助手",

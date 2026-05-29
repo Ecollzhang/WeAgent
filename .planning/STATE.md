@@ -1,10 +1,10 @@
 # Toolset Planning State
 
-**Updated:** 2026-05-28
+**Updated:** 2026-05-29
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 3 complete; Checkpoint 4 next
+**Status:** Checkpoint 4 complete; Checkpoint 5 next
 
 ## Completed
 
@@ -21,6 +21,7 @@
 - Completed Checkpoint 1 data model foundation.
 - Completed Checkpoint 2 service/API foundation.
 - Completed Checkpoint 3 frontend Capability Library and Agent binding UI.
+- Completed Checkpoint 4 runtime projection and `.weagent/*` injection path.
 
 ## Current Branch Notes
 
@@ -30,4 +31,4 @@
 
 ## Next Action
 
-Begin Checkpoint 4: runtime projection plan and `.weagent/*` injection path.
+Begin Checkpoint 5: built-in Tool call audit through capability bindings and `.weagent/runs/<run_id>/calls.jsonl`.

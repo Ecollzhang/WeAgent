@@ -42,7 +42,7 @@
 
 ## Checkpoint 4: Runtime Projection
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 
@@ -52,6 +52,8 @@
 - No `.claude/*`, `.codex/*`, or `.mcp.json` compatibility files are generated.
 
 ## Checkpoint 5: Built-in Tool Audit
+
+**Status:** Next
 
 **Exit criteria:**
 
