@@ -3,7 +3,6 @@ import queue
 import uuid
 import json
 import re
-from datetime import datetime
 from flask import current_app
 from sqlalchemy.orm.attributes import flag_modified
 from app import db, socketio
@@ -13,6 +12,7 @@ from app.repositories.artifact_repo import artifact_repo
 from app.models.agent import Agent
 from app.models.message import Message
 from app.services.agent_run_service import agent_run_service
+from app.utils.timezone import beijing_now
 from app.services.message_element_builder import (
     file_event_element,
     mentioned_file_elements,
@@ -1115,7 +1115,7 @@ class MessageService:
             msg.raw_output = json.dumps(plan, ensure_ascii=False)
         if run:
             run.status = 'done'
-            run.finished_at = datetime.utcnow()
+            run.finished_at = beijing_now()
         db.session.commit()
         socketio.emit('conversation_message_status', {
             'conversation_id': msg.conversation_id,
@@ -1734,7 +1734,7 @@ class MessageService:
         if run:
             run.status = 'error'
             run.error = error
-            run.finished_at = datetime.utcnow()
+            run.finished_at = beijing_now()
         db.session.commit()
         socketio.emit('conversation_message_status', {
             'conversation_id': msg.conversation_id,
@@ -1830,7 +1830,7 @@ class MessageService:
 
         msg.status = 'done'
         run.status = 'done'
-        run.finished_at = datetime.utcnow()
+        run.finished_at = beijing_now()
         db.session.commit()
 
         socketio.emit('conversation_message_status', {

@@ -1,10 +1,9 @@
-from datetime import datetime
-
 from sqlalchemy.orm.attributes import flag_modified
 
 from app import db, socketio
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.utils.timezone import beijing_now, format_beijing
 from app.services.agent_run_service import agent_run_service
 from app.services.message_element_builder import (
     file_event_element,
@@ -42,7 +41,7 @@ class SandboxEventBridge:
         if not conversation:
             return
 
-        conversation.last_active_at = datetime.utcnow()
+        conversation.last_active_at = beijing_now()
 
         run = agent_run_service.find_active_run(conversation.id, agent_id)
         if not run:
@@ -228,7 +227,7 @@ class SandboxEventBridge:
             message.content = "执行已停止"
             self._append_element(message, progress_element("执行已停止", "stopped"))
         run.status = status if status != "done" else "done"
-        run.finished_at = datetime.utcnow()
+        run.finished_at = beijing_now()
         if error:
             run.error = error
         if seq is not None:
@@ -347,7 +346,7 @@ class SandboxEventBridge:
                 "data": event_data,
                 "provider": provider,
                 "seq": seq,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": format_beijing(beijing_now()),
             }
         )
         if provider:
@@ -371,7 +370,7 @@ class SandboxEventBridge:
                     "data": event_data,
                     "provider": event_data.get("provider") if isinstance(event_data, dict) else None,
                     "seq": seq,
-                    "created_at": datetime.utcnow().isoformat(),
+                    "created_at": format_beijing(beijing_now()),
                 },
                 "events": (message.meta or {}).get("events", []),
                 "provider": self._message_provider(message),

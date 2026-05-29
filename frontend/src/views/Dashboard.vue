@@ -501,7 +501,7 @@ export default {
           sender_id: this.userId,
           content: content,
           message_type: 'text',
-          created_at: new Date().toISOString(),
+          created_at: this.localDateTimeString(),
         },
       })
 
@@ -965,6 +965,20 @@ export default {
     copyFilePath(path) {
       navigator.clipboard?.writeText(path)
       this.$message.success('已复制路径')
+    },
+
+    localDateTimeString() {
+      const date = new Date()
+      const pad = n => String(n).padStart(2, '0')
+      return [
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate()),
+      ].join('-') + 'T' + [
+        pad(date.getHours()),
+        pad(date.getMinutes()),
+        pad(date.getSeconds()),
+      ].join(':')
     },
 
     getExt(path) {

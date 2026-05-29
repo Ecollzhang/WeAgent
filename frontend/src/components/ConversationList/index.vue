@@ -90,9 +90,10 @@ export default {
     filteredConversations() {
       if (!this.searchQuery) return this.conversations || []
       const q = this.searchQuery.toLowerCase()
-      return (this.conversations || []).filter(c =>
+      let filtered = (this.conversations || []).filter(c =>
         c.title.toLowerCase().includes(q)
       )
+      return filtered
     },
   },
   methods: {

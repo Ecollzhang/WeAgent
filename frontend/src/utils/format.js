@@ -3,8 +3,7 @@
  */
 export function formatTime(dateStr) {
   if (!dateStr) return ''
-
-  const date = new Date(dateStr)
+  const date = parseAppDate(dateStr)
   const now = new Date()
   const diff = now - date
 
@@ -43,6 +42,32 @@ export function formatTime(dateStr) {
   }
 
   return `${year}-${month}-${day} ${hours}:${minutes}`
+}
+
+function parseAppDate(dateStr) {
+  const value = String(dateStr || '').trim()
+  if (!value) return new Date(NaN)
+
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value)
+  if (hasTimezone) return new Date(value)
+
+  const localDate = new Date(value)
+  const utcDate = new Date(value.replace(' ', 'T') + 'Z')
+  const now = new Date()
+
+  // Backward compatibility: older backend returned UTC without "Z", which
+  // browsers parsed as local time and showed fresh messages as 8h ago.
+  const localDiff = now - localDate
+  const utcDiff = now - utcDate
+  if (
+    Math.abs(utcDiff) < 10 * 60 * 1000 &&
+    localDiff > 7 * 60 * 60 * 1000 &&
+    localDiff < 9 * 60 * 60 * 1000
+  ) {
+    return utcDate
+  }
+
+  return localDate
 }
 
 /**

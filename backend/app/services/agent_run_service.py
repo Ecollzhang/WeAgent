@@ -1,7 +1,6 @@
-from datetime import datetime
-
 from app import db
 from app.models.agent_run import AgentRun
+from app.utils.timezone import beijing_now
 
 
 class AgentRunService:
@@ -16,7 +15,7 @@ class AgentRunService:
             agent_id=agent_id,
             sandbox_session_id=sandbox_session_id,
             status=status,
-            started_at=datetime.utcnow(),
+            started_at=beijing_now(),
         )
         db.session.add(run)
         db.session.commit()
@@ -31,7 +30,7 @@ class AgentRunService:
 
     def finish_run(self, run, status='done', error=None, last_seq=None):
         run.status = status
-        run.finished_at = datetime.utcnow()
+        run.finished_at = beijing_now()
         if error:
             run.error = error
         if last_seq is not None:

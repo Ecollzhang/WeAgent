@@ -133,8 +133,8 @@ export default {
   },
   computed: {
     participantCount() {
-      if (!this.conversation || !this.conversation.participants) return 0
-      return this.conversation.participants.length
+      if (!this.conversation || !this.conversation.participant_ids) return 0
+      return this.conversation.participant_ids.length
     },
     sessionId() {
       return this.conversation?.sandbox_session_id || this.conversation?.id || ''

@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from app import db
+from app.utils.timezone import beijing_now, format_beijing
 
 
 class BaseModel(db.Model):
@@ -8,8 +9,8 @@ class BaseModel(db.Model):
     __abstract__ = True
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=beijing_now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now, nullable=False)
 
     def to_dict(self):
         """Convert model to dictionary."""
@@ -17,7 +18,7 @@ class BaseModel(db.Model):
         for column in self.__table__.columns:
             value = getattr(self, column.name)
             if isinstance(value, datetime):
-                result[column.name] = value.isoformat()
+                result[column.name] = format_beijing(value)
             else:
                 result[column.name] = value
         return result

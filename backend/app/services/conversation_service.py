@@ -1,4 +1,5 @@
 from app.models.message import Message
+from app.utils.timezone import format_beijing, beijing_now
 from app.models.user import User
 from app.models.agent import Agent
 from app.models.agent_run import AgentRun
@@ -248,7 +249,7 @@ class ConversationService:
         conversation.sandbox_container_id = session.container_id
         conversation.sandbox_host_port = session.host_port
         conversation.sandbox_status = 'running'
-        conversation.last_active_at = db.func.now()
+        conversation.last_active_at = beijing_now()
         db.session.commit()
         return None
 
@@ -265,7 +266,7 @@ class ConversationService:
                     'content': last_msg.content[:100] if last_msg.content else '',
                     'sender_type': last_msg.sender_type,
                     'sender_id': last_msg.sender_id,
-                    'created_at': last_msg.created_at.isoformat(),
+                    'created_at': format_beijing(last_msg.created_at),
                 }
             result.append(conv_data)
         return result, None
