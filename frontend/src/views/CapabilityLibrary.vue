@@ -77,6 +77,9 @@
               <span>v{{ latestVersion(capability).version || '1.0.0' }}</span>
               <span>{{ capability.source || 'user' }}</span>
               <span v-if="capability.type === 'plugin'">manifest only</span>
+              <span v-if="capability.type === 'plugin' && capability.install_record">
+                {{ capability.install_record.status }}
+              </span>
             </div>
           </div>
           <el-button
@@ -145,7 +148,25 @@
         <pre>{{ latestVersion(selected).content || '' }}</pre>
       </div>
 
-      <div class="detail-section" v-else>
+      <div class="detail-section" v-if="selected.type === 'plugin' && selected.install_record">
+        <h4>Install Record</h4>
+        <div class="permission-row">
+          <span>Status</span>
+          <div>
+            <el-tag size="mini" type="success">{{ selected.install_record.status }}</el-tag>
+          </div>
+        </div>
+        <div class="permission-row">
+          <span>Package</span>
+          <code>{{ selected.install_record.package_name || selected.source_ref || 'npx' }}</code>
+        </div>
+        <div class="permission-row">
+          <span>Version</span>
+          <code>{{ selected.install_record.package_version || latestVersion(selected).version || '1.0.0' }}</code>
+        </div>
+      </div>
+
+      <div class="detail-section" v-if="selected.type !== 'skill'">
         <h4>Manifest</h4>
         <pre>{{ formatJson(latestVersion(selected).manifest) }}</pre>
       </div>

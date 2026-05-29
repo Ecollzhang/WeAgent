@@ -73,7 +73,7 @@
 
 ## Checkpoint 7: Plugin Manifest Import
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 
@@ -82,6 +82,8 @@
 - No Plugin execution endpoint exists.
 
 ## Checkpoint 8: Skill Draft Sync
+
+**Status:** Next
 
 **Exit criteria:**
 

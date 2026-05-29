@@ -39,5 +39,6 @@ from app.models.capability import (  # noqa: E402,F401
     Capability,
     CapabilityCallRecord,
     CapabilityVersion,
+    PluginInstallRecord,
     SkillRevisionDraft,
 )

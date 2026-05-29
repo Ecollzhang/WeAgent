@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 6 complete; Checkpoint 7 next
+**Status:** Checkpoint 7 complete; Checkpoint 8 next
 
 ## Completed
 
@@ -24,6 +24,7 @@
 - Completed Checkpoint 4 runtime projection and `.weagent/*` injection path.
 - Completed Checkpoint 5 built-in Tool call audit through capability bindings.
 - Completed Checkpoint 6 minimal MCP npx runtime inside the sandbox.
+- Completed Checkpoint 7 Plugin manifest import and install-record visibility.
 
 ## Current Branch Notes
 
@@ -33,4 +34,4 @@
 
 ## Next Action
 
-Begin Checkpoint 7: Plugin manifest import and install-record display, with no Plugin execution endpoint.
+Begin Checkpoint 8: Skill draft sync from workspace runtime changes to DB drafts.

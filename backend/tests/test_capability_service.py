@@ -2,7 +2,12 @@ import pytest
 
 from app import create_app, db
 from app.models.agent import Agent
-from app.models.capability import AgentCapabilityBinding, Capability, CapabilityVersion
+from app.models.capability import (
+    AgentCapabilityBinding,
+    Capability,
+    CapabilityVersion,
+    PluginInstallRecord,
+)
 from app.models.user import User
 from app.services.capability_service import REQUIRED_PERMISSIONS, capability_service
 
@@ -180,3 +185,44 @@ def test_import_npx_manifest_creates_mcp_and_plugin_capabilities(app_context):
     assert {item["type"] for item in result} == {"mcp", "plugin"}
     assert Capability.query.filter_by(type="mcp").one().source == "npx"
     assert REQUIRED_PERMISSIONS.issuperset({"run_command", "network"})
+
+
+def test_import_plugin_manifest_creates_install_record(app_context):
+    create_user()
+    manifest = {
+        "schema_version": "weagent.capability/v1",
+        "source": {"type": "npx", "package": "@example/plugin", "version": "2.1.0"},
+        "capabilities": [
+            {
+                "type": "plugin",
+                "name": "Example Plugin",
+                "description": "Plugin wrapper",
+                "permissions": {"required": [], "optional": []},
+                "entry": {"module": "@example/plugin"},
+                "included_capabilities": [
+                    {"type": "skill", "name": "Plugin Skill"},
+                    {"type": "mcp", "name": "Plugin MCP"},
+                ],
+            },
+        ],
+    }
+
+    result, error = capability_service.import_npx_manifest(
+        user_id="user-1",
+        manifest=manifest,
+        source_ref="npx:@example/plugin@2.1.0",
+    )
+
+    assert error is None
+    plugin = result[0]
+    assert plugin["type"] == "plugin"
+    assert plugin["install_record"]["status"] == "installed"
+    assert plugin["install_record"]["source"] == "npx"
+    assert plugin["install_record"]["source_ref"] == "npx:@example/plugin@2.1.0"
+    assert plugin["install_record"]["package_name"] == "@example/plugin"
+    assert plugin["install_record"]["package_version"] == "2.1.0"
+    assert plugin["install_record"]["included_capabilities"] == [
+        {"type": "skill", "name": "Plugin Skill"},
+        {"type": "mcp", "name": "Plugin MCP"},
+    ]
+    assert PluginInstallRecord.query.count() == 1

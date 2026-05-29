@@ -10,6 +10,7 @@ from app.models.capability import (
     Capability,
     CapabilityCallRecord,
     CapabilityVersion,
+    PluginInstallRecord,
     SkillRevisionDraft,
 )
 
@@ -169,6 +170,16 @@ class CapabilityService:
                     created_by=user_id,
                 )
                 capability.latest_version_id = version.id
+                if capability_type == "plugin":
+                    self._make_plugin_install_record(
+                        user_id=user_id,
+                        capability=capability,
+                        version=version,
+                        source=source,
+                        source_ref=source_ref or source.get("package") or "",
+                        manifest=manifest,
+                        item=item,
+                    )
                 imported.append(capability)
             db.session.commit()
         except ValueError as exc:
@@ -520,6 +531,34 @@ class CapabilityService:
         db.session.flush()
         return version_record
 
+    def _make_plugin_install_record(self, user_id, capability, version, source,
+                                    source_ref, manifest, item):
+        included_capabilities = (
+            item.get("included_capabilities")
+            or item.get("includes")
+            or item.get("capabilities")
+            or []
+        )
+        record = PluginInstallRecord(
+            user_id=user_id,
+            plugin_capability_id=capability.id,
+            plugin_version_id=version.id,
+            source=source.get("type") or capability.source or "npx",
+            source_ref=source_ref or capability.source_ref or "",
+            package_name=source.get("package") or "",
+            package_version=source.get("version") or version.version or "",
+            status="installed",
+            manifest={
+                "schema_version": manifest.get("schema_version"),
+                "source": source,
+                "plugin": item,
+            },
+            included_capabilities=included_capabilities,
+        )
+        db.session.add(record)
+        db.session.flush()
+        return record
+
     def _visible_capability_query(self, user_id):
         return Capability.query.filter(
             (Capability.is_builtin == True) | (Capability.user_id == user_id)
@@ -581,6 +620,8 @@ class CapabilityService:
             elif capability.versions:
                 latest = capability.versions[-1]
             data["latest_version"] = self._version_to_dict(latest) if latest else None
+        if capability.type == "plugin":
+            data["install_record"] = self._latest_plugin_install_record(capability)
         return data
 
     def _version_to_dict(self, version):
@@ -603,6 +644,12 @@ class CapabilityService:
         data["capability"] = self._capability_to_dict(record.capability, include_latest=False)
         data["capability_version"] = self._version_to_dict(record.capability_version)
         return data
+
+    def _latest_plugin_install_record(self, capability):
+        record = PluginInstallRecord.query.filter_by(
+            plugin_capability_id=capability.id,
+        ).order_by(PluginInstallRecord.created_at.desc()).first()
+        return record.to_dict() if record else None
 
 
 capability_service = CapabilityService()

@@ -5,6 +5,7 @@ CAPABILITY_TYPES = ("skill", "tool", "mcp", "plugin")
 VERSION_POLICIES = ("pinned", "follow_latest")
 CALL_STATUSES = ("started", "completed", "failed")
 DRAFT_STATUSES = ("pending_review", "published", "forked", "rejected")
+PLUGIN_INSTALL_STATUSES = ("installed", "failed", "removed")
 
 
 class Capability(BaseModel):
@@ -106,6 +107,47 @@ class CapabilityCallRecord(BaseModel):
 
     capability = db.relationship("Capability", lazy="select")
     capability_version = db.relationship("CapabilityVersion", lazy="select")
+
+
+class PluginInstallRecord(BaseModel):
+    """Manifest-only Plugin installation record for v1."""
+    __tablename__ = "plugin_install_records"
+
+    user_id = db.Column(db.String(36), db.ForeignKey("users.id"),
+                        nullable=False, index=True)
+    plugin_capability_id = db.Column(db.String(36), db.ForeignKey("capabilities.id"),
+                                     nullable=False, index=True)
+    plugin_version_id = db.Column(db.String(36), db.ForeignKey("capability_versions.id"),
+                                  nullable=False, index=True)
+    source = db.Column(db.String(50), nullable=False, default="npx", index=True)
+    source_ref = db.Column(db.String(500), default="")
+    package_name = db.Column(db.String(240), default="")
+    package_version = db.Column(db.String(80), default="")
+    status = db.Column(db.Enum(*PLUGIN_INSTALL_STATUSES, name="plugin_install_status"),
+                       nullable=False, default="installed", index=True)
+    manifest = db.Column(db.JSON, default=dict)
+    included_capabilities = db.Column(db.JSON, default=list)
+
+    owner = db.relationship("User", backref="plugin_install_records", lazy="select")
+    plugin_capability = db.relationship(
+        "Capability",
+        foreign_keys=[plugin_capability_id],
+        lazy="select",
+    )
+    plugin_version = db.relationship(
+        "CapabilityVersion",
+        foreign_keys=[plugin_version_id],
+        lazy="select",
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "user_id",
+            "plugin_capability_id",
+            "plugin_version_id",
+            name="uq_plugin_install_version",
+        ),
+    )
 
 
 class SkillRevisionDraft(BaseModel):

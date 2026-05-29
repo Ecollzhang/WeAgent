@@ -161,6 +161,60 @@ def test_import_npx_manifest_and_bind_agent_capability(client_context):
     assert list_response.get_json()["data"][0]["capability"]["type"] == "mcp"
 
 
+def test_plugin_manifest_detail_exposes_install_record_without_execution_endpoint(client_context):
+    client, headers, _user, _agent = client_context
+
+    import_response = client.post(
+        "/api/capabilities/import/npx-manifest",
+        headers=headers,
+        json={
+            "source_ref": "npx:@example/plugin@2.1.0",
+            "manifest": {
+                "schema_version": "weagent.capability/v1",
+                "source": {
+                    "type": "npx",
+                    "package": "@example/plugin",
+                    "version": "2.1.0",
+                },
+                "capabilities": [
+                    {
+                        "type": "plugin",
+                        "name": "Example Plugin",
+                        "description": "Plugin wrapper",
+                        "permissions": {"required": [], "optional": []},
+                        "entry": {"module": "@example/plugin"},
+                        "included_capabilities": [
+                            {"type": "skill", "name": "Plugin Skill"}
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert import_response.status_code == 201
+    plugin = import_response.get_json()["data"][0]
+    assert plugin["type"] == "plugin"
+    assert plugin["install_record"]["status"] == "installed"
+
+    detail_response = client.get(f"/api/capabilities/{plugin['id']}", headers=headers)
+
+    assert detail_response.status_code == 200
+    detail = detail_response.get_json()["data"]
+    assert detail["latest_version"]["manifest"]["entry"] == {"module": "@example/plugin"}
+    assert detail["install_record"]["package_name"] == "@example/plugin"
+    assert detail["install_record"]["included_capabilities"] == [
+        {"type": "skill", "name": "Plugin Skill"}
+    ]
+
+    execute_response = client.post(
+        f"/api/capabilities/{plugin['id']}/execute",
+        headers=headers,
+        json={},
+    )
+    assert execute_response.status_code == 404
+
+
 def test_create_agent_can_persist_default_capability_bindings(client_context):
     client, headers, _user, _agent = client_context
     skill, error = capability_service.create_skill(

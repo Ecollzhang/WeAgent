@@ -261,6 +261,32 @@ CREATE TABLE IF NOT EXISTS `capability_call_records` (
     CONSTRAINT `capability_call_records_ibfk_2` FOREIGN KEY (`capability_version_id`) REFERENCES `capability_versions` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `plugin_install_records` (
+    `user_id` VARCHAR(36) NOT NULL,
+    `plugin_capability_id` VARCHAR(36) NOT NULL,
+    `plugin_version_id` VARCHAR(36) NOT NULL,
+    `source` VARCHAR(50) NOT NULL DEFAULT 'npx',
+    `source_ref` VARCHAR(500) DEFAULT NULL,
+    `package_name` VARCHAR(240) DEFAULT NULL,
+    `package_version` VARCHAR(80) DEFAULT NULL,
+    `status` ENUM('installed', 'failed', 'removed') NOT NULL DEFAULT 'installed',
+    `manifest` JSON DEFAULT NULL,
+    `included_capabilities` JSON DEFAULT NULL,
+    `id` VARCHAR(36) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_plugin_install_version` (`user_id`, `plugin_capability_id`, `plugin_version_id`),
+    KEY `ix_plugin_install_records_user_id` (`user_id`),
+    KEY `ix_plugin_install_records_capability_id` (`plugin_capability_id`),
+    KEY `ix_plugin_install_records_version_id` (`plugin_version_id`),
+    KEY `ix_plugin_install_records_source` (`source`),
+    KEY `ix_plugin_install_records_status` (`status`),
+    CONSTRAINT `plugin_install_records_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+    CONSTRAINT `plugin_install_records_ibfk_2` FOREIGN KEY (`plugin_capability_id`) REFERENCES `capabilities` (`id`),
+    CONSTRAINT `plugin_install_records_ibfk_3` FOREIGN KEY (`plugin_version_id`) REFERENCES `capability_versions` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `skill_revision_drafts` (
     `source_skill_id` VARCHAR(36) NOT NULL,
     `source_version_id` VARCHAR(36) NOT NULL,
