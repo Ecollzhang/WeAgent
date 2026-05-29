@@ -4,7 +4,7 @@
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 5 complete; Checkpoint 6 next
+**Status:** Checkpoint 6 complete; Checkpoint 7 next
 
 ## Completed
 
@@ -23,13 +23,14 @@
 - Completed Checkpoint 3 frontend Capability Library and Agent binding UI.
 - Completed Checkpoint 4 runtime projection and `.weagent/*` injection path.
 - Completed Checkpoint 5 built-in Tool call audit through capability bindings.
+- Completed Checkpoint 6 minimal MCP npx runtime inside the sandbox.
 
 ## Current Branch Notes
 
 - Local branch has been moved to `feature/toolset`.
 - Upstream is `origin/feature/toolset`.
-- Existing untracked `.claude/logs/` should not be included in toolset commits.
+- Existing untracked `.claude/logs/` and `.planning/STATE.md.lock` should not be included in toolset commits.
 
 ## Next Action
 
-Begin Checkpoint 6: minimal MCP npx runtime inside the sandbox.
+Begin Checkpoint 7: Plugin manifest import and install-record display, with no Plugin execution endpoint.

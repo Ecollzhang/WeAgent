@@ -22,6 +22,7 @@ from .capabilities import (
     write_run_snapshot,
 )
 from .claude_config import clean_base_url, clean_config_value, claude_env, write_settings, trust_projects
+from .mcp_runtime import McpRuntime
 from .tools import ToolRegistry, register_builtin_tools
 from . import session as session_store
 from .events import push_event
@@ -38,6 +39,7 @@ class Orchestrator:
     def __init__(self):
         self.agents: dict[str, ClaudeRuntime] = {}
         self.tools = ToolRegistry()
+        self.mcp_runtime = McpRuntime()
         self.custom_tools_path = "/workspace/.session/tools.json"
         self.capability_projection: Optional[dict] = None
         self._capability_run_counter = 0
@@ -56,6 +58,7 @@ class Orchestrator:
         """Install the session-local .weagent capability projection."""
         if not isinstance(projection, dict):
             return {"status": "error", "error": "Projection must be an object"}
+        self.mcp_runtime.stop_all()
         result = write_projection(projection, workspace_root="/workspace")
         self.capability_projection = projection
         log_event(
@@ -531,6 +534,33 @@ class Orchestrator:
 
     def list_tools(self) -> list[dict]:
         return self.tools.list_tools()
+
+    # ---- MCP runtime ----
+
+    def start_mcp_server(self, agent_id: str, runtime_id: str) -> dict:
+        return self.mcp_runtime.start_server(agent_id, runtime_id)
+
+    def list_mcp_tools(self, runtime_id: str) -> dict:
+        return self.mcp_runtime.list_tools(runtime_id)
+
+    def call_mcp_tool(self, agent_id: str, runtime_id: str, tool_name: str,
+                      args: dict) -> dict:
+        run_id = self._write_capability_run_snapshot(agent_id)
+        session_id = (self.capability_projection or {}).get("session_id", "")
+        return self.mcp_runtime.call_tool(
+            agent_id,
+            runtime_id,
+            tool_name,
+            args,
+            run_id=run_id,
+            session_id=session_id,
+        )
+
+    def stop_mcp_server(self, runtime_id: str) -> dict:
+        return self.mcp_runtime.stop_server(runtime_id)
+
+    def list_mcp_servers(self) -> dict:
+        return {"status": "ok", "servers": self.mcp_runtime.list_running_servers()}
 
     def _load_custom_tools(self):
         """Load persisted command-backed custom tools."""

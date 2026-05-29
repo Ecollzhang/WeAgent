@@ -245,6 +245,30 @@ class OrchestratorClient:
     def remove_custom_tool(self, tool_name: str) -> dict:
         return self._request("DELETE", f"/api/tools/custom/{tool_name}")
 
+    # ---- MCP ----
+
+    def list_mcp_servers(self) -> dict:
+        return self._request("GET", "/api/mcp/servers")
+
+    def start_mcp_server(self, agent_id: str, runtime_id: str) -> dict:
+        return self._request("POST", f"/api/mcp/{runtime_id}/start", {
+            "agent_id": agent_id,
+        })
+
+    def list_mcp_tools(self, runtime_id: str) -> dict:
+        return self._request("GET", f"/api/mcp/{runtime_id}/tools")
+
+    def call_mcp_tool(self, agent_id: str, runtime_id: str, tool_name: str,
+                      args: dict) -> dict:
+        return self._request("POST", f"/api/mcp/{runtime_id}/call", {
+            "agent_id": agent_id,
+            "tool_name": tool_name,
+            "args": args,
+        })
+
+    def stop_mcp_server(self, runtime_id: str) -> dict:
+        return self._request("POST", f"/api/mcp/{runtime_id}/stop")
+
     # ---- Services ----
 
     def list_services(self) -> dict:

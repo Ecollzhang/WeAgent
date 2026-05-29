@@ -187,6 +187,42 @@ def resolve_bound_tool_capability(agent_id: str, tool_name: str,
     return None
 
 
+def resolve_bound_mcp_capability(agent_id: str, runtime_id: str,
+                                 workspace_root: str = DEFAULT_WORKSPACE_ROOT) -> dict | None:
+    """Find an MCP capability bound to this Agent by runtime id."""
+    agent_path = _weagent_path(
+        workspace_root,
+        "agents",
+        _safe_segment(agent_id),
+        "capabilities.json",
+    )
+    if not os.path.exists(agent_path):
+        return None
+
+    view = _read_json(agent_path)
+    for capability in view.get("capabilities") or []:
+        if capability.get("type") != "mcp":
+            continue
+        candidate_ids = {
+            capability.get("runtime_id"),
+            capability.get("capability_id"),
+            capability.get("id"),
+        }
+        if runtime_id not in candidate_ids:
+            continue
+        return {
+            "binding_id": capability.get("binding_id"),
+            "capability_id": capability.get("capability_id"),
+            "capability_version_id": capability.get("capability_version_id"),
+            "runtime_id": capability.get("runtime_id") or runtime_id,
+            "source": capability.get("source"),
+            "source_ref": capability.get("source_ref") or "",
+            "granted_permissions": capability.get("granted_permissions") or [],
+            "manifest": capability.get("manifest") or {},
+        }
+    return None
+
+
 def summarize_tool_input(tool_name: str, args: dict) -> dict:
     args = args or {}
     if tool_name in {"read_file", "list_files"}:
@@ -202,6 +238,13 @@ def summarize_tool_input(tool_name: str, args: dict) -> dict:
     return {"arg_keys": sorted(args.keys())}
 
 
+def summarize_mcp_input(tool_name: str, args: dict) -> dict:
+    return {
+        "tool_name": tool_name,
+        "argument_keys": sorted((args or {}).keys()),
+    }
+
+
 def summarize_tool_output(result) -> dict:
     if isinstance(result, str):
         return {"text_length": len(result), "preview": result[:300]}
@@ -210,6 +253,10 @@ def summarize_tool_output(result) -> dict:
     if isinstance(result, list):
         return {"items": len(result)}
     return {"type": type(result).__name__}
+
+
+def summarize_mcp_output(result) -> dict:
+    return summarize_tool_output(result)
 
 
 def append_tool_call_record(record: dict, workspace_root: str = DEFAULT_WORKSPACE_ROOT):

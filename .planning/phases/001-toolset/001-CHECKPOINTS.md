@@ -63,7 +63,7 @@
 
 ## Checkpoint 6: Minimal MCP npx Runtime
 
-**Status:** Next
+**Status:** Complete
 
 **Exit criteria:**
 
@@ -72,6 +72,8 @@
 - Sandbox starts the MCP server, lists tools, performs one minimal call, and records it.
 
 ## Checkpoint 7: Plugin Manifest Import
+
+**Status:** Next
 
 **Exit criteria:**
 
