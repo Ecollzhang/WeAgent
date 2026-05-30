@@ -93,10 +93,26 @@
           type="text"
           placeholder="输入消息..."
           v-model="inputText"
-          @keydown.enter.native="handleSend"
+          @input="handleInputChange"
+          @keydown.native="handleInputKeydown"
           class="feishu-input"
         >
         </el-input>
+        <div v-if="mentionVisible && mentionCandidates.length" class="mention-menu">
+          <button
+            v-for="(agent, index) in mentionCandidates"
+            :key="agent.agent_id"
+            class="mention-item"
+            :class="{ active: index === mentionIndex }"
+            @mousedown.prevent="selectMention(agent)"
+          >
+            <span class="mention-avatar" :style="{ background: agent.color || '#4080ff' }">
+              <img v-if="agent.avatar" :src="agent.avatar" />
+              <span v-else>{{ mentionName(agent).charAt(0) }}</span>
+            </span>
+            <span class="mention-name">{{ mentionName(agent) }}</span>
+          </button>
+        </div>
         <el-button type="text" class="send-btn" @click="handleSend" :disabled="!inputText.trim()">
           <i class="el-icon-promotion"></i>
         </el-button>
@@ -121,6 +137,10 @@ export default {
   data() {
     return {
       inputText: '',
+      mentionVisible: false,
+      mentionQuery: '',
+      mentionIndex: 0,
+      selectedMentions: [],
       activeTab: 'chat',
       stickToBottom: true,
       tabs: [
@@ -138,6 +158,18 @@ export default {
     },
     sessionId() {
       return this.conversation?.sandbox_session_id || this.conversation?.id || ''
+    },
+    mentionCandidates() {
+      const query = String(this.mentionQuery || '').toLowerCase()
+      const agents = (this.sessionAgents || []).filter(agent => agent?.agent_id)
+      const filtered = query
+        ? agents.filter(agent => {
+          const name = this.mentionName(agent).toLowerCase()
+          const id = String(agent.agent_id || '').toLowerCase()
+          return name.includes(query) || id.includes(query)
+        })
+        : agents
+      return filtered.slice(0, 8)
     },
   },
   watch: {
@@ -165,9 +197,88 @@ export default {
   methods: {
     handleSend() {
       if (!this.inputText.trim()) return
-      this.$emit('send-message', this.inputText.trim())
+      const payload = this.buildMessagePayload()
+      this.$emit('send-message', payload)
       this.inputText = ''
+      this.mentionVisible = false
+      this.mentionQuery = ''
+      this.mentionIndex = 0
+      this.selectedMentions = []
       this.$nextTick(() => this.scrollToBottom(true))
+    },
+    handleInputChange() {
+      this.syncMentionState()
+      this.syncSelectedMentions()
+    },
+    handleInputKeydown(event) {
+      if (this.mentionVisible && this.mentionCandidates.length) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          this.mentionIndex = (this.mentionIndex + 1) % this.mentionCandidates.length
+          return
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          this.mentionIndex = (this.mentionIndex - 1 + this.mentionCandidates.length) % this.mentionCandidates.length
+          return
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault()
+          this.selectMention(this.mentionCandidates[this.mentionIndex])
+          return
+        }
+        if (event.key === 'Escape') {
+          this.mentionVisible = false
+          return
+        }
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        this.handleSend()
+      }
+    },
+    syncMentionState() {
+      const match = /@([^\s@，,：:；;]*)$/.exec(this.inputText)
+      if (!match) {
+        this.mentionVisible = false
+        this.mentionQuery = ''
+        this.mentionIndex = 0
+        return
+      }
+      this.mentionQuery = match[1] || ''
+      this.mentionVisible = true
+      if (this.mentionIndex >= this.mentionCandidates.length) this.mentionIndex = 0
+    },
+    selectMention(agent) {
+      if (!agent) return
+      const name = this.mentionName(agent)
+      this.inputText = this.inputText.replace(/@([^\s@，,：:；;]*)$/, `@${name} `)
+      if (!this.selectedMentions.some(item => item.agent_id === agent.agent_id)) {
+        this.selectedMentions.push({
+          agent_id: agent.agent_id,
+          name,
+        })
+      }
+      this.mentionVisible = false
+      this.mentionQuery = ''
+      this.mentionIndex = 0
+    },
+    syncSelectedMentions() {
+      this.selectedMentions = this.selectedMentions.filter(item => {
+        return this.inputText.includes(`@${item.name}`)
+      })
+    },
+    buildMessagePayload() {
+      this.syncSelectedMentions()
+      const targetIds = this.selectedMentions.map(item => item.agent_id)
+      return {
+        content: this.inputText.trim(),
+        target_agent_ids: targetIds,
+        mentions: this.selectedMentions.slice(),
+      }
+    },
+    mentionName(agent) {
+      return agent?.role || agent?.name || agent?.agent_id || ''
     },
     handleMessagesScroll() {
       this.stickToBottom = this.isNearBottom()
@@ -345,6 +456,7 @@ export default {
   border-radius: 8px;
   padding: 0 12px;
   height: 44px;
+  position: relative;
 }
 
 .input-wrapper .feishu-input :deep(.el-input__inner) {
@@ -371,6 +483,69 @@ export default {
 
 .send-btn:disabled {
   color: #c0c4cc;
+}
+
+.mention-menu {
+  position: absolute;
+  left: 8px;
+  bottom: 50px;
+  width: 240px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid #e8eaed;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  z-index: 10;
+}
+
+.mention-item {
+  width: 100%;
+  height: 38px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mention-item:hover,
+.mention-item.active {
+  background: #f0f5ff;
+}
+
+.mention-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.mention-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mention-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #1e293b;
 }
 
 /* Typing indicator */

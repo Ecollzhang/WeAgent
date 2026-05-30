@@ -13,7 +13,28 @@
       "Bash(netstat -ano)",
       "Bash(taskkill //F //PID 47408)",
       "Bash(taskkill //F //PID 6332)",
-      "Bash(tasklist //FI \"PID eq 47408\")"
+      "Bash(tasklist //FI \"PID eq 47408\")",
+      "Bash(rm -rf core adapters workspace sandbox scheduler communication terminal security)",
+      "Bash(mkdir -p host container api tools/builtin)",
+      "Bash(python -m pip install docker -q)",
+      "Bash(docker info:*)",
+      "Bash(docker build:*)",
+      "Bash(docker pull:*)",
+      "Bash(docker run:*)",
+      "Bash(docker rm:*)",
+      "Bash(curl:*)",
+      "Read(//d/data/weagent/sessions/test-tool2/workspace//**)",
+      "Read(//d/data/weagent/sessions/test-tool2//**)",
+      "Bash(docker exec bb3c3f247abc:*)",
+      "Bash(docker buildx:*)",
+      "Bash(docker exec 264f2b07aa44:*)",
+      "Bash(docker cp:*)",
+      "Bash(docker restart:*)",
+      "Bash(docker image:*)",
+      "Bash(docker commit:*)",
+      "Bash(docker tag:*)",
+      "Bash(2>&1)",
+      "Bash(docker stop:*)"
     ]
   }
 }

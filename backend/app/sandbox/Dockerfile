@@ -6,7 +6,14 @@
 FROM python:3.11-slim
 
 # ---- 安装 Node.js + Claude CLI ----
-RUN apt-get update && apt-get install -y curl git ca-certificates \
+RUN apt-get update && apt-get install -y \
+        curl \
+        git \
+        ca-certificates \
+        fontconfig \
+        fonts-dejavu-core \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g @anthropic-ai/claude-code \
@@ -16,6 +23,7 @@ RUN apt-get update && apt-get install -y curl git ca-certificates \
     && cd / \
     && npm install -g @openai/codex opencode-ai \
     && pip install --no-cache-dir codex-relay \
+    && fc-cache -fv \
     && npm cache clean --force \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \

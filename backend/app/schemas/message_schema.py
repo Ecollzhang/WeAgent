@@ -9,6 +9,7 @@ class SendMessageSchema(Schema):
         ['text', 'code', 'image', 'file', 'artifact_card', 'diff_card']
     ), load_default='text')
     parent_message_id = fields.String(allow_none=True)
+    target_agent_ids = fields.List(fields.String(), load_default=list)
 
 
 class MessageResponseSchema(Schema):

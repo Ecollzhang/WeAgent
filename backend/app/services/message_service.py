@@ -275,11 +275,36 @@ class MessageService:
     """Message business logic."""
 
     def send_message(self, conversation_id, sender_type, sender_id, content,
-                     message_type='text', parent_message_id=None, artifact_id=None):
+                     message_type='text', parent_message_id=None, artifact_id=None,
+                     target_agent_ids=None):
         """Send a message in a conversation."""
         conversation = conversation_repo.get_by_id(conversation_id)
         if not conversation:
             return None, 'Conversation not found'
+
+        agent_participants = [p for p in conversation.participants if p.participant_type == 'agent']
+        target_agent_ids = self._normalize_target_agent_ids(target_agent_ids)
+        if sender_type == 'user' and not target_agent_ids:
+            target_agent_ids = self._parse_mentioned_agent_ids(content, agent_participants)
+        target_participants = self._target_participants_from_ids(
+            conversation,
+            agent_participants,
+            target_agent_ids,
+        )
+        if sender_type == 'user' and target_agent_ids and len(target_participants) != len(target_agent_ids):
+            return None, '指定的 Agent 不在当前会话中'
+        message_meta = None
+        if sender_type == 'user' and target_participants:
+            message_meta = {
+                'dispatch_mode': 'direct',
+                'mentions': [
+                    {
+                        'agent_id': p.participant_id,
+                        'name': p.participant_name or p.participant_id,
+                    }
+                    for p in target_participants
+                ],
+            }
 
         message = message_repo.create(
             conversation_id=conversation_id,
@@ -288,7 +313,8 @@ class MessageService:
             content=content,
             message_type=message_type,
             parent_message_id=parent_message_id,
-            artifact_id=artifact_id
+            artifact_id=artifact_id,
+            meta=message_meta,
         )
 
         # Update conversation timestamp
@@ -311,7 +337,7 @@ class MessageService:
                 app = current_app._get_current_object()
                 thread = threading.Thread(
                     target=self._dispatch_agent_sandbox,
-                    args=(app, conversation_id, content, message.id),
+                    args=(app, conversation_id, content, message.id, target_agent_ids),
                     daemon=True,
                 )
                 thread.start()
@@ -323,7 +349,7 @@ class MessageService:
         self._dispatch_agent_sandbox(app, conversation_id, user_content, user_message_id)
 
     def _dispatch_agent_sandbox(self, app, conversation_id, user_content,
-                                user_message_id=None):
+                                user_message_id=None, target_agent_ids=None):
         """Dispatch a user round to one agent or a backend-orchestrated group."""
         with app.app_context():
             conversation = conversation_repo.get_by_id(conversation_id)
@@ -336,12 +362,167 @@ class MessageService:
             ]
             if not agent_participants:
                 return
+            direct_targets = self._resolve_direct_target_participants(
+                conversation,
+                agent_participants,
+                user_content,
+                target_agent_ids,
+            )
+            if direct_targets:
+                self._dispatch_direct_agent_round(
+                    conversation,
+                    direct_targets,
+                    user_content,
+                    user_message_id,
+                )
+                return
             if len(agent_participants) == 1:
                 self._dispatch_single_agent_round(conversation, agent_participants[0],
                                                   user_content, user_message_id)
             else:
                 self._dispatch_multi_agent_round(conversation, agent_participants,
                                                  user_content, user_message_id)
+
+    @staticmethod
+    def _normalize_target_agent_ids(target_agent_ids):
+        if not isinstance(target_agent_ids, list):
+            return []
+        result = []
+        seen = set()
+        for item in target_agent_ids:
+            agent_id = str(item or '').strip()
+            if not agent_id or agent_id in seen:
+                continue
+            seen.add(agent_id)
+            result.append(agent_id)
+        return result
+
+    def _target_participants_from_ids(self, conversation, agent_participants, target_agent_ids):
+        ids = set(self._normalize_target_agent_ids(target_agent_ids))
+        if not ids:
+            return []
+        return [
+            p for p in agent_participants
+            if p.participant_id in ids
+        ]
+
+    def _resolve_direct_target_participants(self, conversation, agent_participants,
+                                            user_content, target_agent_ids=None):
+        explicit = self._target_participants_from_ids(
+            conversation,
+            agent_participants,
+            target_agent_ids,
+        )
+        if explicit:
+            return explicit
+        mentioned_ids = self._parse_mentioned_agent_ids(user_content, agent_participants)
+        return self._target_participants_from_ids(conversation, agent_participants, mentioned_ids)
+
+    @staticmethod
+    def _parse_mentioned_agent_ids(content, agent_participants):
+        text = str(content or '')
+        if '@' not in text:
+            return []
+        matches = re.findall(r'@([^\s@，,：:；;]+)', text)
+        if not matches:
+            return []
+        by_name = {}
+        for p in agent_participants:
+            names = {
+                p.participant_id,
+                p.participant_name or '',
+            }
+            for name in names:
+                clean = str(name or '').strip()
+                if clean:
+                    by_name[clean] = p.participant_id
+        result = []
+        seen = set()
+        for raw in matches:
+            agent_id = by_name.get(str(raw or '').strip())
+            if agent_id and agent_id not in seen:
+                seen.add(agent_id)
+                result.append(agent_id)
+        return result
+
+    @staticmethod
+    def _strip_direct_mentions(content, participants):
+        text = str(content or '')
+        for p in participants:
+            for name in (p.participant_name, p.participant_id):
+                clean = str(name or '').strip()
+                if clean:
+                    text = re.sub(rf'@{re.escape(clean)}(?=\s|$|，|,|：|:|；|;)', '', text)
+        return re.sub(r'\s+', ' ', text).strip()
+
+    def _dispatch_direct_agent_round(self, conversation, participants, user_content,
+                                     user_message_id=None):
+        if not conversation.sandbox_session_id:
+            self._emit_system_error(conversation.id, '该会话没有可用的沙箱容器。')
+            return
+
+        round_id = str(uuid.uuid4())
+        threads = []
+        app = current_app._get_current_object()
+        for participant in participants:
+            thread = threading.Thread(
+                target=self._run_direct_agent_task,
+                args=(app, conversation.id, round_id, user_message_id, user_content, participant.participant_id),
+                daemon=True,
+            )
+            threads.append(thread)
+            thread.start()
+
+    def _run_direct_agent_task(self, app, conversation_id, round_id, user_message_id,
+                               user_content, participant_id):
+        with app.app_context():
+            conversation = conversation_repo.get_by_id(conversation_id)
+            if not conversation:
+                return
+            participant = self._get_conversation_participant(conversation_id, participant_id)
+            if not participant:
+                self._emit_system_error(conversation_id, f'指定 Agent 不在当前会话中：{participant_id}')
+                return
+            clean_task = self._strip_direct_mentions(user_content, [participant])
+            prompt = (
+                '用户在群聊中明确 @ 你处理本消息，请你直接回答或完成任务，'
+                '不要等待主持 Agent 分派。\n\n'
+                f'用户原始消息：\n{user_content}\n\n'
+                f'去除 @ 后的任务：\n{clean_task or user_content}\n'
+            )
+            agent_msg, run = self._create_agent_message_and_run(
+                conversation,
+                participant,
+                round_id,
+                user_message_id,
+                f'{participant.participant_name or participant.participant_id} 正在处理 @ 指定任务...',
+            )
+            try:
+                from app.sandbox import get_manager
+                result = get_manager().send_message(
+                    conversation.sandbox_session_id,
+                    participant.participant_id,
+                    prompt,
+                )
+                if result.get('status') == 'error':
+                    result = self._retry_agent_after_model_error(
+                        conversation, participant.participant_id, prompt, result
+                    )
+                if result.get('status') == 'error':
+                    self._mark_agent_message_failed(
+                        agent_msg.id,
+                        run.id,
+                        result.get('error', 'Agent execution failed'),
+                    )
+                    return
+                self._mark_agent_message_done_if_active(
+                    agent_msg.id,
+                    run.id,
+                    participant.participant_id,
+                    result.get('reply', ''),
+                )
+            except Exception as e:
+                self._mark_agent_message_failed(agent_msg.id, run.id, str(e))
 
     def _dispatch_single_agent_round(self, conversation, participant, user_content,
                                      user_message_id=None):

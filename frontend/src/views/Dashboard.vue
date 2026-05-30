@@ -486,9 +486,13 @@ export default {
       })
     },
 
-    async handleSendMessage(content) {
+    async handleSendMessage(payload) {
       if (!this.currentConversation) return
       const convId = this.currentConversation.id
+      const content = typeof payload === 'string' ? payload : payload?.content
+      const targetAgentIds = Array.isArray(payload?.target_agent_ids) ? payload.target_agent_ids : []
+      const mentions = Array.isArray(payload?.mentions) ? payload.mentions : []
+      if (!content) return
 
       // === Optimistic UI: show user message immediately ===
       const tempId = 'temp_' + Date.now()
@@ -502,17 +506,24 @@ export default {
           content: content,
           message_type: 'text',
           created_at: this.localDateTimeString(),
+          meta: targetAgentIds.length
+            ? { dispatch_mode: 'direct', mentions }
+            : undefined,
         },
       })
 
       this.isAgentResponding = true
 
       try {
-        const res = await apiSendMessage({
+        const requestData = {
           conversation_id: convId,
           content: content,
           message_type: 'text',
-        })
+        }
+        if (targetAgentIds.length) {
+          requestData.target_agent_ids = targetAgentIds
+        }
+        const res = await apiSendMessage(requestData)
 
         if (res.code === 201) {
           // Replace temp ID with real ID from server

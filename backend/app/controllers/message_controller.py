@@ -40,7 +40,8 @@ def send_message():
         content=data['content'],
         message_type=data.get('message_type', 'text'),
         parent_message_id=data.get('parent_message_id'),
-        artifact_id=data.get('artifact_id')
+        artifact_id=data.get('artifact_id'),
+        target_agent_ids=data.get('target_agent_ids') or [],
     )
 
     if error:
