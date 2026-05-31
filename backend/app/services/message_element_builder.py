@@ -4,6 +4,7 @@ import re
 
 CODE_FENCE_RE = re.compile(r'```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```')
 IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'}
+SYSTEM_FILE_NAMES = {'.weagent_claude_session'}
 WORKSPACE_FILE_RE = re.compile(
     r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|js|json|py|pdf|csv|xml|vue)',
     re.IGNORECASE,
@@ -40,7 +41,9 @@ def file_event_element(session_id, file_data):
         return None
 
     normalized_path = str(path).replace('\\', '/')
-    if not (normalized_path.startswith('/workspace/') or normalized_path.startswith('workspace/')):
+    if normalized_path.startswith('agents/'):
+        normalized_path = f'/workspace/{normalized_path}'
+    elif not (normalized_path.startswith('/workspace/') or normalized_path.startswith('workspace/')):
         return None
 
     clean_path = normalized_path.lstrip('/')
@@ -48,6 +51,8 @@ def file_event_element(session_id, file_data):
         clean_path = clean_path[len('workspace/'):]
 
     name = os.path.basename(clean_path) or clean_path
+    if _should_hide_workspace_file(clean_path, name):
+        return None
     url_path = clean_path.replace('\\', '/')
     url = f'/api/sandbox/sessions/{session_id}/workspace/{url_path}'
     ext = os.path.splitext(name)[1].lower()
@@ -136,6 +141,16 @@ def mentioned_file_elements(session_id, text):
         if element:
             elements.append(element)
     return elements
+
+
+def _should_hide_workspace_file(clean_path, name):
+    normalized = str(clean_path or '').replace('\\', '/')
+    filename = str(name or '')
+    if '/.weagent_history/' in f'/{normalized}':
+        return True
+    if filename in SYSTEM_FILE_NAMES:
+        return True
+    return False
 
 
 def text_delta_element(chunk):

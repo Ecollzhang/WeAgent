@@ -83,6 +83,13 @@ table 固定格式：{{"type":"table","title":"标题","data":{{"headers":["列1
 image/file 只允许上报容器内 /workspace/... 路径。
 大段代码可以用 code 块上报；如果用户要求生成项目或可运行产物，必须把代码写入文件，再上报 file/image。
 
+- 生成表格数据时，只需用 Bash 写入 CSV 文件，再用 type=file 上报该 CSV 路径。后端会自动解析 CSV 并在聊天流中展示为表格。无需手动上报 type=table。
+  printf '列1,列2\n值1,值2\n' > /workspace/agents/{self.workspace_name}/data.csv
+  weagent-report '{{"type":"file","title":"表格数据文件","content":"/workspace/agents/{self.workspace_name}/data.csv","data":{{"path":"/workspace/agents/{self.workspace_name}/data.csv"}}}}'
+
+- 修改已有文件后，用 code 类型上报 unified diff 摘要，diff 格式为 @@ -旧行号,数量 +新行号,数量 @@：
+  weagent-report '{{"type":"code","title":"style.css 变更","content":"@@ -1,5 +1,8 @@\\n old line\\n+new line\\n unchanged","data":{{"language":"diff","filename":"style.css","path":"/workspace/agents/{self.workspace_name}/style.css","diff_stat":{{"additions":1,"deletions":1}}}}}}'
+
 文件创建方式：优先使用 Claude Code 的 Write/Edit/Bash 工具直接创建文件。所有正式产物优先写入你的私有工作目录。
 如果工具不可用，才使用下面格式输出文件内容，系统会尝试自动写入：
 

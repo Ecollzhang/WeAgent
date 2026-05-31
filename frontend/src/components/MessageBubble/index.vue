@@ -86,22 +86,45 @@
               <span class="artifact-meta">{{ elementData(el).language || 'code' }}</span>
               <div class="code-actions">
                 <el-button size="mini" type="text" @click="copyCode(elementContent(el))">复制</el-button>
-                <el-button size="mini" type="text" @click="previewCode(normalizeElementForPreview(el))">预览</el-button>
+                <el-button size="mini" type="text" icon="el-icon-edit" @click="editCode(el)">编辑</el-button>
               </div>
             </div>
             <pre class="code-body"><code>{{ elementContent(el) }}</code></pre>
           </div>
+
+          <DiffViewCard
+            v-else-if="el.type === 'diff'"
+            :element="el"
+            :session-id="sessionId"
+            @applied="onDiffApplied(el, $event)"
+          />
 
           <div v-else-if="el.type === 'table'" class="artifact-block table-block">
             <div class="artifact-header">
               <i class="el-icon-s-grid"></i>
               <span>{{ elementData(el).title || '表格产物' }}</span>
               <span class="artifact-meta">{{ tableHeaders(el).length }} 列</span>
+              <div class="table-actions">
+                <el-button
+                  v-if="!el._editing"
+                  size="mini"
+                  type="text"
+                  icon="el-icon-edit"
+                  @click.stop="startEditTable(el)">编辑</el-button>
+                <template v-else>
+                  <el-button size="mini" type="text" icon="el-icon-plus"
+                    @click.stop="addTableRow(el)">加行</el-button>
+                  <el-button size="mini" type="success" icon="el-icon-check"
+                    @click.stop="saveTable(el)">保存</el-button>
+                  <el-button size="mini" type="text" icon="el-icon-close"
+                    @click.stop="cancelEditTable(el)">取消</el-button>
+                </template>
+              </div>
             </div>
             <div class="table-scroll">
               <el-table
                 v-if="tableHeaders(el).length"
-                :data="normalizeTable(el)"
+                :data="el._editing ? el._editRows : normalizeTable(el)"
                 size="small"
                 border
                 stripe
@@ -113,7 +136,23 @@
                   :prop="'col' + hi"
                   :label="h"
                   min-width="120"
-                ></el-table-column>
+                >
+                  <template slot-scope="scope">
+                    <el-input
+                      v-if="el._editing"
+                      v-model="scope.row['col' + hi]"
+                      size="mini"
+                      placeholder="输入内容"
+                    />
+                    <span v-else>{{ scope.row['col' + hi] }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column v-if="el._editing" label="操作" width="80" fixed="right">
+                  <template slot-scope="scope">
+                    <el-button type="text" size="mini" icon="el-icon-delete" style="color: #f56c6c"
+                      @click="deleteTableRow(el, scope.$index)">删除</el-button>
+                  </template>
+                </el-table-column>
               </el-table>
               <div v-else class="el-text" v-html="renderText(elementContent(el))"></div>
             </div>
@@ -131,6 +170,7 @@
               </button>
               <span v-else>{{ elementData(el).name || elementData(el).alt || '图片' }}</span>
               <span class="artifact-meta">image</span>
+              <el-button size="mini" type="text" icon="el-icon-crop" @click.stop="cropImage(el)">裁剪</el-button>
             </div>
             <div class="image-frame">
               <img
@@ -149,6 +189,7 @@
                 {{ elementData(el).name || elementContent(el) }}
               </button>
               <span class="artifact-meta">image</span>
+              <el-button size="mini" type="text" icon="el-icon-crop" @click.stop="cropImage(el)">裁剪</el-button>
             </div>
             <div class="image-frame">
               <img
@@ -160,13 +201,19 @@
             </div>
           </div>
 
-          <div v-else-if="el.type === 'file'" class="artifact-block file-card" @click="openFileElement(elementData(el))">
-            <div class="file-icon"><i :class="fileIcon(el)"></i></div>
-            <div class="file-main">
-              <button class="file-link-btn">{{ elementData(el).name || elementContent(el) }}</button>
-              <span class="file-path">{{ elementData(el).path || elementData(el).url || elementContent(el) }}</span>
+          <div v-else-if="el.type === 'file'" class="artifact-block file-card">
+            <div class="artifact-header">
+              <i :class="fileIcon(el)"></i>
+              <button class="artifact-title-btn" @click="openFileElement(elementData(el))">
+                {{ elementData(el).name || elementContent(el) }}
+              </button>
+              <span v-if="elementData(el).size" class="artifact-meta">{{ formatFileSize(elementData(el).size) }}</span>
+              <el-button
+                v-if="isHtmlElement(el) || elementData(el).subtype === 'code_preview'"
+                size="mini" type="text" icon="el-icon-edit"
+                @click.stop="editCode(el)"
+              >编辑</el-button>
             </div>
-            <span v-if="elementData(el).size" class="file-size">{{ formatFileSize(elementData(el).size) }}</span>
           </div>
         </div>
       </div>
@@ -229,26 +276,6 @@
       </el-tag>
     </div>
 
-    <!-- Code Preview Dialog -->
-    <el-dialog
-      title="代码预览"
-      :visible.sync="codePreviewVisible"
-      width="700px"
-      top="5vh"
-      custom-class="code-preview-dialog"
-    >
-      <div class="code-preview-body">
-        <div class="preview-meta" v-if="previewData">
-          <span class="preview-filename" v-if="previewData.filename">
-            <i class="el-icon-document"></i> {{ previewData.filename }}
-          </span>
-          <el-tag size="mini" type="primary" v-if="previewData.language">
-            {{ previewData.language }}
-          </el-tag>
-        </div>
-        <pre class="preview-code"><code>{{ previewData?.content }}</code></pre>
-      </div>
-    </el-dialog>
     <el-dialog
       title="图片预览"
       :visible.sync="imagePreviewVisible"
@@ -260,25 +287,86 @@
         <img v-if="previewImageUrl" :src="previewImageUrl" class="preview-image" />
       </div>
     </el-dialog>
+
+    <CodeEditor
+      v-if="editorVisible && editorMode === 'code'"
+      :visible.sync="editorVisible"
+      :content="editorData.content"
+      :language="editorData.language"
+      :file-name="editorData.fileName"
+      :file-path="editorData.filePath"
+      :session-id="sessionId"
+      @saved="onEditorSaved"
+    />
+
+    <HtmlPageEditor
+      v-if="editorVisible && editorMode === 'html-page'"
+      :visible.sync="editorVisible"
+      :content="editorData.content"
+      :file-name="editorData.fileName"
+      :file-path="editorData.filePath"
+      :session-id="sessionId"
+      @saved="onEditorSaved"
+    />
+
+    <ImageCropper
+      v-if="cropVisible"
+      :visible.sync="cropVisible"
+      :image-url="cropImageUrl"
+      @save="onImageCropSaved"
+    />
   </div>
 </template>
 
 <script>
 import { formatTime } from '../../utils/format'
+import { writeFile, debugLog } from '@/api/sandbox'
+import CodeEditor from '@/components/CodeEditor/index.vue'
+import HtmlPageEditor from '@/components/HtmlPageEditor/index.vue'
+import DiffViewCard from '@/components/DiffViewCard/index.vue'
+import ImageCropper from '@/components/ImageCropper/index.vue'
 
 export default {
   name: 'MessageBubble',
+  components: { CodeEditor, HtmlPageEditor, DiffViewCard, ImageCropper },
   props: {
     message: Object,
     isOwn: Boolean,
     sessionId: { type: String, default: '' },
   },
+  mounted() {
+  },
+  watch: {
+    'message.elements': {
+      immediate: true,
+      deep: true,
+      handler(val) {
+        const list = Array.isArray(val) ? val : []
+        const types = list.map(item => item && item.type).filter(Boolean)
+        const diffCount = list.filter(item => item && item.type === 'diff').length
+        console.log('[DEBUG P4] MessageBubble elements update:', {
+          messageId: this.message && this.message.id,
+          total: list.length,
+          diffCount,
+          types,
+          artifactTypes: this.artifactElements.map(item => item && item.type),
+        })
+      },
+    },
+  },
   data() {
     return {
-      codePreviewVisible: false,
-      previewData: null,
       imagePreviewVisible: false,
       previewImageUrl: '',
+      editorMode: null,
+      editorVisible: false,
+      editorData: {
+        content: '', language: 'text', fileName: '', filePath: '',
+      },
+      editingElement: null,
+      cropVisible: false,
+      cropImageUrl: '',
+      cropElement: null,
     }
   },
   computed: {
@@ -329,7 +417,7 @@ export default {
       return list.length ? list[list.length - 1] : null
     },
     artifactElements() {
-      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file'].includes(el?.type))
+      const artifacts = this.renderedElements.filter(el => ['code', 'diff', 'table', 'image', 'file', 'webpage'].includes(el?.type))
       const seen = new Set()
       return artifacts.filter(el => {
         const key = this.artifactKey(el)
@@ -384,7 +472,23 @@ export default {
           statusClass: event.type || 'event',
           path: event.data?.file || event.data?.path || '',
         }))
-      return [...progressSteps, ...eventSteps]
+      const allSteps = [...progressSteps, ...eventSteps]
+        .filter(step => !this.isInternalWorkspacePath(step.path))
+      const seen = new Set()
+      return allSteps.filter(step => {
+        const key = `${step.title}|${this.normalizeWorkspacePath(step.path || '')}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+    },
+  },
+  watch: {
+    'message.elements': {
+      handler(newElements, oldElements) {
+      },
+      deep: true,
+      immediate: false,
     },
   },
   methods: {
@@ -420,6 +524,14 @@ export default {
     },
     artifactKey(el) {
       const data = this.elementData(el)
+      const canonicalPath = this.normalizeWorkspacePath(data.path || data.file || '')
+      if (canonicalPath) {
+        return [
+          el?.type || '',
+          data.subtype || '',
+          canonicalPath,
+        ].join('|')
+      }
       return [
         el?.type || '',
         data.url || '',
@@ -678,8 +790,12 @@ export default {
     },
     imageSrc(el) {
       const data = this.elementData(el)
+      if (data.local_preview_url) return data.local_preview_url
       const candidate = data.url || data.src || data.path || data.file || data.name || this.elementContent(el)
-      return this.resolveFileUrl(candidate)
+      const resolved = this.resolveFileUrl(candidate)
+      if (!resolved) return ''
+      if (!data.url_ts) return resolved
+      return `${resolved}${resolved.includes('?') ? '&' : '?'}ts=${data.url_ts}`
     },
     imagePath(el) {
       const data = this.elementData(el)
@@ -689,6 +805,12 @@ export default {
       const data = this.elementData(el)
       const value = data.path || data.file || data.url || data.src || data.name || this.elementContent(el)
       return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(String(value || '').split('?')[0])
+    },
+    isHtmlElement(el) {
+      const subtype = (el.data && el.data.subtype) || ''
+      if (subtype === 'webpage') return true
+      const name = ((el.data && el.data.name) || '').toLowerCase()
+      return name.endsWith('.html') || name.endsWith('.htm')
     },
     resolveFileUrl(value) {
       if (!value) return ''
@@ -706,6 +828,55 @@ export default {
       this.previewImageUrl = url
       this.imagePreviewVisible = true
     },
+    cropImage(el) {
+      const imageUrl = this.imageSrc(el)
+      if (!imageUrl) {
+        this.$message.warning('图片地址不存在')
+        return
+      }
+      this.cropElement = el
+      this.cropImageUrl = imageUrl
+      this.cropVisible = true
+      console.log('[DEBUG P5] cropImage open:', {
+        path: this.imagePath(el),
+        url: imageUrl,
+      })
+    },
+    async onImageCropSaved({ base64, width, height }) {
+      const target = this.cropElement
+      if (!target) return
+      const path = this.imagePath(target)
+      if (!path) {
+        this.$message.warning('缺少图片文件路径')
+        return
+      }
+      if (!this.sessionId) {
+        this.$message.error('无法获取会话 ID')
+        return
+      }
+      const data = this.elementData(target)
+      const rollbackData = { ...data }
+      this.$set(target, 'data', {
+        ...data,
+        local_preview_url: base64,
+        width,
+        height,
+      })
+      try {
+        console.log('[DEBUG P5] onImageCropSaved:', { path, width, height })
+        await writeFile(this.sessionId, path, base64)
+        this.$set(target, 'data', {
+          ...this.elementData(target),
+          url_ts: Date.now(),
+        })
+        this.cropElement = null
+        this.cropImageUrl = ''
+        this.$message.success('图片已保存')
+      } catch (error) {
+        this.$set(target, 'data', rollbackData)
+        this.$message.error(`保存失败: ${error.message || '未知错误'}`)
+      }
+    },
     async copyCode(content) {
       try {
         await navigator.clipboard.writeText(content)
@@ -721,9 +892,86 @@ export default {
         this.$message.success('已复制到剪贴板')
       }
     },
-    previewCode(data) {
-      this.previewData = data
-      this.codePreviewVisible = true
+    async editCode(el) {
+      const data = el.data || {}
+      const lang = (data.language || '').toLowerCase()
+      const filePath = data.path || el.path || ''
+      const fallbackName = filePath ? filePath.split('/').pop() : ''
+      const filename = (data.filename || data.title || data.name || fallbackName || '').toLowerCase()
+      const subtype = data.subtype || ''
+      debugLog("P3X", `editCode entry: type=${el.type}, lang="${lang}", filename="${filename}", subtype="${subtype}"`)
+      debugLog("P3X", `el.data keys: ${Object.keys(data).join(',') || '(empty)'}`)
+      debugLog("P3X", `el.data raw: ${JSON.stringify(data).substring(0, 200)}`)
+      const pathForMatch = `${filename} ${filePath} ${data.url || ''}`.toLowerCase()
+      const isHtml = subtype === 'webpage'
+        || lang === 'html'
+        || lang === 'htmlmixed'
+        || /\.html?($|\?)/i.test(pathForMatch)
+      const isCodeFile = el.type === 'code'
+        || (el.type === 'file' && subtype === 'code_preview')
+        || (el.type === 'file' && /\.(css|js|jsx|ts|tsx|py|md|sql|json|xml|yaml|yml)($|\?)/i.test(pathForMatch))
+      debugLog("P3X", `isHtml=${isHtml}, isCodeFile=${isCodeFile}, filePath=${filePath || '(空)'}`)
+      console.log('[DEBUG P3X] editCode 触发, type:', el.type, 'subtype:', subtype, 'isHtml:', isHtml, 'isCodeFile:', isCodeFile, 'filePath:', filePath || '(空!)')
+
+      if (!isHtml && !isCodeFile) {
+        debugLog("P3X", "skip: no match")
+        console.log('[DEBUG P3X] 元素类型不匹配编辑器, 跳过')
+        return
+      }
+
+      const inlineContent = el.type === 'code' ? (el.content || data.content || '') : (data.content || '')
+      let content = inlineContent
+      if (el.type === 'file') {
+        const fetchUrl = data.url || this.resolveFileUrl(filePath)
+        if (fetchUrl) {
+          try {
+            debugLog("P3X", `fetching file content from ${fetchUrl}`)
+            const response = await fetch(fetchUrl)
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            content = await response.text()
+            this.$set(el, 'content', content)
+            this.$set(el, 'data', { ...data, content })
+            debugLog("P3X", `fetched content length=${content.length}`)
+          } catch (e) {
+            debugLog("P3X", `fetch content failed: ${e.message || e}`)
+            this.$message.warning('文件内容读取失败，编辑器将以空白内容打开')
+          }
+        }
+      }
+
+      this.editorData = {
+        content,
+        language: lang || (isHtml ? 'html' : 'text'),
+        fileName: data.filename || data.title || data.name || fallbackName || 'code',
+        filePath: filePath,
+      }
+
+      this.editorMode = isHtml ? 'html-page' : 'code'
+      debugLog("P3X", `routing to ${this.editorMode}`)
+      console.log('[DEBUG P3X] 路由到', this.editorMode === 'html-page' ? 'HtmlPageEditor' : 'CodeEditor')
+      this.editingElement = el
+      this.editorVisible = true
+      debugLog("P3X", "editorVisible set to true")
+    },
+
+    onEditorSaved({ path, content }) {
+      console.log('[DEBUG P3X] onEditorSaved, path:', path)
+      if (this.editingElement) {
+        this.$set(this.editingElement, 'content', content)
+        const d = this.editingElement.data || {}
+        this.$set(this.editingElement, 'data', { ...d, content })
+        this.editingElement = null
+      }
+      this.$message.success('文件已保存')
+    },
+    onDiffApplied(el, { path, content }) {
+      const data = this.elementData(el)
+      this.$set(el, 'data', {
+        ...data,
+        after: content,
+        path,
+        applied: true,
+      })
     },
     formatFileSize(bytes) {
       if (!bytes) return ''
@@ -743,6 +991,80 @@ export default {
       if (/\.(css|js|ts|tsx|jsx|json|py|java|go|rs)$/.test(value)) return 'el-icon-tickets'
       return 'el-icon-folder-opened'
     },
+
+    // ===== 表格编辑方法 =====
+
+
+    startEditTable(el) {
+      const rows = this.normalizeTable(el)
+      this.$set(el, '_editing', true)
+      this.$set(el, '_editRows', rows.map(row => ({ ...row })))
+      this.$set(el, '_originalRows', rows.map(row => ({ ...row })))
+    },
+
+    cancelEditTable(el) {
+      this.$set(el, '_editing', false)
+      this.$set(el, '_editRows', [])
+      this.$set(el, '_originalRows', [])
+    },
+
+    addTableRow(el) {
+      const headers = this.tableHeaders(el)
+      const newRow = {}
+      headers.forEach((h, i) => { newRow['col' + i] = '' })
+      el._editRows.push(newRow)
+    },
+
+    deleteTableRow(el, index) {
+      if (el._editRows.length <= 1) {
+        this.$message.warning('至少保留一行数据')
+        return
+      }
+      el._editRows.splice(index, 1)
+    },
+
+    async saveTable(el) {
+      const headers = this.tableHeaders(el)
+      const rows = el._editRows.map(r => {
+        const row = []
+        headers.forEach((h, i) => { row.push(r['col' + i] || '') })
+        return row
+      })
+
+      const csvContent = [headers, ...rows]
+        .map(row => row.map(cell => {
+          const s = String(cell)
+          if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+            return '"' + s.replace(/"/g, '""') + '"'
+          }
+          return s
+        }).join(','))
+        .join('\n')
+
+      const path = (el.data && el.data.path) || el.path || ''
+      if (!path) {
+        this.$message.error('表格没有关联文件路径，无法保存')
+        return
+      }
+
+      const sessionId = this.sessionId
+      if (!sessionId) { this.$message.error('无法获取会话 ID'); return }
+
+      try {
+        await writeFile(sessionId, path, csvContent)
+        this.$set(el, '_editing', false)
+        el.data = el.data || {}
+        el.data.headers = headers
+        el.data.rows = rows
+        if (!el.data.path) el.data.path = path
+        el._editRows = []
+        el._originalRows = []
+        this.$message.success('表格已保存')
+      } catch (e) {
+        this.$message.error('保存失败: ' + (e.message || '未知错误'))
+      }
+    },
+
     openFileElement(data) {
       if (!data) return
       const path = data.path || data.file || this.pathFromUrl(data.url) || this.pathFromUrl(data.src) || this.workspacePathFromContent(data.content) || data.name
@@ -755,6 +1077,12 @@ export default {
       if (!path) return ''
       const clean = String(path).replace(/\\/g, '/').replace(/^\/+/, '')
       return clean.startsWith('workspace/') ? `/${clean}` : `/workspace/${clean}`
+    },
+    isInternalWorkspacePath(path) {
+      const normalized = this.normalizeWorkspacePath(path || '')
+      if (!normalized) return false
+      return normalized.includes('/.weagent_history/')
+        || normalized.endsWith('/.weagent_claude_session')
     },
     pathFromUrl(url) {
       if (!url) return ''
@@ -1766,5 +2094,18 @@ export default {
   max-width: 100%;
   max-height: 76vh;
   object-fit: contain;
+}
+
+.table-block .table-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.table-block .table-actions .el-button {
+  padding: 4px 8px;
+}
+.table-scroll .el-input--mini .el-input__inner {
+  border: 1px solid #dcdfe6;
+  border-radius: 2px;
 }
 </style>

@@ -192,6 +192,9 @@ def create_app(config_name=None):
         except Exception as e:
             print(f'[WeAgent] Tool seed note: {e}')
 
+        # Load sandbox event bridge (triggers startup log)
+        from app.services.sandbox_event_bridge import sandbox_event_bridge  # noqa: F811
+
     # Register error handlers
     @app.errorhandler(404)
     def not_found(error):

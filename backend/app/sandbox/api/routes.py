@@ -12,6 +12,9 @@ from urllib.parse import quote
 
 from flask import Blueprint, request, jsonify, Response
 
+from app.utils.debug_logger import write_log
+from app.services.workspace_diff_service import workspace_diff_service
+
 sandbox_bp = Blueprint("sandbox", __name__)
 
 # Singleton manager
@@ -415,6 +418,74 @@ def serve_workspace_file(session_id: str, filepath: str):
         return jsonify({"code": 400, "message": str(e)}), 400
 
 
+@sandbox_bp.route("/sessions/<sid>/files/write", methods=["PUT"])
+def write_workspace_file(sid):
+    """Write a file back to the container workspace (overwrite)."""
+    write_log("write", f"sid={sid}")
+    data = request.get_json(silent=True) or {}
+    path = (data.get("path") or "").strip()
+    content = data.get("content")
+    write_log("write", f"path={path} content_len={len(content) if content else 0}")
+    if not path or content is None:
+        return jsonify({"status": "error", "error": "path and content are required"}), 400
+    path = path.replace("\\", "/")
+    parts = path.split("/")
+    agents_idx = -1
+    for i, p in enumerate(parts):
+        if p == "agents":
+            agents_idx = i
+            break
+    if agents_idx < 0:
+        return jsonify({"status": "error", "error": "cannot parse agent from path"}), 400
+    workspace_name = parts[agents_idx + 1] if agents_idx + 1 < len(parts) else None
+    if not workspace_name:
+        return jsonify({"status": "error", "error": "cannot determine agent workspace"}), 400
+    mgr = _mgr()
+    session = mgr.get_session(sid)
+    write_log("write", f"session found: {session is not None}, container_id: {session.container_id if session else 'N/A'}")
+    if not session:
+        return jsonify({"status": "error", "error": "session not found"}), 404
+    agent_id = None
+    for cfg in (session.agents_config or []):
+        if cfg.get("workspace_name") == workspace_name:
+            agent_id = cfg.get("agent_id")
+            break
+    if not agent_id:
+        cfg_list = session.agents_config or []
+        agent_id = cfg_list[0].get("agent_id") if cfg_list else None
+    if not agent_id:
+        agent_id = "unknown"
+    if isinstance(content, str) and content.startswith("data:"):
+        import base64
+        header, encoded = content.split(",", 1)
+        content_bytes = base64.b64decode(encoded)
+    elif isinstance(content, str):
+        content_bytes = content.encode("utf-8")
+    else:
+        content_bytes = content
+    try:
+        diff_artifact = workspace_diff_service.build_diff_for_write(mgr, sid, path, content_bytes)
+        write_log("write", f"calling mgr.write_workspace_file(sid={sid}, path={path}, size={len(content_bytes)})")
+        result = mgr.write_workspace_file(sid, path, content_bytes)
+        write_log("write", f"write_workspace_file result: {result}")
+        if isinstance(result, dict) and result.get("error"):
+            return jsonify({"status": "error", "error": result.get("error")}), 500
+        workspace_diff_service.store_snapshot_for_write(mgr, sid, path, content_bytes)
+        payload = {"status": "ok", "path": path, "agent_id": agent_id, "size": len(content_bytes)}
+        if diff_artifact:
+            payload["diff"] = {
+                "path": diff_artifact.path,
+                "additions": diff_artifact.additions,
+                "deletions": diff_artifact.deletions,
+            }
+        return jsonify(payload)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        write_log("write", f"exception: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 def _inject_html_base(content: bytes, session_id: str, workspace_path: str) -> bytes:
     """Inject base href so relative assets in generated HTML resolve via this API."""
     try:
@@ -596,3 +667,10 @@ def container_event_callback():
             print(f"[WeAgent] Sandbox event bridge error: {e}")
 
     return jsonify({"code": 200})
+
+
+@sandbox_bp.route("/debug/log", methods=["POST"])
+def debug_log():
+    data = request.get_json(silent=True) or {}
+    write_log(data.get("label", "debug"), data.get("msg", ""))
+    return jsonify({"status": "ok"})

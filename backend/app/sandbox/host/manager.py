@@ -604,6 +604,48 @@ class DockerContainerManager:
             raise KeyError(f"Session '{session_id}' not found")
         return session.client.download_file(path)
 
+    def write_workspace_file(self, session_id: str, file_path: str,
+                             content_bytes: bytes) -> dict:
+        """Write a file to any path under /workspace/ in the container.
+
+        Unlike upload_agent_file, this bypasses the userInput subdirectory
+        restriction and writes directly to the specified path.
+        """
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        normalized_path = "/" + str(file_path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+
+        if not normalized_path.startswith("/workspace/"):
+            return {"status": "error", "error": "File path must be under /workspace/"}
+
+        directory = posixpath.dirname(normalized_path)
+        target_name = posixpath.basename(normalized_path)
+
+        try:
+            container = self.docker.containers.get(session.container_id)
+            mkdir_result = container.exec_run(["mkdir", "-p", directory])
+            if getattr(mkdir_result, "exit_code", 1) != 0:
+                output = self._decode_exec_output(getattr(mkdir_result, "output", b""))
+                return {"status": "error", "error": output or "Failed to create directory"}
+
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+                info = tarfile.TarInfo(name=target_name)
+                info.size = len(content_bytes)
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(content_bytes))
+            tar_stream.seek(0)
+
+            if not container.put_archive(directory, tar_stream.getvalue()):
+                return {"status": "error", "error": "Failed to write file into container"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+        return {"status": "ok", "path": normalized_path, "size": len(content_bytes)}
+
     # ---- Agent control ----
 
     def stop_agent(self, session_id: str, agent_id: str) -> dict:

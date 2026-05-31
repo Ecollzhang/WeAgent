@@ -58,3 +58,4 @@ htmlcov/
 docs/archive-registry.md
 .planning/*.lock
 .pycache_verify/
+docs/ai-collab/

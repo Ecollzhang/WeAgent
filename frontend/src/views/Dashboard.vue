@@ -621,6 +621,7 @@ export default {
         ['conversation_message_element_stream', onElementStream],
         ['conversation_message_step', onStep],
         ['conversation_message_status', onStatus],
+        ['debug_card', (data) => { console.log('[LOG Card]', data?.msg) }],
       ]
       this.socketHandlers.forEach(([event, handler]) => socketClient.on(event, handler))
     },

@@ -153,6 +153,16 @@ export function getServiceLogs(sessionId, port) {
   return request.get(`/sandbox/sessions/${sessionId}/services/${port}/logs`)
 }
 
+// ===== File write-back =====
+export function writeFile(sessionId, path, content) {
+  return request.put(`/sandbox/sessions/${sessionId}/files/write`, { path, content })
+}
+
+// ===== Debug log =====
+export function debugLog(label, msg) {
+  return request.post('/sandbox/debug/log', { label, msg }).catch(() => {})
+}
+
 // ===== Agent control =====
 export function stopAgent(sessionId, agentId) {
   return request.post(`/sandbox/sessions/${sessionId}/agents/${agentId}/stop`)

@@ -4,6 +4,7 @@ from app import db, socketio
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.utils.timezone import beijing_now, format_beijing
+from app.utils.debug_logger import card_log
 from app.services.agent_run_service import agent_run_service
 from app.services.message_element_builder import (
     file_event_element,
@@ -12,6 +13,7 @@ from app.services.message_element_builder import (
     report_event_element,
     result_element,
 )
+from app.services.workspace_diff_service import workspace_diff_service
 
 
 STARTED_EVENTS = {"provider_started", "claude_started"}
@@ -24,6 +26,18 @@ STOPPED_EVENTS = {"provider_stopped", "claude_stopped"}
 
 class SandboxEventBridge:
     """Map sandbox runtime events into formal chat messages."""
+
+    # Phase 2.5 unified card routes
+    CARD_ROUTES = {
+        '.csv': 'table',
+        '.py': 'code', '.js': 'code', '.ts': 'code', '.tsx': 'code',
+        '.css': 'code', '.scss': 'code', '.less': 'code',
+        '.md': 'code', '.sql': 'code', '.json': 'code', '.xml': 'code',
+        '.yaml': 'code', '.yml': 'code', '.toml': 'code',
+        '.html': 'webpage', '.htm': 'webpage',
+        '.png': 'image', '.jpg': 'image', '.jpeg': 'image',
+        '.gif': 'image', '.webp': 'image', '.svg': 'image', '.bmp': 'image',
+    }
 
     def handle_event(self, payload):
         session_id = payload.get("session_id")
@@ -135,6 +149,8 @@ class SandboxEventBridge:
                 self._set_report_summary(message, element)
             else:
                 self._append_element(message, element)
+                self._enrich_file_element(message, element, session_id,
+                                          conversation.id, run, agent_id)
             message.status = "streaming"
             if element.get("type") == "summary" and not message.raw_output:
                 message.content = element.get("content") or message.content
@@ -153,15 +169,35 @@ class SandboxEventBridge:
                 self._event_title(event_type, event_data), "done", event_data
             )
             self._append_element(message, progress)
+            diff_progress = progress_element("正在生成 diff...", "running", event_data)
+            self._append_or_replace_progress(message, diff_progress, "file_write:diff")
+            db.session.commit()
+            self._emit_element(conversation.id, message, run, agent_id, progress)
+            self._emit_element(conversation.id, message, run, agent_id, diff_progress)
+            diff_element = self._build_diff_element(session_id, event_data)
+            card_log("Card", f"[DEBUG P4] file_write event: path={(event_data or {}).get('file') or (event_data or {}).get('path')} has_file_element={bool(element)} has_diff_element={bool(diff_element)}")
+            diff_done = progress_element("diff 已生成" if diff_element else "本次未生成 diff", "done", event_data)
+            self._append_or_replace_progress(message, diff_done, "file_write:diff")
+            if diff_element:
+                self._append_element(message, diff_element)
+                card_log("Card", f"[DEBUG P4] diff element appended: type={diff_element.get('type')} path={diff_element.get('data', {}).get('path')}")
             if element:
                 key = element.get("data", {}).get("url") or element.get("data", {}).get("name")
-                if self._append_element(message, element, unique_key=key):
-                    db.session.commit()
-                    self._emit_element(conversation.id, message, run, agent_id, progress)
+                appended = self._append_element(message, element, unique_key=key)
+                db.session.commit()
+                card_log("Card", f"[DEBUG P4] message elements after file_write commit: count={len(message.elements or [])} types={[item.get('type') for item in (message.elements or [])]}")
+                self._emit_element(conversation.id, message, run, agent_id, diff_done)
+                if diff_element:
+                    self._emit_element(conversation.id, message, run, agent_id, diff_element)
+                if appended:
                     self._emit_element(conversation.id, message, run, agent_id, element)
+                    self._enrich_file_element(message, element, session_id,
+                                              conversation.id, run, agent_id)
             else:
                 db.session.commit()
-                self._emit_element(conversation.id, message, run, agent_id, progress)
+                self._emit_element(conversation.id, message, run, agent_id, diff_done)
+                if diff_element:
+                    self._emit_element(conversation.id, message, run, agent_id, diff_element)
                 self._emit_step(conversation.id, message, run, agent_id, event_type, event_data, seq)
             return
 
@@ -378,6 +414,115 @@ class SandboxEventBridge:
             room=conversation_id,
         )
 
+    # ====== Phase 2.5 card generators ======
+
+    def _enrich_file_element(self, message, element, session_id,
+                             conversation_id=None, run=None, agent_id=None):
+        """Detect file extension and auto-generate content card, emit via socket."""
+        if element.get("type") != "file":
+            return
+        name = (element.get("data", {}).get("name") or "").lower()
+        ext = ""
+        for c in self.CARD_ROUTES:
+            if name.endswith(c):
+                ext = c
+                break
+        if not ext:
+            return
+        path = element.get("data", {}).get("path")
+        if not path:
+            card_log("Card", f"{name}: path empty, skip")
+            return
+        ct = self.CARD_ROUTES[ext]
+        card_log("Card", f"{name} -> type={ct} (ext={ext})")
+        els = message.elements or []
+        for e in els:
+            if e.get("type") == ct and e.get("data", {}).get("path") == path:
+                card_log("Card", f"{name}: duplicate {ct}, skip")
+                return
+        try:
+            from app.sandbox import get_manager
+            raw = get_manager().get_raw_file(session_id, path)
+            if not raw or not raw[0]:
+                card_log("Card", f"{name}: read empty")
+                return
+            content = raw[0].decode("utf-8", errors="replace")
+            card_log("Card", f"{name}: read {len(raw[0])} bytes")
+        except Exception as e:
+            card_log("Card", f"{name}: read failed: {e}")
+            return
+        gen = {'table': self._gen_table, 'code': self._gen_code,
+               'webpage': self._gen_webpage, 'image': self._gen_image}.get(ct)
+        if not gen:
+            return
+        try:
+            c = gen(element, path, name, content)
+            if c:
+                self._append_element(message, c)
+                card_log("Card", f"{name}: generated {ct}")
+                if conversation_id and run and agent_id:
+                    self._emit_element(conversation_id, message, run, agent_id, c)
+            elif ct == 'webpage':
+                card_log("Card", f"{name}: webpage path, c=None, conv_id={conversation_id}, run={bool(run)}, agent_id={agent_id}")
+        except Exception as e:
+            card_log("Card", f"{name}: gen failed: {e}")
+
+    def _gen_table(self, element, path, name, content):
+        import csv, io
+        reader = csv.reader(io.StringIO(content))
+        rows = list(reader)
+        if len(rows) < 2:
+            card_log("Card", f"table: too few rows ({len(rows)})")
+            return None
+        h = [x.strip() for x in rows[0]]
+        r = [[c.strip() for c in row] for row in rows[1:]]
+        if not h or not r:
+            card_log("Card", "table: empty headers/rows")
+            return None
+        card_log("Card", f"table: {len(h)} cols x {len(r)} rows")
+        return {"type":"table","content":content[:200],"status":"done",
+                "data":{"title":name.replace(".csv",""),"headers":h,"rows":r,"path":path}}
+
+    def _gen_code(self, element, path, name, content):
+        e = path.rsplit(".",1)[-1].lower() if "." in path else ""
+        m = {'py':'python','js':'javascript','ts':'typescript','tsx':'typescript',
+             'css':'css','scss':'scss','md':'markdown','sql':'sql',
+             'json':'json','xml':'xml','yaml':'yaml','yml':'yaml','toml':'toml'}
+        return {"type":"code","content":content,"status":"done",
+                "data":{"title":name,"filename":name,"language":m.get(e,e or 'text'),"path":path}}
+
+    def _gen_webpage(self, element, path, name, content):
+        """Mark original file element as webpage, no new element."""
+        element.setdefault("data", {})
+        element["data"]["subtype"] = "webpage"
+        element["data"]["entry"] = True
+        element["data"]["language"] = "html"
+        element["data"]["filename"] = name
+        return None
+
+    def _gen_image(self, element, path, name, content):
+        return None
+
+    @staticmethod
+    def _build_diff_element(session_id, event_data):
+        path = (event_data or {}).get('file') or (event_data or {}).get('path') or ''
+        if not path:
+            card_log("Card", "[DEBUG P4] diff build skipped: empty path in file_write event")
+            return None
+        try:
+            from app.sandbox import get_manager
+            artifact = workspace_diff_service.capture_diff_after_write_event(
+                get_manager(), session_id, path
+            )
+        except Exception as e:
+            card_log("Card", f"diff build failed for {path}: {e}")
+            return None
+        if not artifact or not artifact.diff_text:
+            card_log("Card", f"[DEBUG P4] diff build returned empty: path={path} artifact={bool(artifact)}")
+            return None
+        card_log("Card", f"diff built for {path}: +{artifact.additions} -{artifact.deletions}")
+        return artifact.to_element()
+
     @staticmethod
     def _event_title(event_type, event_data):
         if event_type in STARTED_EVENTS:
@@ -464,5 +609,7 @@ class SandboxEventBridge:
         )
         return participant.participant_name if participant else agent_id
 
+
+card_log("Card", "sandbox_event_bridge module loaded")
 
 sandbox_event_bridge = SandboxEventBridge()
