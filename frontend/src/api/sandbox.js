@@ -123,6 +123,10 @@ export function getSessionDownloadUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`
 }
 
+export function getSessionZipExportUrl(sessionId, path, mode = 'auto') {
+  return `/api/sandbox/sessions/${sessionId}/files/export-zip?path=${encodeURIComponent(path)}&mode=${encodeURIComponent(mode)}`
+}
+
 // ===== Custom tools =====
 export function listCustomTools(sessionId) {
   return request.get(`/sandbox/sessions/${sessionId}/tools`)

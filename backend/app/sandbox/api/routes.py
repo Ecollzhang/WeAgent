@@ -384,6 +384,28 @@ def download_session_file(session_id: str):
         return jsonify({"code": 400, "message": str(e)}), 400
 
 
+@sandbox_bp.route("/sessions/<session_id>/files/export-zip", methods=["GET"])
+def export_session_zip(session_id: str):
+    """Export the current artifact tree root as ZIP."""
+    path = request.args.get("path", "/workspace")
+    mode = request.args.get("mode", "directory")
+    try:
+        mgr = _mgr()
+        content_bytes, mime_type, disposition = mgr.export_zip(session_id, path, mode=mode)
+        response = Response(content_bytes, mimetype=mime_type)
+        if disposition:
+            response.headers["Content-Disposition"] = disposition
+        return response
+    except FileNotFoundError:
+        return jsonify({"code": 404, "message": "File or directory not found"}), 404
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+
+
 @sandbox_bp.route("/sessions/<session_id>/workspace/<path:filepath>", methods=["GET"])
 def serve_workspace_file(session_id: str, filepath: str):
     """Serve a file from the container's /workspace/ with proper MIME type.

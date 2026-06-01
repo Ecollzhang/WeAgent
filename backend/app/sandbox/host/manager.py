@@ -17,8 +17,9 @@ import socket
 import tarfile
 import threading
 import time
+import zipfile
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .client import OrchestratorClient
 
@@ -603,6 +604,61 @@ class DockerContainerManager:
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
         return session.client.download_file(path)
+
+    def export_zip(self, session_id: str, path: str = "/workspace", mode: str = "directory") -> tuple[bytes, str, str]:
+        """Export a workspace directory as a ZIP archive, excluding internal files."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        normalized_path = "/" + str(path or "/workspace").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if normalized_path == "/workspace":
+            export_path = normalized_path
+        elif normalized_path.startswith("/workspace/"):
+            export_path = normalized_path
+        else:
+            raise ValueError("Export path must be under /workspace/")
+
+        try:
+            container = self.docker.containers.get(session.container_id)
+            stream, stat = container.get_archive(export_path)
+            tar_bytes = b"".join(chunk for chunk in stream)
+        except Exception as e:
+            raise FileNotFoundError(export_path) from e
+
+        tar_buffer = io.BytesIO(tar_bytes)
+        zip_buffer = io.BytesIO()
+        top_name = posixpath.basename(export_path.rstrip("/")) or "workspace"
+        is_dir = bool(stat.get("mode", 0) & 0o040000) if isinstance(stat, dict) else False
+
+        with tarfile.open(fileobj=tar_buffer, mode="r:*") as tar, zipfile.ZipFile(
+            zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zip_file:
+            members = tar.getmembers()
+            for member in members:
+                if member.isdir() or member.issym() or member.islnk():
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                member_name = member.name.lstrip("./")
+                relative_name = member_name if is_dir else posixpath.basename(member_name)
+                path_parts = [part for part in relative_name.split("/") if part]
+                if not path_parts:
+                    continue
+                if any(part.startswith(".") for part in path_parts):
+                    continue
+                if any(part == "CLAUDE.md" for part in path_parts):
+                    continue
+                archive_name = posixpath.join(top_name, relative_name) if is_dir else relative_name
+                zip_file.writestr(archive_name, extracted.read())
+
+        zip_bytes = zip_buffer.getvalue()
+        zip_name = f"{top_name}.zip"
+        encoded_name = quote(zip_name)
+        disposition = f"attachment; filename=\"export.zip\"; filename*=UTF-8''{encoded_name}"
+        return zip_bytes, "application/zip", disposition
 
     def write_workspace_file(self, session_id: str, file_path: str,
                              content_bytes: bytes) -> dict:

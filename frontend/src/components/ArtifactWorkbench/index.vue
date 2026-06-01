@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <el-dialog
     :visible.sync="dialogVisible"
     fullscreen
@@ -16,6 +16,7 @@
         <div class="awb-toolbar-right">
           <el-button v-if="canGoUp" size="small" icon="el-icon-back" @click="goUp">上级目录</el-button>
           <el-button v-if="canDownload" size="small" icon="el-icon-download" @click="$emit('download', currentPath)">下载</el-button>
+          <el-button v-if="canExportZip" size="small" icon="el-icon-folder-opened" @click="exportZip">导出 ZIP</el-button>
           <el-button v-if="canEdit" size="small" type="primary" icon="el-icon-edit" @click="enterEditMode">{{ isEditing ? '继续编辑' : '编辑' }}</el-button>
           <el-button v-if="isEditing" size="small" icon="el-icon-close" @click="exitEditMode">退出编辑</el-button>
           <el-button v-if="canCrop" size="small" type="primary" icon="el-icon-crop" @click="enterCropMode">{{ isCropping ? '继续裁剪' : '裁剪' }}</el-button>
@@ -104,9 +105,9 @@
 
           <div v-else-if="currentKind === 'table' && isEditing" class="awb-table-wrap">
             <div class="awb-table-toolbar">
-              <el-button size="small" icon="el-icon-plus" @click="addTableRow">加行</el-button>
+              <el-button size="small" icon="el-icon-plus" @click="addTableRow">鍔犺</el-button>
               <el-button size="small" type="primary" icon="el-icon-check" :loading="savingTable" @click="saveTable">保存</el-button>
-              <el-button size="small" icon="el-icon-close" @click="exitEditMode">取消</el-button>
+              <el-button size="small" icon="el-icon-close" @click="exitEditMode">鍙栨秷</el-button>
             </div>
             <el-table
               v-if="tableHeaders.length"
@@ -127,9 +128,9 @@
                   <el-input v-model="scope.row['col' + index]" size="mini" />
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="80" fixed="right">
+              <el-table-column label="鎿嶄綔" width="80" fixed="right">
                 <template slot-scope="scope">
-                  <el-button type="text" size="mini" style="color:#f56c6c" @click="deleteTableRow(scope.$index)">删除</el-button>
+                  <el-button type="text" size="mini" style="color:#f56c6c" @click="deleteTableRow(scope.$index)">鍒犻櫎</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -188,7 +189,7 @@
 </template>
 
 <script>
-import { getFileTree, getSessionRawFileUrl, getWorkspaceFileUrl, writeFile } from '@/api/sandbox'
+import { getFileTree, getSessionRawFileUrl, getSessionZipExportUrl, getWorkspaceFileUrl, writeFile } from '@/api/sandbox'
 import CodeEditor from '@/components/CodeEditor/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
 import HtmlPageEditor from '@/components/HtmlPageEditor/index.vue'
@@ -247,6 +248,9 @@ export default {
     },
     canDownload() {
       return !!this.currentPath
+    },
+    canExportZip() {
+      return !!this.currentRoot
     },
     canEdit() {
       return this.currentKind === 'code' || this.currentKind === 'html' || this.currentKind === 'table'
@@ -550,6 +554,16 @@ export default {
       if (/\.(md|txt|pdf|docx?)$/.test(value)) return 'el-icon-document'
       return 'el-icon-document'
     },
+    exportZip() {
+      if (!this.sessionId || !this.currentRoot) return
+      const href = getSessionZipExportUrl(this.sessionId, this.currentRoot, 'directory')
+      const link = document.createElement('a')
+      link.href = href
+      link.target = '_blank'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    },
     onClosed() {
       this.isEditing = false
       this.isCropping = false
@@ -786,3 +800,4 @@ export default {
   margin-bottom: 12px;
 }
 </style>
+
