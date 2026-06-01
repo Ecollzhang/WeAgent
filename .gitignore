@@ -58,3 +58,9 @@ htmlcov/
 docs/archive-registry.md
 .planning/*.lock
 .pycache_verify/
+
+# ===== Multi-platform clients =====
+clients/**/node_modules/
+clients/**/dist/
+clients/desktop/release/
+clients/android/ios/

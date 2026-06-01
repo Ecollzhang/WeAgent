@@ -16,6 +16,11 @@
 - **UI**: Element UI
 - **HTTP**: Axios
 
+### 桌面端
+- **核心**: Electron 29 + Vite + Vue 2.7
+- **打包**: electron-builder
+- **定位**: 独立桌面客户端，仅连接外部后端服务，不内置后端
+
 ## 环境要求
 
 - Python 3.10+
@@ -124,7 +129,40 @@ npm run serve
 
 前端默认运行在 `http://localhost:8080`
 
-### 5. 访问平台
+### 5. 桌面端启动与打包
+
+桌面端代码位于 `clients/desktop`，使用 Electron 承载独立的 Vue 客户端。桌面端不内置后端，启动后需要配置后端服务地址；局域网测试时可以填写类似 `http://192.168.1.8:5000` 的地址，本机测试可以填写 `http://127.0.0.1:5000`。
+
+```bash
+cd clients/desktop
+
+# 安装依赖
+npm install
+
+# 开发调试
+npm run dev
+
+# 打包 Windows 桌面应用
+npm run electron:build
+```
+
+打包产物默认输出到：
+
+```text
+clients/desktop/release/
+```
+
+常用产物：
+
+- `WeAgent Setup 0.1.0.exe`：Windows 安装包
+- `win-unpacked/WeAgent.exe`：免安装可执行程序
+- `WeAgent-win-unpacked.zip`：免安装版本压缩包
+
+桌面端应用名为 `WeAgent`，图标来源为 `clients/desktop/logo.png`，打包时会自动生成 Windows 使用的 `logo.ico`。为避免国内网络访问 GitHub 下载 NSIS / winCodeSign 失败，桌面端打包脚本已默认使用 `npmmirror` 的 electron-builder 二进制镜像，并跳过 Windows exe 资源编辑/签名步骤。
+
+如果必须让 Windows 资源管理器中的 exe 文件图标也被完整写入资源，请在 Windows 中启用“开发者模式”或以管理员身份打包，再恢复 `signAndEditExecutable` 配置。
+
+### 6. 访问平台
 
 打开浏览器访问 `http://localhost:8080`
 
@@ -152,6 +190,13 @@ WeAgent/
 │       ├── views/              # 页面视图
 │       ├── store/              # Vuex 状态管理
 │       └── router/             # 路由配置
+├── clients/
+│   └── desktop/                # Electron 桌面端客户端
+│       ├── electron/           # Electron 主进程与 preload
+│       ├── scripts/            # 桌面端构建辅助脚本
+│       ├── src/                # 桌面端 Vue 页面与服务封装
+│       ├── logo.png            # 桌面端应用图标源文件
+│       └── package.json        # 桌面端依赖与打包配置
 ├── .gitignore
 └── README.md
 ```

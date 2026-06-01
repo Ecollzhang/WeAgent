@@ -126,7 +126,8 @@ def stop_agent(conversation_id, agent_id):
 @jwt_required()
 def list_attachments(conversation_id):
     user_id = get_jwt_identity()
-    result, error = conversation_service.list_attachments(conversation_id, user_id)
+    agent_id = request.args.get('agent_id')
+    result, error = conversation_service.list_attachments(conversation_id, user_id, agent_id=agent_id)
 
     if error:
         return error_response(error, code=400)
