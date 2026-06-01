@@ -7,7 +7,7 @@ if __name__ == '__main__':
     socketio.run(
         app,
         host='0.0.0.0',
-        port=int(os.getenv('PORT', 5001)),
+        port=int(os.getenv('PORT', 5002)),
         debug=app.config.get('DEBUG', True),
         use_reloader=False,
         allow_unsafe_werkzeug=True

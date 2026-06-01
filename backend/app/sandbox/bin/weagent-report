@@ -15,8 +15,8 @@ import urllib.request
 
 LOG_DIR = "/workspace/.session/logs"
 SCRIPT_LOG = os.path.join(LOG_DIR, "weagent-report.log")
-REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error"}
-REPORT_STATUSES = {"running", "done", "error", "stopped"}
+REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service"}
+REPORT_STATUSES = {"running", "done", "error", "stopped", "starting", "stopping", "failed", "exited"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
 
@@ -25,7 +25,7 @@ def usage_text() -> str:
 weagent-report only accepts ONE JSON object string.
 
 Required common fields:
-  type: one of progress,result,text,table,image,code,file,error
+  type: one of progress,result,text,table,image,code,file,error,service
   title: non-empty short title
   content: non-empty text, except table may use content as optional caption
   status: optional, one of running,done,error,stopped
@@ -38,6 +38,7 @@ Valid examples:
   weagent-report '{"type":"file","title":"前端页面","content":"/workspace/agents/frontend/index.html","data":{"path":"/workspace/agents/frontend/index.html"}}'
   weagent-report '{"type":"image","title":"预览图","content":"/workspace/agents/frontend/preview.png","data":{"path":"/workspace/agents/frontend/preview.png"}}'
   weagent-report '{"type":"code","title":"关键代码","content":"console.log(1)","data":{"language":"javascript"}}'
+  weagent-report '{"type":"service","title":"前端预览","content":"服务已启动","status":"running","data":{"service_id":"svc_xxx","name":"前端预览","port":5173}}'
 """
 
 
@@ -102,6 +103,18 @@ def validate_payload(payload: object) -> list[str]:
         language = data.get("language") or payload.get("language")
         if language is not None and not isinstance(language, str):
             errors.append("code data.language must be a string")
+
+    if report_type == "service":
+        service_id = data.get("service_id") or data.get("id")
+        if not isinstance(service_id, str) or not service_id.strip():
+            errors.append("service requires data.service_id as a non-empty string")
+        port = data.get("port")
+        if port is not None:
+            try:
+                if int(port) <= 0:
+                    errors.append("service data.port must be a positive integer")
+            except (TypeError, ValueError):
+                errors.append("service data.port must be a positive integer")
 
     return errors
 

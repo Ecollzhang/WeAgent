@@ -196,24 +196,58 @@
 
         <div class="service-list" v-loading="servicesLoading">
           <div v-if="services.length === 0" class="service-empty">暂无服务</div>
-          <div v-for="svc in services" :key="svc.port" class="service-item">
+          <div v-for="svc in services" :key="svc.id || svc.service_id || svc.port" class="service-item">
             <div class="service-main">
               <div class="service-title">
-                <span>容器端口 {{ svc.port }}</span>
-                <el-tag size="mini" :type="svc.status === 'open' || svc.running ? 'success' : 'info'">
-                  {{ svc.status || (svc.running ? 'open' : 'closed') }}
+                <span>{{ svc.name || svc.id || '预览服务' }}</span>
+                <el-tag size="mini" :type="serviceStatusType(svc.status)">
+                  {{ serviceStatusLabel(svc.status) }}
                 </el-tag>
               </div>
-              <a v-if="svc.url" :href="svc.url" target="_blank" rel="noopener" class="service-url">
-                {{ svc.url }}
+              <div class="service-submeta">
+                <span v-if="svc.port">端口 {{ svc.port }}</span>
+                <span v-if="svc.type">{{ svc.type }}</span>
+                <span v-if="svc.preview_token_expires_at">Token {{ formatServiceExpiry(svc.preview_token_expires_at) }}</span>
+              </div>
+              <a v-if="serviceUrl(svc)" :href="serviceUrl(svc)" target="_blank" rel="noopener" class="service-url">
+                {{ serviceUrl(svc) }}
               </a>
               <div v-if="svc.command" class="service-command">{{ svc.command }}</div>
             </div>
-            <el-button v-if="svc.url" size="mini" type="text" @click="copyServiceUrl(svc.url)">复制</el-button>
+            <div class="service-actions">
+              <el-button v-if="serviceUrl(svc)" size="mini" type="text" @click="openServiceUrl(svc)">打开</el-button>
+              <el-button v-if="serviceUrl(svc)" size="mini" type="text" @click="copyServiceUrl(serviceUrl(svc))">复制</el-button>
+              <el-button size="mini" type="text" @click="showServiceLogs(svc)">日志</el-button>
+              <el-button size="mini" type="text" @click="handleRestartService(svc)">重启</el-button>
+              <el-button size="mini" type="text" class="service-stop-btn" @click="handleStopService(svc)">停止</el-button>
+            </div>
           </div>
         </div>
       </div>
     </el-drawer>
+
+    <el-dialog
+      title="服务日志"
+      :visible.sync="serviceLogsVisible"
+      width="760px"
+      top="8vh"
+      custom-class="service-logs-dialog"
+    >
+      <div class="service-logs-body" v-loading="serviceLogsLoading">
+        <div class="service-logs-meta" v-if="serviceLogsData">
+          <el-tag size="mini">{{ serviceLogsData.service_id }}</el-tag>
+          <el-tag size="mini" :type="serviceStatusType(serviceLogsData.status)">{{ serviceStatusLabel(serviceLogsData.status) }}</el-tag>
+        </div>
+        <div class="service-log-section">
+          <div class="service-log-title">stdout</div>
+          <pre>{{ serviceLogsData?.stdout_tail || '暂无输出' }}</pre>
+        </div>
+        <div class="service-log-section">
+          <div class="service-log-title">stderr</div>
+          <pre>{{ serviceLogsData?.stderr_tail || '暂无错误输出' }}</pre>
+        </div>
+      </div>
+    </el-dialog>
 
     <el-dialog title="新建会话" :visible.sync="showCreateDialog" width="500px" custom-class="create-conv-dialog" top="8vh">
       <div class="create-conv-body">
@@ -318,6 +352,9 @@ import {
   getSessionDownloadUrl,
   listServices,
   startService,
+  stopService,
+  restartService,
+  getServiceLogs,
 } from '../api/sandbox'
 import socketClient from '../utils/socket'
 
@@ -365,6 +402,9 @@ export default {
       servicesLoading: false,
       serviceStarting: false,
       services: [],
+      serviceLogsVisible: false,
+      serviceLogsLoading: false,
+      serviceLogsData: null,
       serviceForm: {
         agent_id: '',
         port: 5173,
@@ -768,14 +808,18 @@ export default {
       }
       this.serviceStarting = true
       try {
+        const port = Number(this.serviceForm.port)
+        const command = this.normalizeServiceCommandPort(this.serviceForm.command, port)
+        this.serviceForm.command = command
         const res = await startService(this.currentSessionId, {
           agent_id: this.serviceForm.agent_id,
-          port: this.serviceForm.port,
+          port,
           cwd: this.serviceForm.cwd,
-          command: this.serviceForm.command,
+          command,
         })
         if (res.code === 200) {
-          const url = res.data?.url
+          const service = res.data?.service || {}
+          const url = this.serviceUrl(service)
           this.$message.success(url ? `服务已启动：${url}` : '服务已启动')
           await this.loadServices()
           if (url) window.open(url, '_blank')
@@ -785,6 +829,25 @@ export default {
       } finally {
         this.serviceStarting = false
       }
+    },
+
+    normalizeServiceCommandPort(command, port) {
+      const nextPort = Number(port)
+      let next = String(command || '').trim()
+      if (!next || !nextPort) return next
+      if (/(^|\s)--port=\d{2,5}(?=\s|$)/.test(next)) {
+        return next.replace(/(^|\s)--port=\d{2,5}(?=\s|$)/, `$1--port=${nextPort}`)
+      }
+      if (/(^|\s)--port\s+\d{2,5}(?=\s|$)/.test(next)) {
+        return next.replace(/(^|\s)--port\s+\d{2,5}(?=\s|$)/, `$1--port ${nextPort}`)
+      }
+      if (/(^|\s)-p\s+\d{2,5}(?=\s|$)/.test(next)) {
+        return next.replace(/(^|\s)-p\s+\d{2,5}(?=\s|$)/, `$1-p ${nextPort}`)
+      }
+      if (/\bhttp\.server\s+\d{2,5}(?=\s|$)/.test(next)) {
+        return next.replace(/\bhttp\.server\s+\d{2,5}(?=\s|$)/, `http.server ${nextPort}`)
+      }
+      return next
     },
 
     syncServiceCwd() {
@@ -812,6 +875,95 @@ export default {
         this.$message.success('已复制访问链接')
       } catch (e) {
         this.$message.info(url)
+      }
+    },
+
+    serviceId(svc) {
+      return svc?.service_id || svc?.id || ''
+    },
+
+    serviceUrl(svc) {
+      const urls = [svc?.proxy_url, svc?.url].filter(url => typeof url === 'string' && url.trim())
+      return urls.find(url => /[?&]token=/.test(url)) || urls[0] || ''
+    },
+
+    serviceStatusLabel(status) {
+      const key = String(status || 'unknown').toLowerCase()
+      return {
+        running: '运行中',
+        starting: '启动中',
+        stopped: '已停止',
+        stopping: '停止中',
+        failed: '失败',
+        exited: '已退出',
+        open: '运行中',
+        closed: '已关闭',
+        unknown: '未知',
+      }[key] || status
+    },
+
+    serviceStatusType(status) {
+      const key = String(status || '').toLowerCase()
+      if (['running', 'open'].includes(key)) return 'success'
+      if (['starting', 'stopping'].includes(key)) return 'warning'
+      if (['failed', 'exited'].includes(key)) return 'danger'
+      return 'info'
+    },
+
+    formatServiceExpiry(value) {
+      if (!value) return ''
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return ''
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    },
+
+    openServiceUrl(svc) {
+      const url = this.serviceUrl(svc)
+      if (url) window.open(url, '_blank', 'noopener')
+    },
+
+    async showServiceLogs(svc) {
+      const id = this.serviceId(svc)
+      if (!this.currentSessionId || !id) return
+      this.serviceLogsVisible = true
+      this.serviceLogsLoading = true
+      try {
+        const res = await getServiceLogs(this.currentSessionId, id)
+        if (res.code === 200) {
+          this.serviceLogsData = res.data || {}
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '获取服务日志失败')
+      } finally {
+        this.serviceLogsLoading = false
+      }
+    },
+
+    async handleStopService(svc) {
+      const id = this.serviceId(svc)
+      if (!this.currentSessionId || !id) return
+      try {
+        const res = await stopService(this.currentSessionId, id)
+        if (res.code === 200) {
+          this.$message.success('服务已停止')
+          await this.loadServices()
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '停止服务失败')
+      }
+    },
+
+    async handleRestartService(svc) {
+      const id = this.serviceId(svc)
+      if (!this.currentSessionId || !id) return
+      try {
+        const res = await restartService(this.currentSessionId, id)
+        if (res.code === 200) {
+          this.$message.success('服务已重启')
+          await this.loadServices()
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '重启服务失败')
       }
     },
 
@@ -1636,6 +1788,7 @@ export default {
 
 .service-item {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   align-items: flex-start;
   padding: 10px;
@@ -1659,6 +1812,15 @@ export default {
   margin-bottom: 4px;
 }
 
+.service-submeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 5px;
+  color: #64748b;
+  font-size: 11px;
+}
+
 .service-url {
   display: block;
   color: #4080ff;
@@ -1677,6 +1839,51 @@ export default {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.service-stop-btn {
+  color: #f56c6c;
+}
+
+.service-logs-dialog .el-dialog__body {
+  padding: 14px 18px 18px;
+}
+
+.service-logs-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.service-log-section + .service-log-section {
+  margin-top: 12px;
+}
+
+.service-log-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  margin-bottom: 5px;
+}
+
+.service-log-section pre {
+  margin: 0;
+  padding: 10px;
+  min-height: 90px;
+  max-height: 240px;
+  overflow: auto;
+  border-radius: 7px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 </style>
 

@@ -145,8 +145,6 @@ export default {
 .list-header .el-button--primary {
   background: #4080ff;
   border: none;
-  width: 32px;
-  height: 32px;
   font-size: 14px;
 }
 

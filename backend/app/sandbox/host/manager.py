@@ -13,10 +13,12 @@ import io
 import json
 import os
 import posixpath
+import secrets
 import socket
 import tarfile
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -43,6 +45,26 @@ def _clean_base_url(value: str = "") -> str:
     return text
 
 
+def _merge_no_proxy(value: str = "") -> str:
+    defaults = [
+        "localhost",
+        "127.0.0.1",
+        "host.docker.internal",
+        "gateway.docker.internal",
+    ]
+    parts = [part.strip() for part in str(value or "").split(",") if part.strip()]
+    seen = {part.lower() for part in parts}
+    for item in defaults:
+        if item.lower() not in seen:
+            parts.append(item)
+            seen.add(item.lower())
+    return ",".join(parts)
+
+
+def _default_host_callback_url() -> str:
+    return f"http://host.docker.internal:{os.getenv('PORT', '5002')}"
+
+
 class DockerNotAvailableError(RuntimeError):
     """Raised when Docker SDK is not installed or Docker is not running."""
     pass
@@ -57,6 +79,7 @@ class SessionContainer:
         self.host_port = host_port
         self.agents_config = agents_config
         self.service_ports = service_ports or {}
+        self.service_tokens: dict[str, dict] = {}
         self.created_at = time.time()
         self.client = OrchestratorClient(host="localhost", port=host_port)
 
@@ -166,7 +189,9 @@ class DockerContainerManager:
         container_env = {
             "ORCHESTRATOR_PORT": "8080",
             "SESSION_ID": session_id,
-            "HOST_CALLBACK_URL": env_vars.get("HOST_CALLBACK_URL") if env_vars and env_vars.get("HOST_CALLBACK_URL") else f"http://host.docker.internal:{os.getenv('PORT', '5001')}",
+            "HOST_CALLBACK_URL": env_vars.get("HOST_CALLBACK_URL") if env_vars and env_vars.get("HOST_CALLBACK_URL") else _default_host_callback_url(),
+            "NO_PROXY": _merge_no_proxy(env_vars.get("NO_PROXY") if env_vars else os.environ.get("NO_PROXY", "")),
+            "no_proxy": _merge_no_proxy(env_vars.get("no_proxy") if env_vars else os.environ.get("no_proxy", "")),
         }
         # Pass through provider env vars if provided. The container runners
         # translate these into each provider's private home/config.
@@ -657,51 +682,201 @@ class DockerContainerManager:
 
     # ---- Services ----
 
-    def list_services(self, session_id: str) -> dict:
+    def list_services(self, session_id: str, user_id: str | None = None) -> dict:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
         result = session.client.list_services()
-        services = result.get("services", [])
-        known = {str(s.get("port")): s for s in services}
-        for container_port, host_port in session.service_ports.items():
-            item = known.setdefault(container_port, {"port": int(container_port)})
-            item["host_port"] = host_port
-            item["url"] = f"http://localhost:{host_port}"
-            item["status"] = "open" if self._is_port_open(host_port) else "closed"
-        return {"services": list(known.values()), "service_ports": session.service_ports}
+        result.setdefault("services", [])
+        for service in result["services"]:
+            self._attach_service_proxy_url(session, service, user_id=user_id)
+        result["session_id"] = session_id
+        return result
 
-    def start_service(self, session_id: str, data: dict) -> dict:
+    def start_service(self, session_id: str, data: dict, user_id: str | None = None) -> dict:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
         port = int(data.get("port", 0) or 0)
         if port <= 0:
             raise ValueError("port required")
-        if str(port) not in session.service_ports:
-            raise ValueError(
-                f"Port {port} is not exposed. Use one of: "
-                + ", ".join(sorted(session.service_ports.keys()))
-            )
         result = session.client.start_service(data)
-        host_port = session.service_ports.get(str(port))
-        if host_port:
-            result["container_port"] = port
-            result["host_port"] = host_port
-            result["url"] = f"http://localhost:{host_port}"
+        self._attach_service_proxy_url(session, result.get("service"), user_id=user_id)
+        result["session_id"] = session_id
         return result
 
-    def stop_service(self, session_id: str, port: int) -> dict:
+    def get_service(self, session_id: str, service_id: str, user_id: str | None = None) -> dict:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.stop_service(port)
+        result = session.client.get_service(service_id)
+        self._attach_service_proxy_url(session, result.get("service"), user_id=user_id)
+        return result
 
-    def service_logs(self, session_id: str, port: int) -> dict:
+    def stop_service(self, session_id: str, service_id: str) -> dict:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.service_logs(port)
+        result = session.client.stop_service(service_id)
+        self._attach_service_proxy_url(session, result.get("service"))
+        return result
+
+    def restart_service(self, session_id: str, service_id: str, user_id: str | None = None) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        result = session.client.restart_service(service_id)
+        self._attach_service_proxy_url(session, result.get("service"), user_id=user_id)
+        return result
+
+    def service_logs(self, session_id: str, service_id: str, tail_bytes: int = 65536) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.service_logs(service_id, tail_bytes=tail_bytes)
+
+    def proxy_service(
+        self,
+        session_id: str,
+        service_id: str,
+        path: str,
+        method: str,
+        headers: dict | None = None,
+        body: bytes | None = None,
+        query_string: str = "",
+    ) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.proxy_service(
+            service_id=service_id,
+            path=path,
+            method=method,
+            headers=headers,
+            body=body,
+            query_string=query_string,
+        )
+
+    def proxy_service_websocket(
+        self,
+        session_id: str,
+        service_id: str,
+        path: str,
+        client_ws,
+        headers: dict | None = None,
+        query_string: str = "",
+    ) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.proxy_service_websocket(
+            service_id=service_id,
+            path=path,
+            client_ws=client_ws,
+            headers=headers,
+            query_string=query_string,
+        )
+
+    def refresh_service_token(
+        self,
+        session_id: str,
+        service_id: str,
+        user_id: str | None = None,
+        ttl_seconds: int | None = None,
+    ) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        service_result = session.client.get_service(service_id)
+        if service_result.get("error"):
+            return service_result
+        ttl = self._service_token_ttl(ttl_seconds)
+        token = secrets.token_urlsafe(32)
+        expires_at_ts = time.time() + ttl
+        session.service_tokens[service_id] = {
+            "token": token,
+            "session_id": session_id,
+            "service_id": service_id,
+            "user_id": user_id or "",
+            "created_at": self._iso_time(time.time()),
+            "expires_at": self._iso_time(expires_at_ts),
+            "expires_at_ts": expires_at_ts,
+        }
+        service = service_result.get("service")
+        self._attach_service_proxy_url(session, service, token=token)
+        return {
+            "status": "ok",
+            "token": token,
+            "expires_at": session.service_tokens[service_id]["expires_at"],
+            "expires_in": ttl,
+            "proxy_url": self._service_proxy_url(session_id, service_id, token=token),
+            "service": service,
+        }
+
+    def validate_service_token(self, session_id: str, service_id: str, token: str | None) -> bool:
+        if not token:
+            return False
+        session = self.get_session(session_id)
+        if not session:
+            return False
+        meta = session.service_tokens.get(service_id)
+        if not meta or meta.get("token") != token:
+            return False
+        if float(meta.get("expires_at_ts") or 0) <= time.time():
+            session.service_tokens.pop(service_id, None)
+            return False
+        return meta.get("session_id") == session_id and meta.get("service_id") == service_id
+
+    def _attach_service_proxy_url(
+        self,
+        session: SessionContainer,
+        service: dict | None,
+        user_id: str | None = None,
+        token: str | None = None,
+    ) -> None:
+        if not isinstance(service, dict) or not service.get("id"):
+            return
+        service_id = service["id"]
+        token = token or self._ensure_service_token(session, service_id, user_id=user_id)
+        proxy_url = self._service_proxy_url(session.session_id, service_id, token=token)
+        service["proxy_url"] = proxy_url
+        service["url"] = proxy_url
+        token_meta = session.service_tokens.get(service_id) or {}
+        if token_meta.get("expires_at"):
+            service["preview_token_expires_at"] = token_meta["expires_at"]
+
+    def _ensure_service_token(
+        self,
+        session: SessionContainer,
+        service_id: str,
+        user_id: str | None = None,
+    ) -> str:
+        meta = session.service_tokens.get(service_id)
+        if meta and float(meta.get("expires_at_ts") or 0) > time.time():
+            return str(meta["token"])
+        result = self.refresh_service_token(
+            session.session_id,
+            service_id,
+            user_id=user_id,
+        )
+        return str(result.get("token") or "")
+
+    @staticmethod
+    def _service_proxy_url(session_id: str, service_id: str, token: str | None = None) -> str:
+        url = f"/api/sandbox/sessions/{session_id}/services/{service_id}/proxy/"
+        if token:
+            url += f"?token={token}"
+        return url
+
+    @staticmethod
+    def _service_token_ttl(ttl_seconds: int | None = None) -> int:
+        if ttl_seconds is None:
+            ttl_seconds = int(os.environ.get("SANDBOX_SERVICE_TOKEN_TTL_SECONDS", "7200"))
+        return max(60, min(int(ttl_seconds), 24 * 60 * 60))
+
+    @staticmethod
+    def _iso_time(timestamp: float) -> str:
+        return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
 
     # ---- Internal ----
 

@@ -22,9 +22,14 @@ Endpoints:
 import json
 import os
 import sys
+import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from flask import Flask, request, jsonify, Response, g
+import simple_websocket
 
 # Ensure container package is importable
 sys.path.insert(0, "/app")
@@ -38,6 +43,206 @@ from container.provider_health import get_provider_health
 app = Flask(__name__)
 configure_logging()
 orchestrator = Orchestrator()
+
+_PROXY_BLOCKED_HEADERS = {
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-encoding",
+    "accept-encoding",
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-extensions",
+    "sec-websocket-protocol",
+}
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _filtered_proxy_headers(headers) -> dict:
+    return {
+        str(key): str(value)
+        for key, value in dict(headers or {}).items()
+        if str(key).lower() not in _PROXY_BLOCKED_HEADERS
+    }
+
+
+def _rewrite_service_location(location: str, service_id: str, port: int) -> str:
+    if not location:
+        return location
+    proxy_prefix = f"/api/services/{service_id}/proxy"
+    parsed = urllib.parse.urlsplit(location)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        if parsed.netloc in {f"127.0.0.1:{port}", f"localhost:{port}", f"0.0.0.0:{port}"}:
+            suffix = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, parsed.fragment))
+            return proxy_prefix + suffix
+        return location
+    if location.startswith("/"):
+        return proxy_prefix + location
+    return proxy_prefix + "/" + location
+
+
+def _service_proxy_response(result: dict, service_id: str, port: int) -> Response:
+    content_type = ""
+    for key, value in result.get("headers", []) or []:
+        if str(key).lower() == "content-type":
+            content_type = str(value)
+            break
+    response = Response(
+        result.get("body", b""),
+        status=int(result.get("status_code") or 502),
+        content_type=content_type or "application/octet-stream",
+    )
+    for key, value in result.get("headers", []) or []:
+        header = str(key)
+        if header.lower() in _PROXY_BLOCKED_HEADERS:
+            continue
+        if header.lower() == "content-type":
+            continue
+        if header.lower() == "location":
+            value = _rewrite_service_location(str(value), service_id, port)
+        response.headers.add(header, value)
+    return response
+
+
+def _is_websocket_request() -> bool:
+    return request.headers.get("Upgrade", "").lower() == "websocket"
+
+
+def _relay_websockets(left, right) -> dict:
+    stop = threading.Event()
+
+    def close_both():
+        for ws in (left, right):
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def pump(source, target):
+        while not stop.is_set():
+            try:
+                message = source.receive()
+            except simple_websocket.ConnectionClosed:
+                break
+            except Exception:
+                break
+            if message is None:
+                break
+            try:
+                target.send(message)
+            except Exception:
+                break
+        stop.set()
+        close_both()
+
+    threads = [
+        threading.Thread(target=pump, args=(left, right), daemon=True),
+        threading.Thread(target=pump, args=(right, left), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return {"status": "closed"}
+
+
+def _proxy_to_local_service_websocket(service_id: str, proxy_path: str):
+    result = orchestrator.get_service(service_id)
+    if result.get("error"):
+        return Response(result["error"], status=404, content_type="text/plain; charset=utf-8")
+
+    service = result.get("service") or {}
+    port = int(service.get("port") or 0)
+    if port <= 0:
+        return Response("service has no valid port", status=502, content_type="text/plain; charset=utf-8")
+    if service.get("status") in {"stopped", "failed", "exited"}:
+        return Response(f"service is {service.get('status')}", status=502, content_type="text/plain; charset=utf-8")
+
+    quoted_path = urllib.parse.quote(proxy_path or "", safe="/:@!$&'()*+,;=-._~")
+    query_string = request.query_string.decode("utf-8", errors="ignore")
+    url = f"ws://127.0.0.1:{port}/{quoted_path}"
+    if query_string:
+        url = f"{url}?{query_string}"
+
+    client_ws = simple_websocket.Server.accept(request.environ)
+    upstream_ws = simple_websocket.Client.connect(
+        url,
+        headers=_filtered_proxy_headers(request.headers),
+    )
+    _relay_websockets(client_ws, upstream_ws)
+    return ""
+
+
+def _proxy_to_local_service(service_id: str, proxy_path: str) -> tuple[dict, int | None]:
+    result = orchestrator.get_service(service_id)
+    if result.get("error"):
+        return {
+            "status_code": 404,
+            "headers": [("Content-Type", "text/plain; charset=utf-8")],
+            "body": result["error"].encode("utf-8"),
+        }, None
+
+    service = result.get("service") or {}
+    port = int(service.get("port") or 0)
+    if port <= 0:
+        return {
+            "status_code": 502,
+            "headers": [("Content-Type", "text/plain; charset=utf-8")],
+            "body": b"service has no valid port",
+        }, None
+    if service.get("status") in {"stopped", "failed", "exited"}:
+        return {
+            "status_code": 502,
+            "headers": [("Content-Type", "text/plain; charset=utf-8")],
+            "body": f"service is {service.get('status')}".encode("utf-8"),
+        }, port
+
+    quoted_path = urllib.parse.quote(proxy_path or "", safe="/:@!$&'()*+,;=-._~")
+    query_string = request.query_string.decode("utf-8", errors="ignore")
+    url = f"http://127.0.0.1:{port}/{quoted_path}"
+    if query_string:
+        url = f"{url}?{query_string}"
+
+    body = request.get_data()
+    data = body if body else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers=_filtered_proxy_headers(request.headers),
+        method=request.method.upper(),
+    )
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+
+    try:
+        with opener.open(req, timeout=60) as resp:
+            return {
+                "status_code": resp.status,
+                "headers": list(resp.headers.items()),
+                "body": resp.read(),
+            }, port
+    except urllib.error.HTTPError as exc:
+        return {
+            "status_code": exc.code,
+            "headers": list(exc.headers.items()),
+            "body": exc.read(),
+        }, port
+    except urllib.error.URLError as exc:
+        return {
+            "status_code": 502,
+            "headers": [("Content-Type", "text/plain; charset=utf-8")],
+            "body": f"service proxy failed: {exc.reason}".encode("utf-8"),
+        }, port
 
 
 @app.before_request
@@ -291,6 +496,76 @@ def read_file(agent_id: str):
     return jsonify(result)
 
 
+@app.route("/api/services/start", methods=["POST"])
+def api_start_service():
+    data = request.get_json() or {}
+    required = ("cwd", "command", "port")
+    missing = [key for key in required if not data.get(key)]
+    if missing:
+        return jsonify({"error": f"missing required fields: {', '.join(missing)}"}), 400
+    result = orchestrator.start_service(data)
+    if result.get("error"):
+        return jsonify(result), 400
+    return jsonify(result), 201
+
+
+@app.route("/api/services", methods=["GET"])
+def api_list_preview_services():
+    return jsonify(orchestrator.list_services())
+
+
+@app.route("/api/services/<service_id>", methods=["GET"])
+def api_get_preview_service(service_id: str):
+    result = orchestrator.get_service(service_id)
+    if result.get("error"):
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@app.route("/api/services/<service_id>/logs", methods=["GET"])
+def api_get_preview_service_logs(service_id: str):
+    try:
+        tail_bytes = int(request.args.get("tail_bytes") or 65536)
+    except ValueError:
+        tail_bytes = 65536
+    result = orchestrator.get_service_logs(service_id, tail_bytes=tail_bytes)
+    if result.get("error"):
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@app.route(
+    "/api/services/<service_id>/proxy/",
+    defaults={"proxy_path": ""},
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+@app.route(
+    "/api/services/<service_id>/proxy/<path:proxy_path>",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+def api_proxy_preview_service(service_id: str, proxy_path: str):
+    if _is_websocket_request():
+        return _proxy_to_local_service_websocket(service_id, proxy_path)
+    result, port = _proxy_to_local_service(service_id, proxy_path)
+    return _service_proxy_response(result, service_id, int(port or 0))
+
+
+@app.route("/api/services/<service_id>/stop", methods=["POST"])
+def api_stop_preview_service(service_id: str):
+    result = orchestrator.stop_service(service_id)
+    if result.get("error"):
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@app.route("/api/services/<service_id>/restart", methods=["POST"])
+def api_restart_preview_service(service_id: str):
+    result = orchestrator.restart_service(service_id)
+    if result.get("error"):
+        return jsonify(result), 404
+    return jsonify(result)
+
+
 @app.route("/api/agents/<agent_id>/raw_file", methods=["GET"])
 def raw_file(agent_id: str):
     """Return raw file content with proper MIME type for browser rendering.
@@ -449,43 +724,6 @@ def custom_tools():
 @app.route("/api/tools/custom/<tool_name>", methods=["DELETE"])
 def remove_custom_tool(tool_name: str):
     return jsonify(orchestrator.remove_custom_tool(tool_name))
-
-
-# ============================
-# Services
-# ============================
-
-
-@app.route("/api/services", methods=["GET"])
-def list_services():
-    return jsonify(orchestrator.list_services())
-
-
-@app.route("/api/services/start", methods=["POST"])
-def start_service():
-    data = request.get_json(force=True)
-    result = orchestrator.start_service(
-        agent_id=data.get("agent_id", ""),
-        command=data.get("command", ""),
-        cwd=data.get("cwd", "/workspace"),
-        port=int(data.get("port", 0)),
-    )
-    if result.get("status") == "error":
-        return jsonify(result), 400
-    return jsonify(result)
-
-
-@app.route("/api/services/<int:port>/stop", methods=["POST"])
-def stop_service(port: int):
-    result = orchestrator.stop_service(port)
-    if result.get("status") == "error":
-        return jsonify(result), 404
-    return jsonify(result)
-
-
-@app.route("/api/services/<int:port>/logs", methods=["GET"])
-def service_logs(port: int):
-    return jsonify(orchestrator.service_logs(port))
 
 
 # ============================

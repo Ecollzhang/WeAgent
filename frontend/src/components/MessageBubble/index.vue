@@ -168,6 +168,80 @@
             </div>
             <span v-if="elementData(el).size" class="file-size">{{ formatFileSize(elementData(el).size) }}</span>
           </div>
+
+          <div v-else-if="el.type === 'service'" class="artifact-block service-card">
+            <div class="service-card-header">
+              <div class="service-icon"><i class="el-icon-monitor"></i></div>
+              <div class="service-title-wrap">
+                <div class="service-card-title">{{ serviceTitle(el) }}</div>
+                <div class="service-subtitle">
+                  <span v-if="serviceInfo(el).port">端口 {{ serviceInfo(el).port }}</span>
+                  <span v-if="serviceInfo(el).type">{{ serviceInfo(el).type }}</span>
+                  <span v-if="serviceInfo(el).id">{{ serviceInfo(el).id }}</span>
+                </div>
+              </div>
+              <el-tag size="mini" :type="serviceStatusType(serviceInfo(el).status)">
+                {{ serviceStatusLabel(serviceInfo(el).status) }}
+              </el-tag>
+            </div>
+            <div v-if="elementContent(el)" class="service-description" v-html="renderText(elementContent(el))"></div>
+            <div class="service-url-row" v-if="serviceUrl(el)">
+              <i class="el-icon-link"></i>
+              <a :href="serviceUrl(el)" target="_blank" rel="noopener">{{ serviceUrl(el) }}</a>
+            </div>
+            <div v-if="serviceInfo(el).cwd || serviceInfo(el).command" class="service-meta-grid">
+              <div v-if="serviceInfo(el).cwd" class="service-meta-item">
+                <span>目录</span>
+                <code>{{ serviceInfo(el).cwd }}</code>
+              </div>
+              <div v-if="serviceInfo(el).command" class="service-meta-item">
+                <span>命令</span>
+                <code>{{ serviceInfo(el).command }}</code>
+              </div>
+            </div>
+            <div class="service-actions">
+              <el-button
+                size="mini"
+                type="primary"
+                plain
+                icon="el-icon-position"
+                :disabled="!serviceUrl(el)"
+                @click="openService(el)"
+              >打开</el-button>
+              <el-button
+                size="mini"
+                icon="el-icon-view"
+                :disabled="!serviceUrl(el)"
+                @click="previewService(el)"
+              >预览</el-button>
+              <el-button
+                size="mini"
+                icon="el-icon-document-copy"
+                :disabled="!serviceUrl(el)"
+                @click="copyServiceUrl(serviceUrl(el))"
+              >复制</el-button>
+              <el-button
+                size="mini"
+                icon="el-icon-document"
+                :loading="serviceBusyKey === serviceActionKey(el, 'logs')"
+                @click="loadServiceLogs(el)"
+              >日志</el-button>
+              <el-button
+                size="mini"
+                icon="el-icon-refresh"
+                :loading="serviceBusyKey === serviceActionKey(el, 'restart')"
+                @click="restartServiceCard(el)"
+              >重启</el-button>
+              <el-button
+                size="mini"
+                type="danger"
+                plain
+                icon="el-icon-video-pause"
+                :loading="serviceBusyKey === serviceActionKey(el, 'stop')"
+                @click="stopServiceCard(el)"
+              >停止</el-button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -260,11 +334,47 @@
         <img v-if="previewImageUrl" :src="previewImageUrl" class="preview-image" />
       </div>
     </el-dialog>
+    <el-dialog
+      title="服务预览"
+      :visible.sync="servicePreviewVisible"
+      width="86%"
+      top="5vh"
+      custom-class="service-preview-dialog"
+    >
+      <div class="service-preview-toolbar">
+        <span>{{ servicePreviewUrl }}</span>
+        <el-button size="mini" type="text" icon="el-icon-position" @click="openUrl(servicePreviewUrl)">新窗口打开</el-button>
+      </div>
+      <iframe v-if="servicePreviewUrl" class="service-preview-frame" :src="servicePreviewUrl"></iframe>
+    </el-dialog>
+    <el-dialog
+      title="服务日志"
+      :visible.sync="serviceLogsVisible"
+      width="760px"
+      top="8vh"
+      custom-class="service-logs-dialog"
+    >
+      <div class="service-logs-body" v-loading="serviceLogsLoading">
+        <div class="service-logs-meta" v-if="serviceLogsData">
+          <el-tag size="mini">{{ serviceLogsData.service_id }}</el-tag>
+          <el-tag size="mini" :type="serviceStatusType(serviceLogsData.status)">{{ serviceStatusLabel(serviceLogsData.status) }}</el-tag>
+        </div>
+        <div class="service-log-section">
+          <div class="service-log-title">stdout</div>
+          <pre>{{ serviceLogsData?.stdout_tail || '暂无输出' }}</pre>
+        </div>
+        <div class="service-log-section">
+          <div class="service-log-title">stderr</div>
+          <pre>{{ serviceLogsData?.stderr_tail || '暂无错误输出' }}</pre>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import { formatTime } from '../../utils/format'
+import { getServiceLogs, restartService, stopService } from '../../api/sandbox'
 
 export default {
   name: 'MessageBubble',
@@ -279,6 +389,12 @@ export default {
       previewData: null,
       imagePreviewVisible: false,
       previewImageUrl: '',
+      servicePreviewVisible: false,
+      servicePreviewUrl: '',
+      serviceLogsVisible: false,
+      serviceLogsLoading: false,
+      serviceLogsData: null,
+      serviceBusyKey: '',
     }
   },
   computed: {
@@ -326,10 +442,32 @@ export default {
     },
     currentProgress() {
       const list = this.progressElements
-      return list.length ? list[list.length - 1] : null
+      const latestEventProgress = this.latestEventProgress
+      if (!list.length) return latestEventProgress
+      const latest = list[list.length - 1]
+      if (this.isPlaceholderProgress(latest) && latestEventProgress) {
+        return latestEventProgress
+      }
+      return latest
+    },
+    latestEventProgress() {
+      const events = this.executionEvents
+      for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i] || {}
+        const title = event.title || event.data?.message || event.data?.content || ''
+        if (title && title !== '正在处理...') {
+          return {
+            type: 'progress',
+            content: title,
+            status: this.eventProgressStatus(event),
+            data: event.data || {},
+          }
+        }
+      }
+      return null
     },
     artifactElements() {
-      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file'].includes(el?.type))
+      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file', 'service'].includes(el?.type))
       const seen = new Set()
       return artifacts.filter(el => {
         const key = this.artifactKey(el)
@@ -389,6 +527,17 @@ export default {
   },
   methods: {
     formatTime,
+    isPlaceholderProgress(el) {
+      const text = this.normalizeDisplayText(this.elementContent(el))
+      return text === '正在处理' || text === '正在处理...'
+    },
+    eventProgressStatus(event) {
+      const type = event?.type || ''
+      if (type.includes('completed') || type === 'provider_output' || type === 'claude_output') return 'done'
+      if (type.includes('error')) return 'error'
+      if (type.includes('stopped')) return 'stopped'
+      return 'running'
+    },
     escapeHtml(text) {
       const div = document.createElement('div')
       div.textContent = text
@@ -423,6 +572,9 @@ export default {
       return [
         el?.type || '',
         data.url || '',
+        data.proxy_url || '',
+        data.service_id || '',
+        data.id || '',
         data.path || '',
         data.file || '',
         data.name || '',
@@ -735,6 +887,133 @@ export default {
         i++
       }
       return size.toFixed(1) + ' ' + units[i]
+    },
+    serviceInfo(el) {
+      const data = this.elementData(el)
+      const nested = data.service || data.data || {}
+      return {
+        ...data,
+        ...nested,
+        id: data.service_id || data.id || nested.service_id || nested.id || '',
+        service_id: data.service_id || data.id || nested.service_id || nested.id || '',
+        proxy_url: this.pickServiceUrl(data.proxy_url, nested.proxy_url, data.url, nested.url),
+        url: this.pickServiceUrl(data.proxy_url, nested.proxy_url, data.url, nested.url),
+      }
+    },
+    serviceTitle(el) {
+      const svc = this.serviceInfo(el)
+      return svc.title || svc.name || this.elementData(el).title || this.elementContent(el) || '预览服务'
+    },
+    pickServiceUrl(...urls) {
+      const valid = urls.filter(url => typeof url === 'string' && url.trim())
+      return valid.find(url => /[?&]token=/.test(url)) || valid[0] || ''
+    },
+    serviceUrl(el) {
+      const svc = this.serviceInfo(el)
+      return this.pickServiceUrl(svc.proxy_url, svc.url)
+    },
+    serviceStatusLabel(status) {
+      const key = String(status || 'unknown').toLowerCase()
+      return {
+        running: '运行中',
+        starting: '启动中',
+        stopped: '已停止',
+        stopping: '停止中',
+        failed: '失败',
+        exited: '已退出',
+        open: '运行中',
+        closed: '已关闭',
+        unknown: '未知',
+      }[key] || status
+    },
+    serviceStatusType(status) {
+      const key = String(status || '').toLowerCase()
+      if (['running', 'open'].includes(key)) return 'success'
+      if (['starting', 'stopping'].includes(key)) return 'warning'
+      if (['failed', 'exited'].includes(key)) return 'danger'
+      return 'info'
+    },
+    serviceActionKey(el, action) {
+      const id = this.serviceInfo(el).service_id || this.serviceInfo(el).id || 'unknown'
+      return `${id}:${action}`
+    },
+    setServiceElement(el, patch) {
+      if (!el.data) this.$set(el, 'data', {})
+      Object.keys(patch || {}).forEach(key => this.$set(el.data, key, patch[key]))
+    },
+    openService(el) {
+      this.openUrl(this.serviceUrl(el))
+    },
+    openUrl(url) {
+      if (!url) return
+      window.open(url, '_blank', 'noopener')
+    },
+    previewService(el) {
+      const url = this.serviceUrl(el)
+      if (!url) return
+      this.servicePreviewUrl = url
+      this.servicePreviewVisible = true
+    },
+    async copyServiceUrl(url) {
+      if (!url) return
+      try {
+        await navigator.clipboard.writeText(url)
+        this.$message.success('已复制服务链接')
+      } catch (e) {
+        this.$message.info(url)
+      }
+    },
+    async loadServiceLogs(el) {
+      const svc = this.serviceInfo(el)
+      if (!this.sessionId || !svc.service_id) return
+      this.serviceBusyKey = this.serviceActionKey(el, 'logs')
+      this.serviceLogsLoading = true
+      this.serviceLogsVisible = true
+      try {
+        const res = await getServiceLogs(this.sessionId, svc.service_id)
+        if (res.code === 200) {
+          this.serviceLogsData = res.data || {}
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '获取服务日志失败')
+      } finally {
+        this.serviceLogsLoading = false
+        this.serviceBusyKey = ''
+      }
+    },
+    async stopServiceCard(el) {
+      const svc = this.serviceInfo(el)
+      if (!this.sessionId || !svc.service_id) return
+      this.serviceBusyKey = this.serviceActionKey(el, 'stop')
+      try {
+        const res = await stopService(this.sessionId, svc.service_id)
+        if (res.code === 200) {
+          const service = res.data?.service || {}
+          this.setServiceElement(el, { ...service, status: service.status || 'stopped' })
+          this.$message.success('服务已停止')
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '停止服务失败')
+      } finally {
+        this.serviceBusyKey = ''
+      }
+    },
+    async restartServiceCard(el) {
+      const svc = this.serviceInfo(el)
+      if (!this.sessionId || !svc.service_id) return
+      this.serviceBusyKey = this.serviceActionKey(el, 'restart')
+      try {
+        const res = await restartService(this.sessionId, svc.service_id)
+        if (res.code === 200) {
+          const service = res.data?.service || {}
+          this.setServiceElement(el, { ...service, status: service.status || 'starting' })
+          this.$message.success('服务已重启')
+        }
+      } catch (e) {
+        this.$message.error(e?.message || '重启服务失败')
+      } finally {
+        this.serviceBusyKey = ''
+      }
     },
     fileIcon(el) {
       const value = String(this.elementData(el).path || this.elementData(el).name || this.elementContent(el) || '').toLowerCase()
@@ -1412,6 +1691,129 @@ export default {
   margin-left: auto;
 }
 
+.service-card {
+  padding: 0;
+  background: #ffffff;
+}
+
+.service-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid #e8edf5;
+  background: #f8fbff;
+}
+
+.service-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eaf3ff;
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.service-title-wrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.service-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.service-description {
+  padding: 10px 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #334155;
+}
+
+.service-description :deep(p) {
+  margin: 0 0 6px;
+}
+
+.service-url-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  background: #f8fbff;
+  font-size: 12px;
+}
+
+.service-url-row i {
+  color: #4080ff;
+}
+
+.service-url-row a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.service-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  margin: 10px 12px 0;
+}
+
+.service-meta-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+}
+
+.service-meta-item span {
+  width: 34px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.service-meta-item code {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 12px;
+}
+
 .steps-collapse {
   margin-top: 10px;
   border-top: 1px solid #f0f0f0;
@@ -1766,5 +2168,95 @@ export default {
   max-width: 100%;
   max-height: 76vh;
   object-fit: contain;
+}
+
+.service-preview-dialog :deep(.el-dialog) {
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+}
+
+.service-preview-dialog :deep(.el-dialog__header) {
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid #e8edf5;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.service-preview-dialog :deep(.el-dialog__title) {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.service-preview-dialog :deep(.el-dialog__headerbtn) {
+  top: 16px;
+}
+
+.service-preview-dialog :deep(.el-dialog__body) {
+  padding: 0;
+  background: #f8fafc;
+}
+
+.service-preview-toolbar {
+  min-height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid #e8edf5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+}
+
+.service-preview-toolbar span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #475569;
+}
+
+.service-preview-frame {
+  display: block;
+  width: 100%;
+  height: 74vh;
+  border: none;
+  background: #ffffff;
+}
+
+.service-logs-dialog :deep(.el-dialog__body) {
+  padding: 14px 18px 18px;
+}
+
+.service-logs-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.service-log-section + .service-log-section {
+  margin-top: 12px;
+}
+
+.service-log-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  margin-bottom: 5px;
+}
+
+.service-log-section pre {
+  margin: 0;
+  padding: 10px;
+  min-height: 90px;
+  max-height: 240px;
+  overflow: auto;
+  border-radius: 7px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 </style>
