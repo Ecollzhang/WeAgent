@@ -11,7 +11,8 @@ from app.utils.debug_logger import card_log
 TEXT_EXTENSIONS = {
     '.html', '.htm', '.css', '.js', '.jsx', '.ts', '.tsx', '.vue',
     '.py', '.md', '.txt', '.json', '.xml', '.yaml', '.yml', '.toml',
-    '.sql', '.csv',
+    '.sql', '.csv', '.java', '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp',
+    '.cs', '.go', '.rs', '.php', '.rb', '.sh', '.bat', '.ps1', '.kt', '.swift', '.dart',
 }
 HISTORY_ROOT = '/workspace/.weagent_history'
 DIFF_PREVIEW_LINE_LIMIT = 240
@@ -242,6 +243,24 @@ def _language_for_path(path: str) -> str:
         '.md': 'markdown',
         '.sql': 'sql',
         '.csv': 'csv',
+        '.java': 'java',
+        '.c': 'c',
+        '.h': 'c',
+        '.cpp': 'cpp',
+        '.cc': 'cpp',
+        '.cxx': 'cpp',
+        '.hpp': 'cpp',
+        '.cs': 'csharp',
+        '.go': 'go',
+        '.rs': 'rust',
+        '.php': 'php',
+        '.rb': 'ruby',
+        '.sh': 'shell',
+        '.bat': 'shell',
+        '.ps1': 'powershell',
+        '.kt': 'kotlin',
+        '.swift': 'swift',
+        '.dart': 'dart',
     }.get(ext, ext.lstrip('.') or 'text')
 
 

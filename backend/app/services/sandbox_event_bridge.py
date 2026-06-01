@@ -33,7 +33,12 @@ class SandboxEventBridge:
         '.py': 'code', '.js': 'code', '.ts': 'code', '.tsx': 'code',
         '.css': 'code', '.scss': 'code', '.less': 'code',
         '.md': 'code', '.sql': 'code', '.json': 'code', '.xml': 'code',
-        '.yaml': 'code', '.yml': 'code', '.toml': 'code',
+        '.yaml': 'code', '.yml': 'code', '.toml': 'code', '.vue': 'code',
+        '.java': 'code', '.c': 'code', '.h': 'code',
+        '.cpp': 'code', '.cc': 'code', '.cxx': 'code', '.hpp': 'code',
+        '.cs': 'code', '.go': 'code', '.rs': 'code',
+        '.php': 'code', '.rb': 'code', '.sh': 'code', '.bat': 'code', '.ps1': 'code',
+        '.kt': 'code', '.swift': 'code', '.dart': 'code',
         '.html': 'webpage', '.htm': 'webpage',
         '.png': 'image', '.jpg': 'image', '.jpeg': 'image',
         '.gif': 'image', '.webp': 'image', '.svg': 'image', '.bmp': 'image',
@@ -485,9 +490,12 @@ class SandboxEventBridge:
 
     def _gen_code(self, element, path, name, content):
         e = path.rsplit(".",1)[-1].lower() if "." in path else ""
-        m = {'py':'python','js':'javascript','ts':'typescript','tsx':'typescript',
-             'css':'css','scss':'scss','md':'markdown','sql':'sql',
-             'json':'json','xml':'xml','yaml':'yaml','yml':'yaml','toml':'toml'}
+        m = {'py':'python','js':'javascript','jsx':'javascript','ts':'typescript','tsx':'typescript',
+             'css':'css','scss':'scss','less':'css','md':'markdown','sql':'sql',
+             'json':'json','xml':'xml','yaml':'yaml','yml':'yaml','toml':'toml','vue':'vue',
+             'java':'java','c':'c','h':'c','cpp':'cpp','cc':'cpp','cxx':'cpp','hpp':'cpp',
+             'cs':'csharp','go':'go','rs':'rust','php':'php','rb':'ruby',
+             'sh':'shell','bat':'shell','ps1':'powershell','kt':'kotlin','swift':'swift','dart':'dart'}
         return {"type":"code","content":content,"status":"done",
                 "data":{"title":name,"filename":name,"language":m.get(e,e or 'text'),"path":path}}
 

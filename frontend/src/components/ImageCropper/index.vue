@@ -1,5 +1,64 @@
 <template>
+  <div v-if="embedded" class="cropper-embedded">
+    <div class="cropper-shell">
+      <div class="cropper-toolbar">
+        <el-button-group>
+          <el-button size="small" :type="isFreeRatio ? 'primary' : ''" @click="setAspectRatio(null)">自由</el-button>
+          <el-button size="small" :type="aspectRatio === 1 ? 'primary' : ''" @click="setAspectRatio(1)">1:1</el-button>
+          <el-button size="small" :type="aspectRatio === 4 / 3 ? 'primary' : ''" @click="setAspectRatio(4 / 3)">4:3</el-button>
+          <el-button size="small" :type="aspectRatio === 16 / 9 ? 'primary' : ''" @click="setAspectRatio(16 / 9)">16:9</el-button>
+        </el-button-group>
+        <el-button size="small" @click="rotate(-90)">左旋</el-button>
+        <el-button size="small" @click="rotate(90)">右旋</el-button>
+        <el-button size="small" @click="resetCrop">重置</el-button>
+      </div>
+
+      <div class="cropper-main">
+        <div class="cropper-stage">
+          <div ref="stage" class="cropper-stage-inner" @mousedown="onStageMouseDown">
+            <img
+              ref="image"
+              :src="imageUrl"
+              :style="imageStyle"
+              class="cropper-image"
+              @load="onImageLoaded"
+              draggable="false"
+            />
+            <div v-if="cropBoxReady" class="crop-box">
+              <div class="crop-mask" :style="cropMaskStyles.top"></div>
+              <div class="crop-mask" :style="cropMaskStyles.left"></div>
+              <div class="crop-mask" :style="cropMaskStyles.right"></div>
+              <div class="crop-mask" :style="cropMaskStyles.bottom"></div>
+              <div
+                class="crop-box-inner"
+                :style="cropBoxRectStyle"
+                @mousedown.stop="onCropBoxMouseDown('move', $event)"
+              >
+                <div
+                  v-for="handle in handles"
+                  :key="handle"
+                  class="crop-handle"
+                  :class="'handle-' + handle"
+                  @mousedown.stop="onCropBoxMouseDown(handle, $event)"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="cropBoxReady" class="cropper-meta">
+        <span>裁剪尺寸：{{ Math.round(exportSize.width) }} × {{ Math.round(exportSize.height) }}</span>
+        <span>旋转：{{ rotation }}°</span>
+      </div>
+    </div>
+    <div class="cropper-footer">
+      <el-button @click="cancel">取消</el-button>
+      <el-button type="primary" :loading="saving" @click="saveCrop">保存</el-button>
+    </div>
+  </div>
   <el-dialog
+    v-else
     :visible.sync="dialogVisible"
     title="裁剪图片"
     width="960px"
@@ -22,11 +81,7 @@
 
       <div class="cropper-main">
         <div class="cropper-stage">
-          <div
-            ref="stage"
-            class="cropper-stage-inner"
-            @mousedown="onStageMouseDown"
-          >
+          <div ref="stage" class="cropper-stage-inner" @mousedown="onStageMouseDown">
             <img
               ref="image"
               :src="imageUrl"
@@ -77,6 +132,7 @@ export default {
   props: {
     visible: { type: Boolean, default: false },
     imageUrl: { type: String, default: '' },
+    embedded: { type: Boolean, default: false },
   },
   data() {
     return {
@@ -183,10 +239,22 @@ export default {
       },
     },
     dialogVisible(value) {
-      if (!value) {
-        this.$emit('update:visible', false)
-      }
+      if (!value) this.$emit('update:visible', false)
     },
+    imageUrl() {
+      this.$nextTick(() => {
+        const image = this.$refs.image
+        if (image && image.complete) this.onImageLoaded()
+      })
+    },
+  },
+  mounted() {
+    if (this.embedded && this.imageUrl) {
+      this.$nextTick(() => {
+        const image = this.$refs.image
+        if (image && image.complete) this.onImageLoaded()
+      })
+    }
   },
   methods: {
     onDialogClosed() {
@@ -216,12 +284,7 @@ export default {
     resetCrop() {
       const { width, height } = this.imageMetrics
       if (!width || !height) return
-      this.cropBox = {
-        x: 0,
-        y: 0,
-        width,
-        height,
-      }
+      this.cropBox = { x: 0, y: 0, width, height }
     },
     setAspectRatio(value) {
       this.aspectRatio = value
@@ -287,7 +350,6 @@ export default {
       const dy = event.clientY - this.dragState.startY
       const start = this.dragState.startBox
       const next = { ...start }
-
       if (this.activeAction === 'move') {
         next.x = start.x + dx
         next.y = start.y + dy
@@ -306,24 +368,17 @@ export default {
         if (this.activeAction.includes('e')) {
           next.width = start.width + dx
         }
-
         if (this.aspectRatio) {
           if (this.activeAction === 'nw' || this.activeAction === 'se') {
             next.height = next.width / this.aspectRatio
-            if (this.activeAction === 'nw') {
-              next.y = start.y + (start.height - next.height)
-            }
+            if (this.activeAction === 'nw') next.y = start.y + (start.height - next.height)
           } else if (this.activeAction === 'ne' || this.activeAction === 'sw') {
             next.height = next.width / this.aspectRatio
-            if (this.activeAction === 'ne') {
-              next.y = start.y + (start.height - next.height)
-            } else {
-              next.x = start.x + (start.width - next.width)
-            }
+            if (this.activeAction === 'ne') next.y = start.y + (start.height - next.height)
+            else next.x = start.x + (start.width - next.width)
           }
         }
       }
-
       this.cropBox = this.normalizedCropBox(next)
     },
     onGlobalMouseUp() {
@@ -333,22 +388,14 @@ export default {
     },
     attachDragListeners() {
       this.detachDragListeners()
-      if (!this.boundMouseMove) {
-        this.boundMouseMove = event => this.onGlobalMouseMove(event)
-      }
-      if (!this.boundMouseUp) {
-        this.boundMouseUp = () => this.onGlobalMouseUp()
-      }
+      if (!this.boundMouseMove) this.boundMouseMove = event => this.onGlobalMouseMove(event)
+      if (!this.boundMouseUp) this.boundMouseUp = () => this.onGlobalMouseUp()
       document.addEventListener('mousemove', this.boundMouseMove, true)
       document.addEventListener('mouseup', this.boundMouseUp, true)
     },
     detachDragListeners() {
-      if (this.boundMouseMove) {
-        document.removeEventListener('mousemove', this.boundMouseMove, true)
-      }
-      if (this.boundMouseUp) {
-        document.removeEventListener('mouseup', this.boundMouseUp, true)
-      }
+      if (this.boundMouseMove) document.removeEventListener('mousemove', this.boundMouseMove, true)
+      if (this.boundMouseUp) document.removeEventListener('mouseup', this.boundMouseUp, true)
     },
     normalizedCropBox(box) {
       const minSize = 24
@@ -370,10 +417,8 @@ export default {
       this.cropBox = next
     },
     isPointInsideCrop(x, y) {
-      return x >= this.cropBox.x
-        && x <= this.cropBox.x + this.cropBox.width
-        && y >= this.cropBox.y
-        && y <= this.cropBox.y + this.cropBox.height
+      return x >= this.cropBox.x && x <= this.cropBox.x + this.cropBox.width
+        && y >= this.cropBox.y && y <= this.cropBox.y + this.cropBox.height
     },
     getPoint(event) {
       const image = this.$refs.image
@@ -405,7 +450,6 @@ export default {
         canvas.width = Math.round(swap ? crop.height : crop.width)
         canvas.height = Math.round(swap ? crop.width : crop.height)
         const ctx = canvas.getContext('2d')
-
         ctx.save()
         ctx.translate(canvas.width / 2, canvas.height / 2)
         ctx.rotate((rotation * Math.PI) / 180)
@@ -421,7 +465,6 @@ export default {
           crop.height
         )
         ctx.restore()
-
         canvas.toBlob(blob => {
           if (!blob) {
             this.$message.error('裁剪失败')
@@ -438,7 +481,7 @@ export default {
               type: blob.type,
             })
             this.saving = false
-            this.dialogVisible = false
+            if (!this.embedded) this.dialogVisible = false
           }
           reader.onerror = () => {
             this.$message.error('裁剪失败')
@@ -452,7 +495,7 @@ export default {
       }
     },
     cancel() {
-      this.dialogVisible = false
+      if (!this.embedded) this.dialogVisible = false
       this.$emit('cancel')
     },
   },
@@ -460,10 +503,20 @@ export default {
 </script>
 
 <style scoped>
+.cropper-embedded {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #f6f8fc;
+}
+
 .cropper-shell {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  flex: 1;
+  min-height: 0;
 }
 
 .cropper-toolbar {
@@ -475,6 +528,8 @@ export default {
 
 .cropper-main {
   display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .cropper-stage {
@@ -486,6 +541,7 @@ export default {
   position: relative;
   width: 100%;
   min-height: 420px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -549,5 +605,12 @@ export default {
   gap: 18px;
   font-size: 12px;
   color: #61748d;
+}
+
+.cropper-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
 }
 </style>

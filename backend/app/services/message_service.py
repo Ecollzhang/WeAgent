@@ -1769,7 +1769,7 @@ class MessageService:
         if not text:
             return '任务已完成'
         file_matches = re.findall(
-            r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|js|json|py|pdf|csv|xml|vue|ts)',
+            r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|js|jsx|ts|tsx|json|py|pdf|csv|xml|vue|yaml|yml|toml|sql|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart)',
             text,
             flags=re.IGNORECASE,
         )

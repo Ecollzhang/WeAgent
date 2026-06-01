@@ -71,67 +71,96 @@
       </div>
 
       <!-- Artifact rendering -->
-      <div v-if="artifactElements.length" class="bubble-elements artifact-section">
+      <div v-if="artifactCards.length" class="bubble-elements artifact-section">
         <div class="section-title">产物</div>
         <div
-          v-for="(el, i) in artifactElements"
-          :key="i"
+          v-for="card in artifactCards"
+          :key="card.key"
           class="el-block"
-          :class="'el-' + el.type"
-          >
-          <div v-if="el.type === 'code'" class="artifact-block code-card">
+          :class="'artifact-card-' + card.kind"
+        >
+          <div class="artifact-block file-card" :class="{ 'image-card': !!card.imageElement, 'table-card': !!card.tableElement }">
             <div class="artifact-header">
-              <i class="el-icon-tickets"></i>
-              <span>{{ elementData(el).title || elementData(el).filename || '代码产物' }}</span>
-              <span class="artifact-meta">{{ elementData(el).language || 'code' }}</span>
-              <div class="code-actions">
-                <el-button size="mini" type="text" @click="copyCode(elementContent(el))">复制</el-button>
-                <el-button size="mini" type="text" icon="el-icon-edit" @click="editCode(el)">编辑</el-button>
-              </div>
-            </div>
-            <pre class="code-body"><code>{{ elementContent(el) }}</code></pre>
-          </div>
-
-          <DiffViewCard
-            v-else-if="el.type === 'diff'"
-            :element="el"
-            :session-id="sessionId"
-            @applied="onDiffApplied(el, $event)"
-          />
-
-          <div v-else-if="el.type === 'table'" class="artifact-block table-block">
-            <div class="artifact-header">
-              <i class="el-icon-s-grid"></i>
-              <span>{{ elementData(el).title || '表格产物' }}</span>
-              <span class="artifact-meta">{{ tableHeaders(el).length }} 列</span>
-              <div class="table-actions">
+              <i :class="fileIcon(card.primaryElement || card.diffElement)"></i>
+              <button
+                v-if="card.path"
+                class="artifact-title-btn"
+                @click="openArtifactCard(card)"
+              >
+                {{ card.displayName }}
+              </button>
+              <span v-else class="artifact-title-text">{{ card.displayName }}</span>
+              <span class="artifact-meta">{{ card.metaLabel }}</span>
+              <span v-if="card.sizeLabel" class="artifact-meta artifact-size">{{ card.sizeLabel }}</span>
+              <div class="artifact-actions">
                 <el-button
-                  v-if="!el._editing"
+                  v-if="card.path"
+                  size="mini"
+                  type="text"
+                  icon="el-icon-download"
+                  @click.stop="downloadFile(card.path)"
+                >下载</el-button>
+                <el-button
+                  v-if="card.editElement"
                   size="mini"
                   type="text"
                   icon="el-icon-edit"
-                  @click.stop="startEditTable(el)">编辑</el-button>
-                <template v-else>
-                  <el-button size="mini" type="text" icon="el-icon-plus"
-                    @click.stop="addTableRow(el)">加行</el-button>
-                  <el-button size="mini" type="success" icon="el-icon-check"
-                    @click.stop="saveTable(el)">保存</el-button>
-                  <el-button size="mini" type="text" icon="el-icon-close"
-                    @click.stop="cancelEditTable(el)">取消</el-button>
+                  @click.stop="editCode(card.editElement)"
+                >编辑</el-button>
+                <el-button
+                  v-if="card.tableElement && !card.tableElement._editing"
+                  size="mini"
+                  type="text"
+                  icon="el-icon-edit"
+                  @click.stop="startEditTable(card.tableElement)"
+                >编辑</el-button>
+                <template v-if="card.tableElement && card.tableElement._editing">
+                  <el-button size="mini" type="text" icon="el-icon-plus" @click.stop="addTableRow(card.tableElement)">加行</el-button>
+                  <el-button size="mini" type="success" icon="el-icon-check" @click.stop="saveTable(card.tableElement)">保存</el-button>
+                  <el-button size="mini" type="text" icon="el-icon-close" @click.stop="cancelEditTable(card.tableElement)">取消</el-button>
                 </template>
+                <el-button
+                  v-if="card.imageElement"
+                  size="mini"
+                  type="text"
+                  icon="el-icon-crop"
+                  @click.stop="cropImage(card.imageElement)"
+                >裁剪</el-button>
+                <el-button
+                  v-if="card.diffElement"
+                  size="mini"
+                  type="text"
+                  @click.stop="toggleDiff(card.diffElement)"
+                >{{ card.diffExpanded ? '收起变更' : '查看变更' }}</el-button>
               </div>
             </div>
-            <div class="table-scroll">
+
+            <div v-if="card.diffElement" class="file-diff-summary">
+              <span class="diff-summary-text">已修改</span>
+              <span class="diff-stat diff-add">+{{ diffAdditions(card.diffElement) }}</span>
+              <span class="diff-stat diff-del">-{{ diffDeletions(card.diffElement) }}</span>
+            </div>
+
+            <div v-if="card.imageElement" class="image-frame">
+              <img
+                class="artifact-image"
+                :src="imageSrc(card.imageElement)"
+                :alt="elementData(card.imageElement).alt || elementData(card.imageElement).name || ''"
+                @click="openArtifactCard(card)"
+              />
+            </div>
+
+            <div v-if="card.tableElement" class="table-scroll compact-table-scroll">
               <el-table
-                v-if="tableHeaders(el).length"
-                :data="el._editing ? el._editRows : normalizeTable(el)"
+                v-if="tableHeaders(card.tableElement).length"
+                :data="card.tableElement._editing ? card.tableElement._editRows : tablePreviewRows(card.tableElement)"
                 size="small"
                 border
                 stripe
                 style="width: 100%"
               >
                 <el-table-column
-                  v-for="(h, hi) in tableHeaders(el)"
+                  v-for="(h, hi) in tableHeaders(card.tableElement)"
                   :key="hi"
                   :prop="'col' + hi"
                   :label="h"
@@ -139,7 +168,7 @@
                 >
                   <template slot-scope="scope">
                     <el-input
-                      v-if="el._editing"
+                      v-if="card.tableElement._editing"
                       v-model="scope.row['col' + hi]"
                       size="mini"
                       placeholder="输入内容"
@@ -147,73 +176,25 @@
                     <span v-else>{{ scope.row['col' + hi] }}</span>
                   </template>
                 </el-table-column>
-                <el-table-column v-if="el._editing" label="操作" width="80" fixed="right">
+                <el-table-column v-if="card.tableElement._editing" label="操作" width="80" fixed="right">
                   <template slot-scope="scope">
                     <el-button type="text" size="mini" icon="el-icon-delete" style="color: #f56c6c"
-                      @click="deleteTableRow(el, scope.$index)">删除</el-button>
+                      @click="deleteTableRow(card.tableElement, scope.$index)">删除</el-button>
                   </template>
                 </el-table-column>
               </el-table>
-              <div v-else class="el-text" v-html="renderText(elementContent(el))"></div>
+              <div v-if="!card.tableElement._editing && tableOverflowCount(card.tableElement) > 0" class="table-preview-hint">
+                还有 {{ tableOverflowCount(card.tableElement) }} 行未展开
+              </div>
+              <div v-else-if="!tableHeaders(card.tableElement).length" class="el-text" v-html="renderText(elementContent(card.tableElement))"></div>
             </div>
-          </div>
 
-          <div v-else-if="el.type === 'image'" class="artifact-block image-block">
-            <div class="artifact-header">
-              <i class="el-icon-picture-outline"></i>
-              <button
-                v-if="imagePath(el)"
-                class="artifact-title-btn"
-                @click="openFilePath(imagePath(el))"
-              >
-                {{ elementData(el).name || elementData(el).alt || imagePath(el) }}
-              </button>
-              <span v-else>{{ elementData(el).name || elementData(el).alt || '图片' }}</span>
-              <span class="artifact-meta">image</span>
-              <el-button size="mini" type="text" icon="el-icon-crop" @click.stop="cropImage(el)">裁剪</el-button>
-            </div>
-            <div class="image-frame">
-              <img
-                class="artifact-image"
-                :src="imageSrc(el)"
-                :alt="elementData(el).alt || elementData(el).name || ''"
-                @click="previewImage(imageSrc(el))"
-              />
-            </div>
-          </div>
-
-          <div v-else-if="el.type === 'file' && isImageElement(el)" class="artifact-block image-block">
-            <div class="artifact-header">
-              <i class="el-icon-picture-outline"></i>
-              <button class="artifact-title-btn" @click="openFileElement(elementData(el))">
-                {{ elementData(el).name || elementContent(el) }}
-              </button>
-              <span class="artifact-meta">image</span>
-              <el-button size="mini" type="text" icon="el-icon-crop" @click.stop="cropImage(el)">裁剪</el-button>
-            </div>
-            <div class="image-frame">
-              <img
-                class="artifact-image"
-                :src="imageSrc(el)"
-                :alt="elementData(el).name || ''"
-                @click="previewImage(imageSrc(el))"
-              />
-            </div>
-          </div>
-
-          <div v-else-if="el.type === 'file'" class="artifact-block file-card">
-            <div class="artifact-header">
-              <i :class="fileIcon(el)"></i>
-              <button class="artifact-title-btn" @click="openFileElement(elementData(el))">
-                {{ elementData(el).name || elementContent(el) }}
-              </button>
-              <span v-if="elementData(el).size" class="artifact-meta">{{ formatFileSize(elementData(el).size) }}</span>
-              <el-button
-                v-if="isHtmlElement(el) || elementData(el).subtype === 'code_preview'"
-                size="mini" type="text" icon="el-icon-edit"
-                @click.stop="editCode(el)"
-              >编辑</el-button>
-            </div>
+            <DiffViewCard
+              v-if="card.diffElement && card.diffExpanded"
+              :element="card.diffElement"
+              :session-id="sessionId"
+              @applied="onDiffApplied(card.diffElement, $event)"
+            />
           </div>
         </div>
       </div>
@@ -315,20 +296,34 @@
       :image-url="cropImageUrl"
       @save="onImageCropSaved"
     />
+
+    <ArtifactWorkbench
+      v-if="workbenchVisible && workbenchArtifact"
+      :visible.sync="workbenchVisible"
+      :artifact="workbenchArtifact"
+      :session-id="sessionId"
+      @download="downloadFile"
+      @edit="openWorkbenchEditor"
+      @saved="onEditorSaved"
+      @diff-applied="onWorkbenchDiffApplied"
+    />
   </div>
 </template>
 
 <script>
 import { formatTime } from '../../utils/format'
 import { writeFile, debugLog } from '@/api/sandbox'
+import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
 import CodeEditor from '@/components/CodeEditor/index.vue'
 import HtmlPageEditor from '@/components/HtmlPageEditor/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
 import ImageCropper from '@/components/ImageCropper/index.vue'
 
+const CODE_FILE_RE = /\.(css|scss|less|js|jsx|ts|tsx|py|md|sql|json|xml|yaml|yml|toml|vue|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart)($|\?)/i
+
 export default {
   name: 'MessageBubble',
-  components: { CodeEditor, HtmlPageEditor, DiffViewCard, ImageCropper },
+  components: { ArtifactWorkbench, CodeEditor, HtmlPageEditor, DiffViewCard, ImageCropper },
   props: {
     message: Object,
     isOwn: Boolean,
@@ -367,6 +362,8 @@ export default {
       cropVisible: false,
       cropImageUrl: '',
       cropElement: null,
+      workbenchVisible: false,
+      workbenchArtifact: null,
     }
   },
   computed: {
@@ -424,6 +421,73 @@ export default {
         if (seen.has(key)) return false
         seen.add(key)
         return true
+      })
+    },
+    artifactCards() {
+      const cards = []
+      const byKey = new Map()
+      const ensureCard = (key, path = '') => {
+        if (!byKey.has(key)) {
+          const card = {
+            key,
+            path,
+            fileElement: null,
+            codeElement: null,
+            htmlElement: null,
+            imageElement: null,
+            tableElement: null,
+            diffElement: null,
+          }
+          byKey.set(key, card)
+          cards.push(card)
+        }
+        const card = byKey.get(key)
+        if (path && !card.path) card.path = path
+        return card
+      }
+
+      this.artifactElements.forEach(el => {
+        const path = this.resolveArtifactPath(el)
+        const key = path || `artifact|${this.artifactKey(el)}`
+        const card = ensureCard(key, path)
+        if (el.type === 'diff') {
+          card.diffElement = card.diffElement || el
+          return
+        }
+        if (el.type === 'file') {
+          card.fileElement = card.fileElement || el
+        }
+        if (el.type === 'table') {
+          card.tableElement = el
+        }
+        if (el.type === 'image' || this.isImageElement(el)) {
+          card.imageElement = card.imageElement || el
+        }
+        if (el.type === 'webpage' || this.isHtmlElement(el)) {
+          card.htmlElement = card.htmlElement || el
+        }
+        if (this.isCodeArtifact(el)) {
+          card.codeElement = card.codeElement || el
+        }
+      })
+
+      return cards.map(card => {
+        const primaryElement = this.primaryArtifactElement(card)
+        const data = this.elementData(primaryElement || card.diffElement)
+        return {
+          ...card,
+          primaryElement,
+          displayName: this.artifactCardName(card),
+          metaLabel: this.artifactCardMeta(card),
+          sizeLabel: data.size ? this.formatFileSize(data.size) : '',
+          editElement: this.artifactCardEditElement(card),
+          diffExpanded: !!(card.diffElement && card.diffElement._expanded),
+          kind: this.artifactCardKind(card),
+          imageUrl: card.imageElement ? this.imageSrc(card.imageElement) : '',
+          codeContent: card.codeElement ? (card.codeElement.content || this.elementData(card.codeElement).content || '') : '',
+          tableHeaders: card.tableElement ? this.tableHeaders(card.tableElement) : [],
+          tableRows: card.tableElement ? this.normalizeTable(card.tableElement) : [],
+        }
       })
     },
     isTempMessage() {
@@ -541,6 +605,124 @@ export default {
         data.title || '',
         this.elementContent(el).slice(0, 160),
       ].join('|')
+    },
+    resolveArtifactPath(el) {
+      const data = this.elementData(el)
+      return this.normalizeWorkspacePath(
+        data.path
+          || data.file
+          || this.pathFromUrl(data.url || data.src)
+          || this.workspacePathFromContent(this.elementContent(el))
+          || ''
+      )
+    },
+    isCodeArtifact(el) {
+      if (!el) return false
+      if (el.type === 'code') return true
+      const data = this.elementData(el)
+      const subtype = data.subtype || ''
+      const filename = `${data.filename || data.title || data.name || ''} ${data.path || ''} ${data.url || ''}`.toLowerCase()
+      return subtype === 'code_preview'
+        || CODE_FILE_RE.test(filename)
+    },
+    primaryArtifactElement(card) {
+      return card.fileElement
+        || card.imageElement
+        || card.tableElement
+        || card.htmlElement
+        || card.codeElement
+        || card.diffElement
+        || null
+    },
+    artifactCardKind(card) {
+      if (card.imageElement) return 'image'
+      if (card.tableElement) return 'table'
+      if (card.htmlElement) return 'html'
+      if (card.codeElement) return 'code'
+      if (card.diffElement) return 'diff'
+      return 'file'
+    },
+    artifactCardName(card) {
+      const primary = this.primaryArtifactElement(card)
+      const data = this.elementData(primary || card.diffElement)
+      return data.name
+        || data.filename
+        || data.title
+        || (card.path ? card.path.split('/').pop() : '')
+        || this.elementContent(primary || card.diffElement)
+        || '产物文件'
+    },
+    artifactCardMeta(card) {
+      if (card.imageElement) return 'image'
+      if (card.tableElement) {
+        return `${this.normalizeTable(card.tableElement).length} 行 ${this.tableHeaders(card.tableElement).length} 列`
+      }
+      if (card.htmlElement) return 'webpage'
+      if (card.codeElement) {
+        const data = this.elementData(card.codeElement)
+        return data.language || 'code'
+      }
+      if (card.diffElement) return 'file'
+      return 'file'
+    },
+    artifactCardEditElement(card) {
+      if (card.tableElement || card.imageElement) return null
+      return card.htmlElement || card.codeElement || null
+    },
+    openArtifactCard(card) {
+      console.log('[DEBUG AWB] openArtifactCard source:', {
+        key: card.key,
+        path: card.path,
+        displayName: card.displayName,
+        hasEditElement: !!card.editElement,
+        hasImageElement: !!card.imageElement,
+        hasHtmlElement: !!card.htmlElement,
+        hasCodeElement: !!card.codeElement,
+        hasTableElement: !!card.tableElement,
+        kind: card.kind,
+      })
+      this.workbenchArtifact = {
+        ...card,
+        downloadPath: card.path || '',
+        canDownload: !!card.path,
+        canEdit: !!card.editElement,
+        canCrop: !!card.imageElement,
+        imageUrl: card.imageElement ? this.imageSrc(card.imageElement) : '',
+        codeContent: card.codeElement ? (card.codeElement.content || this.elementData(card.codeElement).content || '') : '',
+        tableHeaders: card.tableElement ? this.tableHeaders(card.tableElement) : [],
+        tableRows: card.tableElement ? this.normalizeTable(card.tableElement) : [],
+      }
+      console.log('[DEBUG AWB] workbenchArtifact payload:', this.workbenchArtifact)
+      this.workbenchVisible = true
+    },
+    openWorkbenchEditor(card) {
+      this.workbenchVisible = false
+      if (card && card.editElement) this.editCode(card.editElement)
+    },
+    onWorkbenchDiffApplied(payload) {
+      if (this.workbenchArtifact && this.workbenchArtifact.diffElement) {
+        this.onDiffApplied(this.workbenchArtifact.diffElement, payload)
+      }
+    },
+    downloadFile(path) {
+      if (!this.sessionId || !path) return
+      const normalized = this.normalizeWorkspacePath(path)
+      const href = `/api/sandbox/sessions/${encodeURIComponent(this.sessionId)}/files/download?path=${encodeURIComponent(normalized)}`
+      const link = document.createElement('a')
+      link.href = href
+      link.target = '_blank'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    },
+    diffAdditions(el) {
+      return this.elementData(el).diff_stat?.additions || 0
+    },
+    diffDeletions(el) {
+      return this.elementData(el).diff_stat?.deletions || 0
+    },
+    toggleDiff(el) {
+      this.$set(el, '_expanded', !el._expanded)
     },
     normalizeDisplayText(text) {
       return String(text || '').replace(/\s+/g, ' ').trim()
@@ -766,6 +948,14 @@ export default {
         return obj
       })
     },
+    tablePreviewRows(el) {
+      if (!el || el._editing) return this.normalizeTable(el)
+      return this.normalizeTable(el).slice(0, 3)
+    },
+    tableOverflowCount(el) {
+      const rows = this.normalizeTable(el)
+      return Math.max(0, rows.length - 3)
+    },
     elementData(el) {
       return el?.data || {}
     },
@@ -909,7 +1099,7 @@ export default {
         || /\.html?($|\?)/i.test(pathForMatch)
       const isCodeFile = el.type === 'code'
         || (el.type === 'file' && subtype === 'code_preview')
-        || (el.type === 'file' && /\.(css|js|jsx|ts|tsx|py|md|sql|json|xml|yaml|yml)($|\?)/i.test(pathForMatch))
+        || (el.type === 'file' && CODE_FILE_RE.test(pathForMatch))
       debugLog("P3X", `isHtml=${isHtml}, isCodeFile=${isCodeFile}, filePath=${filePath || '(空)'}`)
       console.log('[DEBUG P3X] editCode 触发, type:', el.type, 'subtype:', subtype, 'isHtml:', isHtml, 'isCodeFile:', isCodeFile, 'filePath:', filePath || '(空!)')
 
@@ -962,6 +1152,27 @@ export default {
         this.$set(this.editingElement, 'data', { ...d, content })
         this.editingElement = null
       }
+      if (this.workbenchArtifact && this.workbenchArtifact.path === path) {
+        this.workbenchArtifact = {
+          ...this.workbenchArtifact,
+          codeContent: content,
+          imageUrl: typeof content === 'string' && content.startsWith('data:image/') ? content : this.workbenchArtifact.imageUrl,
+          _imageVersion: Date.now(),
+          _htmlVersion: /\.(html?|svg)$/i.test(String(path || '')) ? Date.now() : this.workbenchArtifact._htmlVersion,
+        }
+      }
+      if (path) {
+        this.artifactElements.forEach(el => {
+          if (!this.isImageElement(el)) return
+          if (this.imagePath(el) !== path) return
+          const data = this.elementData(el)
+          this.$set(el, 'data', {
+            ...data,
+            local_preview_url: typeof content === 'string' && content.startsWith('data:image/') ? content : data.local_preview_url,
+            url_ts: Date.now(),
+          })
+        })
+      }
       this.$message.success('文件已保存')
     },
     onDiffApplied(el, { path, content }) {
@@ -988,7 +1199,7 @@ export default {
       const value = String(this.elementData(el).path || this.elementData(el).name || this.elementContent(el) || '').toLowerCase()
       if (/\.(html?|vue)$/.test(value)) return 'el-icon-monitor'
       if (/\.(md|txt|pdf|docx?)$/.test(value)) return 'el-icon-document'
-      if (/\.(css|js|ts|tsx|jsx|json|py|java|go|rs)$/.test(value)) return 'el-icon-tickets'
+      if (/\.(css|scss|less|js|ts|tsx|jsx|json|py|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart|sql|xml|yaml|yml|toml)$/.test(value)) return 'el-icon-tickets'
       return 'el-icon-folder-opened'
     },
 
@@ -1632,20 +1843,77 @@ export default {
   text-decoration: underline;
 }
 
+.artifact-title-text {
+  min-width: 0;
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.artifact-size {
+  background: #f8fafc;
+}
+
+.file-diff-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-bottom: 1px solid #edf2f7;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.diff-summary-text {
+  color: #475569;
+}
+
+.diff-stat {
+  font-weight: 600;
+}
+
+.diff-add {
+  color: #15803d;
+}
+
+.diff-del {
+  color: #dc2626;
+}
+
 .table-scroll {
   overflow-x: auto;
   padding: 10px;
 }
 
-.table-block :deep(.el-table) {
+.compact-table-scroll {
+  background: #fff;
+}
+
+.table-card :deep(.el-table) {
   border-radius: 6px;
   overflow: hidden;
 }
 
-.table-block :deep(.el-table th.el-table__cell) {
+.table-card :deep(.el-table th.el-table__cell) {
   background: #f1f5f9;
   color: #334155;
   font-weight: 600;
+}
+
+.table-preview-hint {
+  padding-top: 8px;
+  font-size: 12px;
+  color: #64748b;
 }
 
 .image-frame {
@@ -1676,11 +1944,9 @@ export default {
 }
 
 .file-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  cursor: pointer;
+  display: block;
+  padding: 0;
+  cursor: default;
   transition: border-color 0.15s, background 0.15s;
 }
 

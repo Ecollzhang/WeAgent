@@ -1,5 +1,160 @@
 <template>
+  <div v-if="embedded" class="he-embedded">
+    <div class="he-layout">
+      <div class="he-toolbar">
+        <div class="he-toolbar-left">
+          <el-tag size="small" type="success">HTML 编辑器</el-tag>
+          <span class="he-filename">{{ fileName || 'index.html' }}</span>
+          <span class="he-status">{{ mode === 'visual' ? '真实预览模式' : '源码模式' }}</span>
+        </div>
+        <div class="he-toolbar-right">
+          <el-button-group>
+            <el-button size="small" :type="mode === 'visual' ? 'primary' : 'default'" @click="switchMode('visual')">可视化</el-button>
+            <el-button size="small" :type="mode === 'source' ? 'primary' : 'default'" @click="switchMode('source')">源码</el-button>
+          </el-button-group>
+          <el-button size="small" icon="el-icon-refresh-left" @click="undo" :disabled="mode !== 'visual' || undoStack.length === 0">撤销</el-button>
+          <el-button size="small" icon="el-icon-refresh-right" @click="redo" :disabled="mode !== 'visual' || redoStack.length === 0">重做</el-button>
+          <el-button size="small" type="primary" icon="el-icon-check" @click="savePage" :loading="saving">保存</el-button>
+          <el-button size="small" icon="el-icon-close" @click="close">关闭</el-button>
+        </div>
+      </div>
+
+      <div v-show="mode === 'visual'" class="he-body">
+        <main class="he-preview">
+          <div class="he-preview-bar">
+            <span class="preview-hint">点击元素进行编辑，拖住左上角手柄可调整同级顺序</span>
+            <span class="preview-meta">{{ selectedSummary }}</span>
+          </div>
+          <iframe
+            ref="previewIframe"
+            :srcdoc="visualHtml"
+            class="he-iframe"
+            sandbox="allow-scripts allow-same-origin"
+          ></iframe>
+        </main>
+
+        <aside class="he-panel">
+          <div class="panel-title">属性</div>
+          <div class="panel-body">
+            <template v-if="selectedEl">
+              <div class="panel-section">
+                <div class="section-title">元素信息</div>
+                <div class="prop-row"><span class="prop-label">标签</span><span class="prop-value">&lt;{{ selectedEl.tag }}&gt;</span></div>
+                <div class="prop-row" v-if="selectedEl.id"><span class="prop-label">ID</span><span class="prop-value">{{ selectedEl.id }}</span></div>
+                <div class="prop-row" v-if="selectedEl.classes"><span class="prop-label">类</span><span class="prop-value">{{ selectedEl.classes }}</span></div>
+              </div>
+
+              <div class="panel-section" v-if="selectedEl.hasText && !selectedEl.isImg">
+                <div class="section-title">文本内容</div>
+                <el-input
+                  type="textarea"
+                  :rows="4"
+                  v-model="styleDraft.textContent"
+                  placeholder="输入文本内容"
+                  @input="applyText"
+                />
+              </div>
+
+              <div class="panel-section">
+                <div class="section-title">尺寸与间距</div>
+                <div class="prop-grid">
+                  <div class="prop-item">
+                    <span class="prop-label">宽度</span>
+                    <el-input-number :value="styleDraft.width" :min="0" :step="4" controls-position="right" @change="handleWidthChange" />
+                  </div>
+                  <div class="prop-item">
+                    <span class="prop-label">高度</span>
+                    <el-input-number :value="styleDraft.height" :min="0" :step="4" controls-position="right" @change="handleHeightChange" />
+                  </div>
+                  <div class="prop-item">
+                    <span class="prop-label">内边距</span>
+                    <el-input-number :value="styleDraft.padding" :min="0" :step="4" controls-position="right" @change="handlePaddingChange" />
+                  </div>
+                  <div class="prop-item">
+                    <span class="prop-label">外边距</span>
+                    <el-input-number :value="styleDraft.margin" :min="0" :step="4" controls-position="right" @change="handleMarginChange" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel-section" v-if="!selectedEl.isImg">
+                <div class="section-title">文字</div>
+                <div class="prop-grid">
+                  <div class="prop-item">
+                    <span class="prop-label">字号</span>
+                    <el-input-number :value="styleDraft.fontSize" :min="8" :step="1" controls-position="right" @change="handleFontSizeChange" />
+                  </div>
+                  <div class="prop-item">
+                    <span class="prop-label">对齐</span>
+                    <el-select :value="styleDraft.textAlign" @change="handleTextAlignChange">
+                      <el-option label="左对齐" value="left" />
+                      <el-option label="居中" value="center" />
+                      <el-option label="右对齐" value="right" />
+                    </el-select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel-section">
+                <div class="section-title">外观</div>
+                <div class="prop-grid">
+                  <div class="prop-item">
+                    <span class="prop-label">背景色</span>
+                    <input class="color-input" type="color" :value="styleDraft.backgroundColor" @input="handleBackgroundColorInput" />
+                  </div>
+                  <div class="prop-item" v-if="!selectedEl.isImg">
+                    <span class="prop-label">文字色</span>
+                    <input class="color-input" type="color" :value="styleDraft.color" @input="handleTextColorInput" />
+                  </div>
+                  <div class="prop-item">
+                    <span class="prop-label">圆角</span>
+                    <el-input-number :value="styleDraft.borderRadius" :min="0" :step="2" controls-position="right" @change="handleBorderRadiusChange" />
+                  </div>
+                  <div class="prop-item">
+                    <span class="prop-label">边框宽</span>
+                    <el-input-number :value="styleDraft.borderWidth" :min="0" :step="1" controls-position="right" @change="handleBorderWidthChange" />
+                  </div>
+                  <div class="prop-item">
+                    <span class="prop-label">边框色</span>
+                    <input class="color-input" type="color" :value="styleDraft.borderColor" @input="handleBorderColorInput" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel-section">
+                <div class="section-title">组件操作</div>
+                <div class="component-actions">
+                  <el-button class="component-action-btn" @click="duplicateSelected">复制组件</el-button>
+                  <el-button class="component-action-btn" type="danger" plain @click="removeSelected">删除组件</el-button>
+                </div>
+              </div>
+            </template>
+
+            <div v-else class="panel-empty">
+              <i class="el-icon-crop" />
+              <span>点击页面中的元素后，这里会显示它的属性。</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div v-show="mode === 'source'" class="source-layout">
+        <textarea
+          v-model="sourceDraft"
+          class="source-textarea"
+          spellcheck="false"
+          @input="sourceDirty = true"
+        ></textarea>
+        <div class="source-actions">
+          <span class="source-hint" v-if="sourceDirty">源码已修改，返回可视化模式时会重新加载预览</span>
+          <el-button size="small" type="primary" @click="applySource" :disabled="!sourceDirty">应用到预览</el-button>
+          <el-button size="small" @click="resetSource">重置</el-button>
+        </div>
+      </div>
+    </div>
+  </div>
   <el-dialog
+    v-else
     :visible.sync="dialogVisible"
     fullscreen
     :show-close="false"
@@ -124,6 +279,14 @@
                     <span class="prop-label">边框色</span>
                     <input class="color-input" type="color" :value="styleDraft.borderColor" @input="handleBorderColorInput" />
                   </div>
+                </div>
+              </div>
+
+              <div class="panel-section">
+                <div class="section-title">组件操作</div>
+                <div class="component-actions">
+                  <el-button class="component-action-btn" @click="duplicateSelected">复制组件</el-button>
+                  <el-button class="component-action-btn" type="danger" plain @click="removeSelected">删除组件</el-button>
                 </div>
               </div>
             </template>
@@ -257,7 +420,15 @@ const INJECT_SCRIPT = `
     }).join('');
   }
 
+  function getEditableText(el) {
+    if (!el) return '';
+    var clone = el.cloneNode(true);
+    clone.querySelectorAll('.weagent-drag-handle').forEach(function(node){ node.remove(); });
+    return (clone.textContent || '').trim();
+  }
+
   function emitSelection(el) {
+    var textValue = getEditableText(el);
     var cs = getComputedStyle(el);
     parent.postMessage({
       type: 'weagent-select',
@@ -265,9 +436,9 @@ const INJECT_SCRIPT = `
       tag: el.tagName.toLowerCase(),
       id: el.id || '',
       classes: Array.from(el.classList || []).filter(function(name){ return name !== 'weagent-selected' && name !== 'weagent-drag-target'; }).join(' '),
-      hasText: !!((el.textContent || '').trim()),
+      hasText: !!textValue,
       isImg: el.tagName === 'IMG',
-      textContent: (el.textContent || '').trim(),
+      textContent: textValue,
       styles: {
         width: readNumber(cs.width),
         height: readNumber(cs.height),
@@ -367,6 +538,29 @@ const INJECT_SCRIPT = `
       selected.textContent = d.value || '';
       emitSelection(selected);
       syncHtml();
+    } else if (d.type === 'weagent-duplicate-selected' && selected && selected.parentElement) {
+      parent.postMessage({ type: 'weagent-push-undo', html: document.documentElement.outerHTML }, '*');
+      var clone = selected.cloneNode(true);
+      clone.querySelectorAll('.weagent-drag-handle').forEach(function(node){ node.remove(); });
+      clone.classList.remove('weagent-selected');
+      clone.classList.remove('weagent-drag-target');
+      clone.removeAttribute('data-weagent-label');
+      clone.removeAttribute('data-weagent-drop');
+      selected.parentElement.insertBefore(clone, selected.nextSibling);
+      selectElement(clone);
+      syncHtml();
+    } else if (d.type === 'weagent-remove-selected' && selected && selected.parentElement) {
+      parent.postMessage({ type: 'weagent-push-undo', html: document.documentElement.outerHTML }, '*');
+      var next = selected.nextElementSibling || selected.previousElementSibling || selected.parentElement;
+      selected.remove();
+      selected = null;
+      cleanSelection();
+      if (next && !isIgnored(next) && next !== document.body && next !== document.documentElement) {
+        selectElement(next);
+      } else {
+        parent.postMessage({ type: 'weagent-select', path: '', tag: '', id: '', classes: '', hasText: false, isImg: false, textContent: '', styles: {} }, '*');
+      }
+      syncHtml();
     } else if (d.type === 'weagent-select-path' && d.path) {
       var target = document.querySelector(d.path);
       if (target) selectElement(target);
@@ -432,6 +626,7 @@ export default {
     fileName: { type: String, default: 'index.html' },
     filePath: { type: String, default: '' },
     sessionId: { type: String, default: '' },
+    embedded: { type: Boolean, default: false },
   },
   data() {
     return {
@@ -472,14 +667,17 @@ export default {
   watch: {
     visible(v) {
       this.dialogVisible = v
-      if (v) this.resetEditor()
+      if ((v || this.embedded) && (v || this.dialogVisible || this.embedded)) this.resetEditor()
     },
     dialogVisible(v) {
-      if (!v) this.$emit('update:visible', false)
+      if (!v && !this.embedded) this.$emit('update:visible', false)
+    },
+    content() {
+      if (this.embedded || this.dialogVisible) this.resetEditor()
     },
   },
   mounted() {
-    if (this.visible) this.resetEditor()
+    if (this.visible || this.embedded) this.resetEditor()
   },
   methods: {
     workspaceBaseHref() {
@@ -511,6 +709,11 @@ export default {
       this.messageHandler = event => {
         const data = event.data || {}
         if (data.type === 'weagent-select') {
+          if (!data.tag) {
+            this.selectedEl = null
+            this.selectedPath = ''
+            return
+          }
           this.selectedEl = {
             tag: data.tag,
             id: data.id,
@@ -567,6 +770,14 @@ export default {
     applyText() {
       if (!this.selectedEl || this.selectedEl.isImg) return
       this.postToIframe({ type: 'weagent-apply-text', value: this.styleDraft.textContent })
+    },
+    duplicateSelected() {
+      if (!this.selectedEl) return
+      this.postToIframe({ type: 'weagent-duplicate-selected' })
+    },
+    removeSelected() {
+      if (!this.selectedEl) return
+      this.postToIframe({ type: 'weagent-remove-selected' })
     },
     handleWidthChange(value) {
       this.styleDraft.width = Number(value) || 0
@@ -657,13 +868,14 @@ export default {
       }
       this.saving = true
       try {
-        const html = this.mode === 'source' ? this.sourceDraft : this.sourceDraft
+        const html = this.sourceDraft
         await writeFile(this.sessionId, this.filePath, html)
         this.original = html
         this.sourceDirty = false
         this.$message.success('页面已保存')
         this.$emit('saved', { path: this.filePath, content: html })
-        this.dialogVisible = false
+        if (this.embedded) this.$emit('close-request')
+        else this.dialogVisible = false
       } catch (e) {
         this.$message.error('保存失败: ' + (e.message || ''))
       } finally {
@@ -671,17 +883,21 @@ export default {
       }
     },
     close() {
+      const closeEditor = () => {
+        if (this.embedded) this.$emit('close-request')
+        else this.dialogVisible = false
+      }
       if (this.sourceDraft !== this.original) {
         this.$confirm('内容已修改，是否放弃更改？', '提示', {
           confirmButtonText: '放弃',
           cancelButtonText: '继续编辑',
           type: 'warning',
         }).then(() => {
-          this.dialogVisible = false
+          closeEditor()
         }).catch(() => {})
         return
       }
-      this.dialogVisible = false
+      closeEditor()
     },
     onDialogClosed() {
       if (this.messageHandler) {
@@ -696,6 +912,22 @@ export default {
 </script>
 
 <style scoped>
+.he-embedded {
+  height: 100%;
+}
+
+:deep(.html-editor-dialog .el-dialog) {
+  margin-top: 0 !important;
+}
+
+:deep(.html-editor-dialog .el-dialog__header) {
+  display: none;
+}
+
+:deep(.html-editor-dialog .el-dialog__body) {
+  padding: 0;
+}
+
 .he-layout {
   display: flex;
   flex-direction: column;
@@ -862,6 +1094,16 @@ export default {
   background: #fff;
   padding: 4px;
   cursor: pointer;
+}
+
+.component-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.component-action-btn {
+  width: 100%;
 }
 
 .panel-empty {

@@ -6,7 +6,7 @@ CODE_FENCE_RE = re.compile(r'```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```')
 IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'}
 SYSTEM_FILE_NAMES = {'.weagent_claude_session'}
 WORKSPACE_FILE_RE = re.compile(
-    r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|js|json|py|pdf|csv|xml|vue)',
+    r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|js|jsx|ts|tsx|json|py|pdf|csv|xml|vue|yaml|yml|toml|sql|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart)',
     re.IGNORECASE,
 )
 
@@ -133,7 +133,7 @@ def mentioned_file_elements(session_id, text):
     seen = set()
     for match in WORKSPACE_FILE_RE.findall(text):
         path = '/' + match.lstrip('/').replace('\\', '/')
-        path = path.rstrip('.,;:，。；：')
+        path = path.rstrip('.,;:，。；？')
         if path in seen:
             continue
         seen.add(path)

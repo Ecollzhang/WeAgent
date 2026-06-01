@@ -62,15 +62,6 @@ export default {
       saving: false,
     }
   },
-  mounted() {
-    console.log('[DEBUG P4] DiffViewCard mounted:', {
-      path: this.data.path,
-      filename: this.data.filename,
-      additions: this.additions,
-      deletions: this.deletions,
-      diffLength: (this.data.diff_text || '').length,
-    })
-  },
   computed: {
     data() {
       return this.element?.data || {}
