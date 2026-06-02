@@ -467,6 +467,7 @@ export default {
         avatar_url: formData.avatar || '',
         class_id: this.activeCategory || null,
         tool_ids: formData.tool_ids || [],
+        capability_bindings: formData.capability_bindings || [],
       }
 
       if (editing.is_new) {

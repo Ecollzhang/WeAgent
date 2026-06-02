@@ -18,6 +18,8 @@ def get_model_config():
         'api_key': '',
         'has_api_key': False,
         'model': 'claude-3.5-sonnet',
+        'custom_model': '',
+        'effective_model': 'claude-3.5-sonnet',
         'base_url': '',
         'temperature': 0.7,
         'max_tokens': 4096,

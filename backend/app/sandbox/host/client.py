@@ -39,6 +39,13 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _timeout_from_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 class OrchestratorClient:
     """HTTP client for the container-side OrchestratorServer."""
 
@@ -70,11 +77,27 @@ class OrchestratorClient:
                 return {"status": "error", "error": f"HTTP {e.code}: {body}"}
         except urllib.error.URLError as e:
             return {"status": "error", "error": f"Connection failed: {e.reason}"}
+        except TimeoutError:
+            return {"status": "error", "error": f"Request timed out after {timeout}s"}
 
     # ---- Health ----
 
     def health_check(self) -> dict:
-        return self._request("GET", "/api/health")
+        return self._request(
+            "GET",
+            "/api/health",
+            timeout=_timeout_from_env("SANDBOX_HEALTH_TIMEOUT_SECONDS", 2),
+        )
+
+    # ---- Capabilities ----
+
+    def apply_capability_projection(self, projection: dict) -> dict:
+        return self._request("POST", "/api/capabilities/projection", projection)
+
+    def collect_skill_drafts(self, agent_id: str = "") -> dict:
+        return self._request("POST", "/api/capabilities/drafts/collect", {
+            "agent_id": agent_id,
+        })
 
     def get_providers(self) -> dict:
         return self._request("GET", "/api/providers")
@@ -131,8 +154,11 @@ class OrchestratorClient:
     def read_file(self, agent_id: str, path: str) -> dict:
         """Read a file from the container's workspace."""
         import urllib.parse
-        return self._request("GET",
-            f"/api/agents/{agent_id}/read_file?path={urllib.parse.quote(path)}")
+        return self._request(
+            "GET",
+            f"/api/agents/{agent_id}/read_file?path={urllib.parse.quote(path)}",
+            timeout=_timeout_from_env("SANDBOX_FILE_TIMEOUT_SECONDS", 5),
+        )
 
     def read_raw_file(self, agent_id: str, path: str) -> tuple[bytes, str]:
         """Read raw file content with MIME type for browser rendering.
@@ -191,7 +217,11 @@ class OrchestratorClient:
             f"&include_hidden={str(include_hidden).lower()}"
             f"&max_depth={max_depth}"
         )
-        return self._request("GET", f"/api/files/tree?{query}")
+        return self._request(
+            "GET",
+            f"/api/files/tree?{query}",
+            timeout=_timeout_from_env("SANDBOX_FILE_TIMEOUT_SECONDS", 5),
+        )
 
     def read_session_raw_file(self, path: str) -> tuple[bytes, str]:
         """Read raw file content without requiring an agent id."""
@@ -237,7 +267,12 @@ class OrchestratorClient:
 
     def update_model_config(self, config: dict) -> dict:
         """Hot-update model config inside the container."""
-        return self._request("POST", "/api/config/model", config)
+        return self._request(
+            "POST",
+            "/api/config/model",
+            config,
+            timeout=_timeout_from_env("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", 5),
+        )
 
     # ---- Progress ----
 
@@ -250,7 +285,11 @@ class OrchestratorClient:
     # ---- Session ----
 
     def get_session_info(self) -> dict:
-        return self._request("GET", "/api/session")
+        return self._request(
+            "GET",
+            "/api/session",
+            timeout=_timeout_from_env("SANDBOX_SESSION_INFO_TIMEOUT_SECONDS", 3),
+        )
 
     # ---- Tools ----
 
@@ -272,6 +311,30 @@ class OrchestratorClient:
 
     def remove_custom_tool(self, tool_name: str) -> dict:
         return self._request("DELETE", f"/api/tools/custom/{tool_name}")
+
+    # ---- MCP ----
+
+    def list_mcp_servers(self) -> dict:
+        return self._request("GET", "/api/mcp/servers")
+
+    def start_mcp_server(self, agent_id: str, runtime_id: str) -> dict:
+        return self._request("POST", f"/api/mcp/{runtime_id}/start", {
+            "agent_id": agent_id,
+        })
+
+    def list_mcp_tools(self, runtime_id: str) -> dict:
+        return self._request("GET", f"/api/mcp/{runtime_id}/tools")
+
+    def call_mcp_tool(self, agent_id: str, runtime_id: str, tool_name: str,
+                      args: dict) -> dict:
+        return self._request("POST", f"/api/mcp/{runtime_id}/call", {
+            "agent_id": agent_id,
+            "tool_name": tool_name,
+            "args": args,
+        })
+
+    def stop_mcp_server(self, runtime_id: str) -> dict:
+        return self._request("POST", f"/api/mcp/{runtime_id}/stop")
 
     # ---- Services ----
 

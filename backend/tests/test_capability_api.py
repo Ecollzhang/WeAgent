@@ -1,0 +1,575 @@
+import pytest
+from flask_jwt_extended import create_access_token
+
+from app import create_app, db
+from app.models.agent import Agent
+from app.models.capability import (
+    AgentCapabilityBinding,
+    Capability,
+    CapabilityCallRecord,
+    SkillRevisionDraft,
+)
+from app.models.user import User
+from app.services.capability_service import capability_service
+
+
+@pytest.fixture()
+def client_context():
+    app = create_app("testing")
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        user = User(
+            id="user-1",
+            username="toolset-user",
+            email="toolset@example.com",
+            password_hash="hash",
+        )
+        agent = Agent(
+            id="agent-1",
+            name="Reviewer",
+            agent_type="custom",
+            adapter_name="claude",
+            user_id=user.id,
+            created_by=user.id,
+        )
+        db.session.add_all([user, agent])
+        db.session.commit()
+        token = create_access_token(identity=user.id)
+        yield app.test_client(), {"Authorization": f"Bearer {token}"}, user, agent
+        db.session.remove()
+        db.drop_all()
+
+
+def test_create_and_list_skill_capability(client_context):
+    client, headers, _user, _agent = client_context
+
+    create_response = client.post(
+        "/api/capabilities/skills",
+        headers=headers,
+        json={
+            "name": "Code Review",
+            "markdown": "# Code Review\nFind bugs first.",
+            "description": "Review code",
+            "permissions": {"required": ["read_workspace"], "optional": []},
+        },
+    )
+
+    assert create_response.status_code == 201
+    created = create_response.get_json()["data"]
+    assert created["type"] == "skill"
+    assert created["latest_version"]["permissions"]["required"] == ["read_workspace"]
+
+    list_response = client.get("/api/capabilities?type=skill", headers=headers)
+
+    assert list_response.status_code == 200
+    items = list_response.get_json()["data"]
+    assert [item["name"] for item in items] == ["Code Review"]
+
+
+def test_create_skill_version_and_report_agent_upgrade(client_context):
+    client, headers, _user, agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Versioned Skill",
+        markdown="# Versioned Skill\nv1",
+    )
+    assert error is None
+    bind_response = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": skill["latest_version"]["id"],
+            "granted_permissions": [],
+        },
+    )
+    assert bind_response.status_code == 201
+
+    version_response = client.post(
+        f"/api/capabilities/{skill['id']}/versions",
+        headers=headers,
+        json={
+            "content": "# Versioned Skill\nv2",
+            "permissions": {"required": [], "optional": []},
+            "meta": {"edited_from": "capability-library"},
+        },
+    )
+
+    assert version_response.status_code == 201
+    assert version_response.get_json()["data"]["content"].endswith("v2")
+
+    upgrades_response = client.get(
+        f"/api/agents/{agent.id}/capabilities/upgrades",
+        headers=headers,
+    )
+    assert upgrades_response.status_code == 200
+    upgrades = upgrades_response.get_json()["data"]
+    assert upgrades[0]["current_version_id"] == skill["latest_version"]["id"]
+    assert upgrades[0]["latest_version_id"] == version_response.get_json()["data"]["id"]
+
+
+def test_import_npx_manifest_and_bind_agent_capability(client_context):
+    client, headers, _user, agent = client_context
+
+    import_response = client.post(
+        "/api/capabilities/import/npx-manifest",
+        headers=headers,
+        json={
+            "source_ref": "npx:@example/mcp@1.0.0",
+            "manifest": {
+                "schema_version": "weagent.capability/v1",
+                "source": {"type": "npx", "package": "@example/mcp", "version": "1.0.0"},
+                "capabilities": [
+                    {
+                        "type": "mcp",
+                        "name": "Example MCP",
+                        "permissions": {
+                            "required": ["run_command"],
+                            "optional": ["network"],
+                        },
+                        "entry": {"command": "npx", "args": ["-y", "@example/mcp"]},
+                        "tools": [{"name": "echo"}],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert import_response.status_code == 201
+    version_id = import_response.get_json()["data"][0]["latest_version"]["id"]
+
+    rejected = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={"capability_version_id": version_id, "granted_permissions": []},
+    )
+    assert rejected.status_code == 400
+    assert "Missing required permissions" in rejected.get_json()["message"]
+
+    accepted = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": version_id,
+            "granted_permissions": ["run_command"],
+        },
+    )
+
+    assert accepted.status_code == 201
+    binding = accepted.get_json()["data"]
+    assert binding["agent_id"] == agent.id
+    assert binding["authorization_snapshot"]["granted_permissions"] == ["run_command"]
+
+    list_response = client.get(f"/api/agents/{agent.id}/capabilities", headers=headers)
+
+    assert list_response.status_code == 200
+    assert list_response.get_json()["data"][0]["capability"]["type"] == "mcp"
+
+
+def test_import_mcp_manifest_endpoint_creates_mcp_only_capability(client_context):
+    client, headers, _user, _agent = client_context
+
+    import_response = client.post(
+        "/api/capabilities/import/mcp-manifest",
+        headers=headers,
+        json={
+            "source_ref": "mcp:@example/memory-mcp@1.0.0",
+            "manifest": {
+                "schema_version": "weagent.capability/v1",
+                "source": {
+                    "type": "npx",
+                    "package": "@example/memory-mcp",
+                    "version": "1.0.0",
+                },
+                "capabilities": [
+                    {
+                        "type": "mcp",
+                        "name": "Example Memory MCP",
+                        "permissions": {"required": ["run_command"], "optional": []},
+                        "entry": {
+                            "command": "npx",
+                            "args": ["--yes", "@example/memory-mcp"],
+                        },
+                        "tools": [{"name": "read_graph"}],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert import_response.status_code == 201
+    imported = import_response.get_json()["data"][0]
+    assert imported["type"] == "mcp"
+    assert imported["source"] == "npx"
+    assert imported["latest_version"]["permissions"]["required"] == ["run_command"]
+    assert imported["latest_version"]["manifest"]["entry"]["command"] == "npx"
+
+    rejected = client.post(
+        "/api/capabilities/import/mcp-manifest",
+        headers=headers,
+        json={
+            "source_ref": "mcp:skill-only",
+            "manifest": {
+                "schema_version": "weagent.capability/v1",
+                "source": {"type": "npx", "package": "@example/skill"},
+                "capabilities": [{"type": "skill", "name": "Skill Only"}],
+            },
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert "MCP manifest" in rejected.get_json()["message"]
+
+
+def test_plugin_manifest_detail_exposes_install_record_without_execution_endpoint(client_context):
+    client, headers, _user, _agent = client_context
+
+    import_response = client.post(
+        "/api/capabilities/import/npx-manifest",
+        headers=headers,
+        json={
+            "source_ref": "npx:@example/plugin@2.1.0",
+            "manifest": {
+                "schema_version": "weagent.capability/v1",
+                "source": {
+                    "type": "npx",
+                    "package": "@example/plugin",
+                    "version": "2.1.0",
+                },
+                "capabilities": [
+                    {
+                        "type": "plugin",
+                        "name": "Example Plugin",
+                        "description": "Plugin wrapper",
+                        "permissions": {"required": [], "optional": []},
+                        "entry": {"module": "@example/plugin"},
+                        "included_capabilities": [
+                            {"type": "skill", "name": "Plugin Skill"}
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert import_response.status_code == 201
+    plugin = import_response.get_json()["data"][0]
+    assert plugin["type"] == "plugin"
+    assert plugin["install_record"]["status"] == "installed"
+
+    detail_response = client.get(f"/api/capabilities/{plugin['id']}", headers=headers)
+
+    assert detail_response.status_code == 200
+    detail = detail_response.get_json()["data"]
+    assert detail["latest_version"]["manifest"]["entry"] == {"module": "@example/plugin"}
+    assert detail["install_record"]["package_name"] == "@example/plugin"
+    assert detail["install_record"]["included_capabilities"] == [
+        {"type": "skill", "name": "Plugin Skill"}
+    ]
+
+    execute_response = client.post(
+        f"/api/capabilities/{plugin['id']}/execute",
+        headers=headers,
+        json={},
+    )
+    assert execute_response.status_code == 404
+
+
+def test_create_agent_can_persist_default_capability_bindings(client_context):
+    client, headers, _user, _agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Default Reviewer",
+        markdown="# Default Reviewer",
+    )
+    assert error is None
+
+    create_response = client.post(
+        "/api/agents",
+        headers=headers,
+        json={
+            "name": "Bound Agent",
+            "adapter_name": "claude",
+            "capability_bindings": [
+                {
+                    "capability_version_id": skill["latest_version"]["id"],
+                    "granted_permissions": [],
+                }
+            ],
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_agent_id = create_response.get_json()["data"]["id"]
+
+    bindings_response = client.get(
+        f"/api/agents/{created_agent_id}/capabilities",
+        headers=headers,
+    )
+    assert bindings_response.status_code == 200
+    assert bindings_response.get_json()["data"][0]["capability"]["name"] == "Default Reviewer"
+
+
+def test_agent_binding_rejects_other_users_capability(client_context):
+    client, headers, _user, agent = client_context
+    other_user = User(
+        id="user-2",
+        username="other-user",
+        email="other@example.com",
+        password_hash="hash",
+    )
+    db.session.add(other_user)
+    db.session.commit()
+    skill, error = capability_service.create_skill(
+        user_id="user-2",
+        name="Private Skill",
+        markdown="# Private Skill",
+    )
+    assert error is None
+
+    response = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": skill["latest_version"]["id"],
+            "granted_permissions": [],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Capability version not found" in response.get_json()["message"]
+
+
+def test_update_agent_capability_binding_permissions(client_context):
+    client, headers, _user, agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Optional Reader",
+        markdown="# Optional Reader",
+        permissions={"required": ["read_workspace"], "optional": ["write_workspace"]},
+    )
+    assert error is None
+    bind_response = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": skill["latest_version"]["id"],
+            "granted_permissions": ["read_workspace"],
+        },
+    )
+    assert bind_response.status_code == 201
+    binding_id = bind_response.get_json()["data"]["id"]
+
+    update_response = client.put(
+        f"/api/agents/{agent.id}/capabilities/{binding_id}",
+        headers=headers,
+        json={
+            "granted_permissions": ["read_workspace", "write_workspace"],
+            "enabled": False,
+        },
+    )
+
+    assert update_response.status_code == 200
+    binding = update_response.get_json()["data"]
+    assert binding["enabled"] is False
+    assert binding["granted_permissions"] == ["read_workspace", "write_workspace"]
+
+    preserve_response = client.put(
+        f"/api/agents/{agent.id}/capabilities/{binding_id}",
+        headers=headers,
+        json={"granted_permissions": ["read_workspace"]},
+    )
+
+    assert preserve_response.status_code == 200
+    assert preserve_response.get_json()["data"]["enabled"] is False
+
+
+def test_delete_user_capability_archives_and_unbinds_agents(client_context):
+    client, headers, _user, agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Temporary Skill",
+        markdown="# Temporary Skill",
+        permissions={"required": ["read_workspace"], "optional": []},
+    )
+    assert error is None
+    bind_response = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": skill["latest_version"]["id"],
+            "granted_permissions": ["read_workspace"],
+        },
+    )
+    assert bind_response.status_code == 201
+    db.session.add(CapabilityCallRecord(
+        session_id="session-delete",
+        run_id="run-delete",
+        agent_id=agent.id,
+        capability_id=skill["id"],
+        capability_version_id=skill["latest_version"]["id"],
+        call_type="tool",
+        tool_name="read_file",
+        permissions_used=["read_workspace"],
+        status="completed",
+    ))
+    db.session.commit()
+
+    impact_response = client.get(
+        f"/api/capabilities/{skill['id']}/delete-impact",
+        headers=headers,
+    )
+
+    assert impact_response.status_code == 200
+    impact = impact_response.get_json()["data"]
+    assert impact["can_delete"] is True
+    assert impact["binding_count"] == 1
+    assert impact["call_record_count"] == 1
+    assert impact["affected_agents"] == [{"id": agent.id, "name": agent.name}]
+
+    delete_response = client.delete(f"/api/capabilities/{skill['id']}", headers=headers)
+
+    assert delete_response.status_code == 200
+    result = delete_response.get_json()["data"]
+    assert result["archived"] is True
+    assert result["removed_bindings"] == 1
+    assert AgentCapabilityBinding.query.count() == 0
+    assert CapabilityCallRecord.query.count() == 1
+    archived = Capability.query.get(skill["id"])
+    assert archived.source == "archived"
+    assert archived.slug.startswith("archived-")
+
+    list_response = client.get("/api/capabilities?type=skill", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.get_json()["data"] == []
+
+
+def test_delete_builtin_capability_is_rejected(client_context):
+    client, headers, _user, _agent = client_context
+    capability_service.seed_builtin_tool_capabilities()
+    builtin = Capability.query.filter_by(
+        is_builtin=True,
+        type="tool",
+        source_ref="code_search",
+    ).one()
+
+    impact_response = client.get(
+        f"/api/capabilities/{builtin.id}/delete-impact",
+        headers=headers,
+    )
+    assert impact_response.status_code == 200
+    assert impact_response.get_json()["data"]["can_delete"] is False
+
+    delete_response = client.delete(f"/api/capabilities/{builtin.id}", headers=headers)
+
+    assert delete_response.status_code == 400
+    assert "Built-in capabilities cannot be deleted" in delete_response.get_json()["message"]
+    assert Capability.query.get(builtin.id).source == "builtin"
+
+
+def test_delete_agent_capability_binding_unbinds_one_capability(client_context):
+    client, headers, _user, agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Agent Local Skill",
+        markdown="# Agent Local Skill",
+    )
+    assert error is None
+    bind_response = client.post(
+        f"/api/agents/{agent.id}/capabilities",
+        headers=headers,
+        json={
+            "capability_version_id": skill["latest_version"]["id"],
+            "granted_permissions": [],
+        },
+    )
+    assert bind_response.status_code == 201
+    binding_id = bind_response.get_json()["data"]["id"]
+
+    delete_response = client.delete(
+        f"/api/agents/{agent.id}/capabilities/{binding_id}",
+        headers=headers,
+    )
+
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["data"] == {"deleted": True}
+    assert AgentCapabilityBinding.query.count() == 0
+    assert Capability.query.get(skill["id"]) is not None
+
+
+def test_draft_publish_fork_and_call_record_sync(client_context):
+    client, headers, _user, agent = client_context
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Runtime Skill",
+        markdown="# Runtime Skill\nOriginal.",
+    )
+    assert error is None
+    draft = SkillRevisionDraft(
+        source_skill_id=skill["id"],
+        source_version_id=skill["latest_version"]["id"],
+        session_id="session-1",
+        agent_id=agent.id,
+        diff={"changed": ["SKILL.md"]},
+        full_markdown="# Runtime Skill\nUpdated by agent.",
+    )
+    fork_draft = SkillRevisionDraft(
+        source_skill_id=skill["id"],
+        source_version_id=skill["latest_version"]["id"],
+        session_id="session-1",
+        agent_id=agent.id,
+        diff={"changed": ["SKILL.md"]},
+        full_markdown="# Forked Skill\nA safer variant.",
+    )
+    db.session.add_all([draft, fork_draft])
+    db.session.commit()
+
+    drafts_response = client.get("/api/capabilities/drafts", headers=headers)
+    assert drafts_response.status_code == 200
+    assert len(drafts_response.get_json()["data"]) == 2
+
+    publish_response = client.post(
+        f"/api/capabilities/drafts/{draft.id}/publish",
+        headers=headers,
+        json={"version": "1.0.1"},
+    )
+    assert publish_response.status_code == 200
+    assert publish_response.get_json()["data"]["draft"]["status"] == "published"
+
+    fork_response = client.post(
+        f"/api/capabilities/drafts/{fork_draft.id}/fork",
+        headers=headers,
+        json={"name": "Forked Skill"},
+    )
+    assert fork_response.status_code == 201
+    assert fork_response.get_json()["data"]["capability"]["name"] == "Forked Skill"
+
+    sync_response = client.post(
+        "/api/capabilities/calls/sync",
+        headers=headers,
+        json={
+            "records": [
+                {
+                    "session_id": "session-1",
+                    "run_id": "run-1",
+                    "agent_id": agent.id,
+                    "capability_id": skill["id"],
+                    "capability_version_id": skill["latest_version"]["id"],
+                    "call_type": "tool",
+                    "tool_name": "read_file",
+                    "permissions_used": ["read_workspace"],
+                    "input_summary": {"path": "README.md"},
+                    "output_summary": {"bytes": 10},
+                    "status": "completed",
+                }
+            ]
+        },
+    )
+    assert sync_response.status_code == 201
+
+    calls_response = client.get(
+        "/api/capabilities/calls?session_id=session-1",
+        headers=headers,
+    )
+    assert calls_response.status_code == 200
+    assert calls_response.get_json()["data"][0]["tool_name"] == "read_file"

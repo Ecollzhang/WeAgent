@@ -1,45 +1,9 @@
 from app.models.agent_tool import AgentTool
+from app.services.builtin_tool_definitions import builtin_tools_for_legacy_view
 
 
 # ── Built-in tool templates ────────────────────────────────────────────
-BUILTIN_TOOLS = [
-    {'value': 'code_generator', 'name': '代码生成', 'category': 'tool_code',
-     'icon': 'el-icon-monitor', 'color': '#3b82f6',
-     'description': '根据需求自动生成高质量代码，支持多种编程语言'},
-    {'value': 'code_review', 'name': '代码审查', 'category': 'tool_code',
-     'icon': 'el-icon-s-check', 'color': '#6366f1',
-     'description': '对代码进行静态分析，发现潜在问题和安全漏洞'},
-    {'value': 'file_operations', 'name': '文件操作', 'category': 'tool_file',
-     'icon': 'el-icon-document', 'color': '#22c55e',
-     'description': '创建、读取、编辑和管理文件与目录'},
-    {'value': 'document_parse', 'name': '文档解析', 'category': 'tool_file',
-     'icon': 'el-icon-reading', 'color': '#10b981',
-     'description': '解析 PDF、Word、Excel 等多种格式文档'},
-    {'value': 'web_search', 'name': '网页搜索', 'category': 'tool_web',
-     'icon': 'el-icon-search', 'color': '#8b5cf6',
-     'description': '搜索互联网信息并返回结果摘要'},
-    {'value': 'web_fetch', 'name': '网页抓取', 'category': 'tool_web',
-     'icon': 'el-icon-download', 'color': '#a855f7',
-     'description': '抓取指定网页内容并分析'},
-    {'value': 'api_client', 'name': 'API调用', 'category': 'tool_web',
-     'icon': 'el-icon-connection', 'color': '#7c3aed',
-     'description': '发送 HTTP 请求调用外部 API'},
-    {'value': 'data_analysis', 'name': '数据分析', 'category': 'tool_data',
-     'icon': 'el-icon-data-analysis', 'color': '#14b8a6',
-     'description': '对结构化数据进行统计、分析和可视化'},
-    {'value': 'database_query', 'name': '数据库查询', 'category': 'tool_data',
-     'icon': 'el-icon-coin', 'color': '#0d9488',
-     'description': '执行 SQL 查询和操作数据库'},
-    {'value': 'image_analysis', 'name': '图像分析', 'category': 'tool_image',
-     'icon': 'el-icon-picture', 'color': '#ec4899',
-     'description': '识别和分析图像中的物体、文字和场景'},
-    {'value': 'terminal', 'name': '终端执行', 'category': 'tool_sys',
-     'icon': 'el-icon-console', 'color': '#f59e0b',
-     'description': '在系统终端中执行命令和脚本'},
-    {'value': 'git_operations', 'name': 'Git操作', 'category': 'tool_sys',
-     'icon': 'el-icon-share', 'color': '#d97706',
-     'description': '执行 Git 版本控制操作'},
-]
+BUILTIN_TOOLS = builtin_tools_for_legacy_view()
 
 TOOL_CATEGORIES = [
     {'id': 'tool_code', 'name': '代码工具', 'icon': 'el-icon-monitor', 'color': '#3b82f6'},

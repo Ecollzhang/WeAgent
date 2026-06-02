@@ -16,7 +16,14 @@ import time
 from typing import Optional
 
 from .agent import AgentRuntime, ClaudeRuntime
+from .capabilities import (
+    agent_bootstrap_instruction,
+    collect_skill_draft_payloads,
+    write_projection,
+    write_run_snapshot,
+)
 from .claude_config import clean_base_url, clean_config_value, claude_env, write_settings, trust_projects
+from .mcp_runtime import McpRuntime
 from .tools import ToolRegistry, register_builtin_tools
 from . import session as session_store
 from .events import push_event
@@ -35,7 +42,10 @@ class Orchestrator:
     def __init__(self):
         self.agents: dict[str, AgentRuntime] = {}
         self.tools = ToolRegistry()
+        self.mcp_runtime = McpRuntime()
         self.custom_tools_path = "/workspace/.session/tools.json"
+        self.capability_projection: Optional[dict] = None
+        self._capability_run_counter = 0
         self.services: dict[int, dict] = {}
         self.service_manager = ServiceManager()
         os.makedirs("/workspace/shared", exist_ok=True)
@@ -45,6 +55,23 @@ class Orchestrator:
         register_builtin_tools(self.tools)
         self._load_custom_tools()
         log_event("orchestrator_initialized")
+
+    # ---- Capability projection ----
+
+    def apply_capability_projection(self, projection: dict) -> dict:
+        """Install the session-local .weagent capability projection."""
+        if not isinstance(projection, dict):
+            return {"status": "error", "error": "Projection must be an object"}
+        self.mcp_runtime.stop_all()
+        result = write_projection(projection, workspace_root="/workspace")
+        self.capability_projection = projection
+        log_event(
+            "capability_projection_applied",
+            capability_count=len(projection.get("capabilities") or {}),
+            agent_count=len(projection.get("agents") or {}),
+            file_count=len(result.get("written") or []),
+        )
+        return result
 
     def _snapshot_workspace(self) -> dict[str, dict]:
         """Snapshot files in /workspace for created/modified detection."""
@@ -96,7 +123,14 @@ class Orchestrator:
         # The agent.md file defines the agent's role for claude -p.
         # Tool instructions are embedded in agent.md, not injected here.
 
-        agent = AgentRuntime(agent_id, role, system_prompt, workspace_name, provider_name=adapter_name)
+        runtime_prompt = self._with_capability_bootstrap(agent_id, system_prompt)
+        agent = AgentRuntime(
+            agent_id,
+            role,
+            runtime_prompt,
+            workspace_name,
+            provider_name=adapter_name,
+        )
         try:
             agent.start()
         except Exception as e:
@@ -140,6 +174,7 @@ class Orchestrator:
         session_store.save_message(agent_id, "user", message)
 
         role = agent.role or agent_id
+        capability_run_id = self._write_capability_run_snapshot(agent_id)
         log_agent(
             agent_id,
             "task_start",
@@ -184,7 +219,9 @@ class Orchestrator:
             tool_results = []
             if self._should_collect_agent_files(agent_id):
                 log_agent(agent_id, "artifact_collection_start", role=role)
-                tool_results = self._execute_tool_calls(agent_id, reply)
+                tool_results = self._execute_tool_calls(
+                    agent_id, reply, run_id=capability_run_id
+                )
                 if not tool_results:
                     tool_results = self._parse_and_write_code_blocks(agent_id, reply)
 
@@ -209,6 +246,11 @@ class Orchestrator:
             parse_elapsed = time.time() - start_parse
 
             result = {"status": "ok", "agent_id": agent_id, "reply": reply}
+            if capability_run_id:
+                result["capability_run_id"] = capability_run_id
+            skill_drafts = self.collect_skill_drafts(agent_id)
+            if skill_drafts:
+                result["skill_drafts"] = skill_drafts
             if tool_results:
                 result["tool_results"] = tool_results
 
@@ -268,6 +310,7 @@ class Orchestrator:
             prompted_msg = self._with_tool_instructions(agent_id, msg)
             full_msg = accumulated_context + "\n\n" + prompted_msg if accumulated_context else prompted_msg
             session_store.save_message(agent_id, "user", full_msg)
+            capability_run_id = self._write_capability_run_snapshot(agent_id)
 
             try:
                 # Snapshot workspace before each agent in the chain
@@ -286,7 +329,9 @@ class Orchestrator:
 
                 tool_results = []
                 if self._should_collect_agent_files(agent_id):
-                    tool_results = self._execute_tool_calls(agent_id, reply)
+                    tool_results = self._execute_tool_calls(
+                        agent_id, reply, run_id=capability_run_id
+                    )
                     if not tool_results:
                         tool_results = self._parse_and_write_code_blocks(agent_id, reply)
                     if not tool_results:
@@ -294,6 +339,11 @@ class Orchestrator:
                             agent_id, reply, baseline=chain_baseline)
 
                 entry = {"status": "ok", "agent_id": agent_id, "reply": reply}
+                if capability_run_id:
+                    entry["capability_run_id"] = capability_run_id
+                skill_drafts = self.collect_skill_drafts(agent_id)
+                if skill_drafts:
+                    entry["skill_drafts"] = skill_drafts
                 if tool_results:
                     entry["tool_results"] = tool_results
 
@@ -496,10 +546,68 @@ class Orchestrator:
 
     def execute_tool(self, agent_id: str, tool_name: str, args: dict) -> str:
         """Execute a tool on behalf of an agent."""
-        return self.tools.call_from_agent(agent_id, tool_name, args)
+        run_id = self._write_capability_run_snapshot(agent_id)
+        session_id = (self.capability_projection or {}).get("session_id", "")
+        return self.tools.call_from_agent(
+            agent_id,
+            tool_name,
+            args,
+            run_id=run_id,
+            session_id=session_id,
+        )
 
     def list_tools(self) -> list[dict]:
         return self.tools.list_tools()
+
+    def _agent_tool_index(self, agent_id: str) -> list[dict]:
+        projection = self.capability_projection or {}
+        agent_view = (projection.get("agents") or {}).get(agent_id) or {}
+        return agent_view.get("tool_index") or []
+
+    # ---- MCP runtime ----
+
+    def start_mcp_server(self, agent_id: str, runtime_id: str) -> dict:
+        return self.mcp_runtime.start_server(agent_id, runtime_id)
+
+    def list_mcp_tools(self, runtime_id: str) -> dict:
+        return self.mcp_runtime.list_tools(runtime_id)
+
+    def call_mcp_tool(self, agent_id: str, runtime_id: str, tool_name: str,
+                      args: dict) -> dict:
+        run_id = self._write_capability_run_snapshot(agent_id)
+        session_id = (self.capability_projection or {}).get("session_id", "")
+        return self.mcp_runtime.call_tool(
+            agent_id,
+            runtime_id,
+            tool_name,
+            args,
+            run_id=run_id,
+            session_id=session_id,
+        )
+
+    def stop_mcp_server(self, runtime_id: str) -> dict:
+        return self.mcp_runtime.stop_server(runtime_id)
+
+    def list_mcp_servers(self) -> dict:
+        return {"status": "ok", "servers": self.mcp_runtime.list_running_servers()}
+
+    def collect_skill_drafts(self, agent_id: str = "") -> list[dict]:
+        projection = self.capability_projection or {}
+        session_id = projection.get("session_id", "")
+        if agent_id:
+            return collect_skill_draft_payloads(
+                agent_id,
+                session_id,
+                workspace_root="/workspace",
+            )
+        drafts = []
+        for projected_agent_id in (projection.get("agents") or {}).keys():
+            drafts.extend(collect_skill_draft_payloads(
+                projected_agent_id,
+                session_id,
+                workspace_root="/workspace",
+            ))
+        return drafts
 
     def _load_custom_tools(self):
         """Load persisted command-backed custom tools."""
@@ -608,9 +716,11 @@ class Orchestrator:
         r"<tool_call>\s*({.*?})\s*</tool_call>", re.DOTALL
     )
 
-    def _execute_tool_calls(self, agent_id: str, response: str) -> list[dict]:
+    def _execute_tool_calls(self, agent_id: str, response: str,
+                            run_id: str = None) -> list[dict]:
         """Parse <tool_call> blocks from agent response and execute them."""
         results = []
+        session_id = (self.capability_projection or {}).get("session_id", "")
         for match in self.TOOL_CALL_PATTERN.finditer(response):
             raw = match.group(1)
             try:
@@ -620,7 +730,13 @@ class Orchestrator:
                 if not tool_name:
                     results.append({"error": "Missing 'name' in tool_call"})
                     continue
-                result = self.tools.call_from_agent(agent_id, tool_name, args)
+                result = self.tools.call_from_agent(
+                    agent_id,
+                    tool_name,
+                    args,
+                    run_id=run_id,
+                    session_id=session_id,
+                )
                 results.append({"tool": tool_name, "result": result})
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})
@@ -628,10 +744,28 @@ class Orchestrator:
 
     def _tool_instructions(self, agent_id: str) -> str:
         """Generate tool usage instructions for the system prompt."""
-        tools = self.tools.list_tools()
-        if not tools:
-            return ""
-        tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
+        tool_index = self._agent_tool_index(agent_id)
+        if tool_index:
+            tool_lines = []
+            for item in tool_index:
+                names = ", ".join(item.get("tool_names") or [])
+                status = item.get("status") or "deferred"
+                doc_path = item.get("doc_path") or ""
+                description = item.get("description") or item.get("name") or ""
+                tool_lines.append(
+                    f"  - {item.get('name')}: {description} "
+                    f"(status: {status}; tools: {names}; doc: {doc_path})"
+                )
+            tool_list = "\n".join(tool_lines)
+            tool_hint = (
+                "只调用上面列出的 Tool。需要更多说明时，先读取对应 doc 路径中的 TOOL.md。\n"
+            )
+        else:
+            tools = self.tools.list_tools()
+            if not tools:
+                return ""
+            tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
+            tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n"
         work_dir = self._agent_work_dir(agent_id)
         return (
             "\n\n===== 沙箱协作和工具说明 =====\n"
@@ -640,7 +774,8 @@ class Orchestrator:
             "  - 公共协作目录：/workspace/shared/\n"
             "  - 可读取其他 Agent 目录进行协作：/workspace/agents/<Agent名称>/\n\n"
             "可用工具：\n"
-            f"{tool_list}\n\n"
+            f"{tool_list}\n"
+            f"{tool_hint}\n"
             "如需调用系统注册工具，输出如下格式，系统会在回复后执行：\n"
             "<tool_call>{\"name\":\"工具名\",\"args\":{\"参数名\":\"参数值\"}}</tool_call>\n\n"
             "如需输出文件内容，使用如下格式，系统会自动写入：\n"
@@ -1581,6 +1716,25 @@ class Orchestrator:
 
     # ---- Internal ----
 
+    def _with_capability_bootstrap(self, agent_id: str, system_prompt: str) -> str:
+        projection = self.capability_projection or {}
+        if agent_id not in (projection.get("agents") or {}):
+            return system_prompt or ""
+        bootstrap = agent_bootstrap_instruction(agent_id)
+        prompt = system_prompt or ""
+        if bootstrap in prompt:
+            return prompt
+        return f"{prompt}\n\n{bootstrap}".strip()
+
+    def _write_capability_run_snapshot(self, agent_id: str) -> Optional[str]:
+        projection = self.capability_projection or {}
+        if agent_id not in (projection.get("agents") or {}):
+            return None
+        self._capability_run_counter += 1
+        run_id = f"{agent_id}-{int(time.time() * 1000)}-{self._capability_run_counter}"
+        result = write_run_snapshot(projection, run_id, workspace_root="/workspace")
+        return result.get("run_id")
+
     def _get_or_recreate_agent(self, agent_id: str):
         """Get agent, or recreate from saved config if missing."""
         agent = self.agents.get(agent_id)
@@ -1593,7 +1747,7 @@ class Orchestrator:
             return {"error": f"Agent '{agent_id}' not found and no saved config"}
 
         # Use saved system prompt (agent.md handles role definition)
-        runtime_prompt = config["system_prompt"]
+        runtime_prompt = self._with_capability_bootstrap(agent_id, config["system_prompt"])
 
         agent = AgentRuntime(
             agent_id,

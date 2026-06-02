@@ -18,6 +18,13 @@ def _mask_key(api_key):
 class SettingsService:
     """User settings persistence."""
 
+    def _effective_model(self, config):
+        selected_model = _clean_config_value(getattr(config, 'model', ''))
+        custom_model = _clean_config_value(getattr(config, 'custom_model', ''))
+        if selected_model == 'custom':
+            return custom_model
+        return selected_model
+
     def get_model_config(self, user_id, mask_api_key=True):
         config = UserModelConfig.query.filter_by(user_id=user_id).first()
         if not config:
@@ -26,6 +33,7 @@ class SettingsService:
         data = config.to_dict()
         data['api_key'] = _mask_key(config.api_key) if mask_api_key else (config.api_key or '')
         data['has_api_key'] = bool(config.api_key)
+        data['effective_model'] = self._effective_model(config)
         return data, None
 
     def save_model_config(self, user_id, data):
@@ -37,14 +45,17 @@ class SettingsService:
         if api_key and api_key != '****' and '****' not in api_key:
             config.api_key = _clean_config_value(api_key)
 
-        for field in ('base_url', 'model', 'temperature', 'max_tokens'):
+        for field in ('base_url', 'model', 'custom_model', 'temperature', 'max_tokens'):
             if field in data and data[field] is not None:
                 value = data[field]
-                if field in ('base_url', 'model'):
+                if field in ('base_url', 'model', 'custom_model'):
                     value = _clean_config_value(value)
                     if field == 'base_url':
                         value = value.rstrip('/')
                 setattr(config, field, value)
+
+        if _clean_config_value(config.model) == 'custom' and not _clean_config_value(config.custom_model):
+            return None, 'Custom model name is required'
 
         config.save()
         result, error = self.get_model_config(user_id, mask_api_key=True)
@@ -75,8 +86,9 @@ class SettingsService:
         }
         if config.base_url:
             env['ANTHROPIC_BASE_URL'] = _clean_config_value(config.base_url).rstrip('/')
-        if config.model:
-            env['ANTHROPIC_MODEL'] = _clean_config_value(config.model)
+        model_name = self._effective_model(config)
+        if model_name:
+            env['ANTHROPIC_MODEL'] = model_name
         return env, None
 
 

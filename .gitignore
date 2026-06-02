@@ -56,9 +56,14 @@ htmlcov/
 
 # ===== docs =====
 docs/archive-registry.md
+
+# ===== planning runtime files =====
 .planning/*.lock
 .planning/tmp/
 .pycache_verify/
+
+# ===== AI runtime logs =====
+.claude/logs/
 
 # ===== Multi-platform clients =====
 clients/**/node_modules/

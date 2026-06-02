@@ -15,6 +15,7 @@ class CreateAgentSchema(Schema):
     class_id = fields.String(load_default=None, allow_none=True)
     is_public = fields.Boolean(load_default=False)
     tool_ids = fields.List(fields.String(), load_default=list)
+    capability_bindings = fields.List(fields.Dict(), load_default=list)
 
 
 class AgentResponseSchema(Schema):

@@ -33,3 +33,18 @@ class BaseModel(db.Model):
         """Delete instance from database."""
         db.session.delete(self)
         db.session.commit()
+
+
+from app.models.toolset_category import ToolsetCategory  # noqa: E402,F401
+from app.models.capability import (  # noqa: E402,F401
+    AgentCapabilityBinding,
+    Capability,
+    CapabilityCallRecord,
+    CapabilityImportJob,
+    CapabilitySecurityAudit,
+    CapabilityVersion,
+    CapabilityVersionAsset,
+    PluginInstallRecord,
+    SkillRevisionDraft,
+)
+from app.models.tool_provider_config import ToolProviderConfig  # noqa: E402,F401

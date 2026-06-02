@@ -46,6 +46,10 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/capabilities',
+    redirect: '/tools',
+  },
+  {
     path: '/sandbox',
     name: 'SandboxTest',
     component: () => import('../views/SandboxTest.vue'),

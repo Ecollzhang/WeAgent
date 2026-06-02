@@ -58,6 +58,7 @@ def create_agent():
         class_id=data.get('class_id'),
         is_public=data.get('is_public', False),
         tool_ids=data.get('tool_ids', []),
+        capability_bindings=data.get('capability_bindings', []),
     )
     if error:
         return error_response(error, code=400)
