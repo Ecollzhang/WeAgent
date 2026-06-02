@@ -14,8 +14,12 @@ BUILTIN_TOOL_RUNTIME_NAMES = {
     "document_parse": {"document_text_extract"},
     "web_fetch": {"http_fetch"},
     "api_client": {"api_request"},
+    "web_search": {"web_search"},
     "data_analysis": {"csv_profile", "json_query", "sqlite_query_readonly"},
+    "database_query": {"database_query"},
     "image_info": {"image_info"},
+    "image_analysis": {"image_analysis"},
+    "image_generation": {"image_generate"},
     "terminal": {"run_command_safe"},
     "git_operations": {"git_status", "git_diff", "git_log"},
 }
@@ -34,10 +38,14 @@ TOOL_PERMISSION_USAGE = {
     "git_log": ["read_workspace"],
     "http_fetch": ["network"],
     "api_request": ["network"],
+    "web_search": ["network"],
     "csv_profile": ["read_workspace"],
     "json_query": ["read_workspace"],
     "sqlite_query_readonly": ["read_workspace"],
+    "database_query": ["read_workspace", "use_secret"],
     "image_info": ["read_workspace"],
+    "image_analysis": ["read_workspace"],
+    "image_generate": ["write_workspace"],
 }
 
 
@@ -260,6 +268,7 @@ def write_projection(projection: dict,
             "tool_names": record.get("tool_names") or [],
             "handler": record.get("handler") or "",
             "status": record.get("status") or "deferred",
+            "provider_config": record.get("provider_config"),
             "manifest": record.get("manifest") or {},
         })
         written.extend([doc_path, manifest_path])
@@ -498,9 +507,10 @@ def resolve_bound_tool_capability(agent_id: str, tool_name: str,
             "runtime_id": capability.get("runtime_id"),
             "source_ref": source_ref,
             "granted_permissions": capability.get("granted_permissions") or [],
-            "status": ((manifest.get("ui") or {}).get("status")
-                       or capability.get("status")
+            "status": (capability.get("status")
+                       or (manifest.get("ui") or {}).get("status")
                        or "implemented"),
+            "provider_config": capability.get("provider_config"),
         }
     return None
 

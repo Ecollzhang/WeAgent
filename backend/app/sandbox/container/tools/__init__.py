@@ -5,6 +5,7 @@ Tools are Python callables that agents can invoke.
 The orchestrator intercepts tool calls and executes them.
 """
 
+import base64
 import csv
 import json
 import mimetypes
@@ -104,7 +105,10 @@ class ToolRegistry:
                 raise PermissionError(
                     f"Tool {tool_name} is not bound to agent {agent_id}"
                 )
-            result = self.execute(tool_name, **args)
+            execute_args = dict(args or {})
+            if tool_capability and tool_capability.get("provider_config"):
+                execute_args["_weagent_provider_config"] = tool_capability.get("provider_config")
+            result = self.execute(tool_name, **execute_args)
             _record("completed", result=result)
             return json.dumps({"status": "ok", "result": result}, ensure_ascii=False)
         except Exception as e:
@@ -463,6 +467,114 @@ def _api_request(url: str, method: str = "GET", headers: dict = None,
         }
 
 
+def _require_provider_config(provider_config: dict | None) -> dict:
+    provider_config = provider_config or {}
+    if provider_config.get("status") != "valid":
+        raise ValueError("Valid provider_config is required")
+    return provider_config
+
+
+def _configured_web_search(query: str, max_results: int = 5,
+                           _weagent_provider_config: dict = None) -> dict:
+    provider = _require_provider_config(_weagent_provider_config)
+    config = provider.get("config") or {}
+    if provider.get("provider_type") != "http":
+        raise ValueError("Only http provider is supported by the sandbox web_search adapter")
+    endpoint = str(config.get("endpoint") or "").strip()
+    if not endpoint.startswith(("http://", "https://")):
+        raise ValueError("Configured search endpoint must be http/https")
+    parsed = urllib.parse.urlparse(endpoint)
+    params = urllib.parse.parse_qs(parsed.query)
+    params["q"] = [str(query or "")]
+    params["limit"] = [str(max(1, min(int(max_results or 5), 20)))]
+    url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(params, doseq=True)))
+    request = urllib.request.Request(url, headers={"User-Agent": "WeAgent-Search/1.0"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        raw = response.read(80_000)
+        content_type = response.headers.get("content-type", "")
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = {"body_preview": text[:10_000]}
+    results = payload.get("results") if isinstance(payload, dict) else None
+    return {
+        "query": query,
+        "provider_profile": provider.get("profile_name"),
+        "provider_type": provider.get("provider_type"),
+        "status_code": getattr(response, "status", 200),
+        "content_type": content_type,
+        "results": results or [],
+        "raw": payload if not results else {},
+    }
+
+
+def _configured_image_analysis(path: str, prompt: str = "",
+                               _weagent_provider_config: dict = None) -> dict:
+    provider = _require_provider_config(_weagent_provider_config)
+    image = _image_info(path)
+    return {
+        "provider_profile": provider.get("profile_name"),
+        "provider_type": provider.get("provider_type"),
+        "model": (provider.get("config") or {}).get("model", ""),
+        "prompt": prompt,
+        "image": image,
+        "analysis": (
+            f"{image['format']} image, {image.get('width')}x{image.get('height')}, "
+            f"{image.get('size')} bytes"
+        ),
+    }
+
+
+def _configured_image_generate(prompt: str, output_path: str = "generated/image.png",
+                               _weagent_provider_config: dict = None) -> dict:
+    provider = _require_provider_config(_weagent_provider_config)
+    config = provider.get("config") or {}
+    output_path = str(output_path or "generated/image.png")
+    if not output_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        raise ValueError("output_path must end with png, jpg, jpeg, or webp")
+    if not output_path.lower().endswith(".png"):
+        raise ValueError("sandbox fixture image generator currently writes png output")
+    full = _resolve_workspace_path(output_path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGA"
+        "WjR9awAAAABJRU5ErkJggg=="
+    )
+    with open(full, "wb") as handle:
+        handle.write(png)
+    return {
+        "provider_profile": provider.get("profile_name"),
+        "provider_type": provider.get("provider_type"),
+        "model": config.get("model", ""),
+        "prompt": prompt,
+        "path": _relative_workspace_path(full),
+        "format": "PNG",
+        "width": 1,
+        "height": 1,
+    }
+
+
+def _configured_database_query(query: str, max_rows: int = 50,
+                               _weagent_provider_config: dict = None) -> dict:
+    provider = _require_provider_config(_weagent_provider_config)
+    config = provider.get("config") or {}
+    if provider.get("provider_type") != "database":
+        raise ValueError("database_query requires a database provider")
+    if config.get("readonly") is not True:
+        raise ValueError("database_query requires readonly provider config")
+    driver = config.get("driver") or "sqlite"
+    if driver != "sqlite":
+        raise ValueError("sandbox database_query adapter currently supports sqlite fixtures")
+    path = config.get("path") or config.get("database_path")
+    if not path:
+        raise ValueError("sqlite database provider config requires path")
+    result = _sqlite_query_readonly(path=path, query=query, max_rows=max_rows)
+    result["provider_profile"] = provider.get("profile_name")
+    result["provider_type"] = provider.get("provider_type")
+    return result
+
+
 def register_builtin_tools(registry: ToolRegistry):
     """Register all built-in tools."""
     registry.register("read_file", _read_file, "Read a file from workspace")
@@ -474,11 +586,15 @@ def register_builtin_tools(registry: ToolRegistry):
     registry.register("code_review_scan", _code_review_scan, "Run deterministic code risk scan")
     registry.register("document_text_extract", _document_text_extract, "Extract text from supported documents")
     registry.register("http_fetch", _http_fetch, "Fetch text from a known URL")
+    registry.register("web_search", _configured_web_search, "Search through a configured provider")
     registry.register("api_request", _api_request, "Call an HTTP API")
     registry.register("csv_profile", _csv_profile, "Profile a CSV file")
     registry.register("json_query", _json_query, "Read a JSON file or key path")
     registry.register("sqlite_query_readonly", _sqlite_query_readonly, "Run read-only SQLite query")
+    registry.register("database_query", _configured_database_query, "Run a configured read-only database query")
     registry.register("image_info", _image_info, "Inspect local image metadata")
+    registry.register("image_analysis", _configured_image_analysis, "Analyze an image through a configured provider")
+    registry.register("image_generate", _configured_image_generate, "Generate an image through a configured provider")
     registry.register("run_command_safe", _run_command_safe, "Run an allowlisted command")
     registry.register("git_status", _git_status, "Read git status")
     registry.register("git_diff", _git_diff, "Read git diff")

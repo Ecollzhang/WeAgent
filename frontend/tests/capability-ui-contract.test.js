@@ -12,6 +12,10 @@ function assertContains(file, needle, message) {
   assert.ok(read(file).includes(needle), `${file}: ${message || `missing ${needle}`}`)
 }
 
+function assertNotContains(file, needle, message) {
+  assert.ok(!read(file).includes(needle), `${file}: ${message || `unexpected ${needle}`}`)
+}
+
 assertContains(
   'src/api/capabilities.js',
   "service.get('/capabilities'",
@@ -35,27 +39,32 @@ assertContains(
 assertContains(
   'src/router/index.js',
   "path: '/capabilities'",
-  'router must expose the Capability Library'
+  'router must keep a compatibility route for old capability links'
 )
 assertContains(
+  'src/router/index.js',
+  "redirect: '/tools'",
+  'Capability Library route must redirect to unified toolset page'
+)
+assertNotContains(
   'src/components/Sidebar/index.vue',
   'to="/capabilities"',
-  'sidebar must expose Capability Library navigation'
+  'sidebar must not expose Capability Library as a separate product entry'
 )
 assertContains(
-  'src/views/CapabilityLibrary.vue',
+  'src/views/Tools.vue',
   "type: 'skill'",
-  'library must show Skill as a peer capability type'
+  'toolset must show Skill as a peer capability type'
 )
 assertContains(
-  'src/views/CapabilityLibrary.vue',
+  'src/views/Tools.vue',
   "type: 'mcp'",
-  'library must show MCP as a peer capability type'
+  'toolset must show MCP as a peer capability type'
 )
 assertContains(
-  'src/views/CapabilityLibrary.vue',
+  'src/views/Tools.vue',
   "type: 'plugin'",
-  'library must show Plugin as manifest-only scope'
+  'toolset must show Plugin as manifest-only scope'
 )
 assertContains(
   'src/components/AgentEditForm/index.vue',

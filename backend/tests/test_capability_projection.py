@@ -247,7 +247,7 @@ def test_projection_keeps_skill_mcp_plugin_and_tool_as_peer_types(app_context):
     assert tool is None
     builtin = next(
         cap for cap in capability_service.list_capabilities("user-1", "tool")[0]
-        if cap["source_ref"] == "web_search"
+        if cap["source_ref"] == "code_search"
     )
 
     capability_service.bind_to_agent(
@@ -263,7 +263,7 @@ def test_projection_keeps_skill_mcp_plugin_and_tool_as_peer_types(app_context):
     capability_service.bind_to_agent(
         agent_id=agent_a.id,
         capability_version_id=builtin["latest_version"]["id"],
-        granted_permissions=["network"],
+        granted_permissions=["read_workspace"],
     )
 
     projection = build_capability_projection(

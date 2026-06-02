@@ -47,9 +47,7 @@ const routes = [
   },
   {
     path: '/capabilities',
-    name: 'CapabilityLibrary',
-    component: () => import('../views/CapabilityLibrary.vue'),
-    meta: { requiresAuth: true },
+    redirect: '/tools',
   },
   {
     path: '/sandbox',

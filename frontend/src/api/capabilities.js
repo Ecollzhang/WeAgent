@@ -56,6 +56,34 @@ export function deleteCapability(id) {
   return service.delete(`/capabilities/${id}`)
 }
 
+export function getProviderConfigs(id) {
+  return service.get(`/capabilities/${id}/provider-configs`)
+}
+
+export function createProviderConfig(id, data) {
+  return service.post(`/capabilities/${id}/provider-configs`, data)
+}
+
+export function updateProviderConfig(id, configId, data) {
+  return service.put(`/capabilities/${id}/provider-configs/${configId}`, data)
+}
+
+export function testProviderConfig(id, configId) {
+  return service.post(`/capabilities/${id}/provider-configs/${configId}/test`)
+}
+
+export function enableProviderConfig(id, configId) {
+  return service.post(`/capabilities/${id}/provider-configs/${configId}/enable`)
+}
+
+export function disableProviderConfig(id, configId) {
+  return service.post(`/capabilities/${id}/provider-configs/${configId}/disable`)
+}
+
+export function deleteProviderConfig(id, configId) {
+  return service.delete(`/capabilities/${id}/provider-configs/${configId}`)
+}
+
 export function bindAgentCapability(agentId, data) {
   return service.post(`/agents/${agentId}/capabilities`, data)
 }

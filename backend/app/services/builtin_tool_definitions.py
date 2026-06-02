@@ -61,7 +61,14 @@ def _definition(
     markdown=None,
     status_reason="",
     suggested_alternative="",
+    visibility="visible",
+    configurable=False,
+    bindable=None,
+    provider_types=None,
+    config_schema=None,
 ):
+    if bindable is None:
+        bindable = status in {"implemented", "partial"}
     manifest = {
         "schema_version": "weagent.tool/v1",
         "runtime": "builtin",
@@ -85,8 +92,13 @@ def _definition(
         },
         "ui": {
             "status": status,
+            "visibility": visibility,
+            "configurable": bool(configurable),
+            "bindable": bool(bindable),
             "status_reason": status_reason,
             "suggested_alternative": suggested_alternative,
+            "provider_types": list(provider_types or []),
+            "config_schema": config_schema or {},
         },
     }
     return {
@@ -100,6 +112,9 @@ def _definition(
         "tool_names": list(tool_names),
         "permissions": permissions,
         "status": status,
+        "visibility": visibility,
+        "configurable": bool(configurable),
+        "bindable": bool(bindable),
         "manifest": manifest,
         "markdown": markdown or _markdown(
             name,
@@ -125,6 +140,8 @@ BUILTIN_TOOL_DEFINITIONS = [
         status="deferred",
         status_reason="需要模型/provider 编排，后续更适合做 Skill 或 Agent workflow。",
         suggested_alternative="使用代码类 Skill 指导 Agent 编写代码。",
+        visibility="hidden",
+        bindable=False,
     ),
     _definition(
         value="code_search",
@@ -230,6 +247,18 @@ BUILTIN_TOOL_DEFINITIONS = [
         status="requires_config",
         status_reason="缺少搜索 provider/MCP 配置时不能直接调用。",
         suggested_alternative="绑定一个搜索 MCP，或使用 http_fetch 抓取已知 URL。",
+        configurable=True,
+        bindable=False,
+        provider_types=["http", "mcp"],
+        config_schema=_schema(
+            {
+                "provider_type": {"type": "string", "enum": ["mcp", "http"]},
+                "endpoint": {"type": "string"},
+                "mcp_runtime_id": {"type": "string"},
+                "tool_name": {"type": "string"},
+                "secret_alias": {"type": "string"},
+            }
+        ),
     ),
     _definition(
         value="web_fetch",
@@ -315,6 +344,21 @@ BUILTIN_TOOL_DEFINITIONS = [
         status="requires_config",
         status_reason="外部数据库连接需要 DB profile、secret 管理和只读策略。",
         suggested_alternative="对 workspace 内 SQLite 文件使用 sqlite_query_readonly。",
+        configurable=True,
+        bindable=False,
+        provider_types=["database"],
+        config_schema=_schema(
+            {
+                "driver": {"type": "string", "enum": ["sqlite", "mysql", "postgres"]},
+                "connection_alias": {"type": "string"},
+                "readonly": {"type": "boolean"},
+                "allowed_schemas": {"type": "array"},
+                "allowed_tables": {"type": "array"},
+                "max_rows": {"type": "integer"},
+                "timeout_seconds": {"type": "integer"},
+                "secret_alias": {"type": "string"},
+            }
+        ),
     ),
     _definition(
         value="image_info",
@@ -347,9 +391,48 @@ BUILTIN_TOOL_DEFINITIONS = [
         handler="image.analysis",
         tool_names=["image_analysis"],
         permissions={"required": ["read_workspace"], "optional": []},
-        status="deferred",
-        status_reason="OCR/图像理解不是确定性内置 Tool。",
-        suggested_alternative="先使用 image_info 获取文件元信息，后续接入视觉模型或 MCP。",
+        status="requires_config",
+        status_reason="图像理解需要视觉模型 provider 或 MCP 配置。",
+        suggested_alternative="配置视觉模型/MCP；仅需元信息时使用 image_info。",
+        configurable=True,
+        bindable=False,
+        provider_types=["mcp", "model"],
+        config_schema=_schema(
+            {
+                "provider_type": {"type": "string", "enum": ["mcp", "model"]},
+                "model": {"type": "string"},
+                "mcp_runtime_id": {"type": "string"},
+                "tool_name": {"type": "string"},
+                "secret_alias": {"type": "string"},
+            }
+        ),
+    ),
+    _definition(
+        value="image_generation",
+        name="图像生成",
+        category="tool_image",
+        icon="el-icon-picture-outline",
+        color="#db2777",
+        description="AI 图像生成需要模型 provider 或专用 MCP 配置",
+        handler="image.generate",
+        tool_names=["image_generate"],
+        permissions={"required": ["write_workspace"], "optional": ["network", "use_secret"]},
+        status="requires_config",
+        status_reason="图像生成需要 provider/MCP 配置和输出文件写入权限。",
+        suggested_alternative="配置图像生成 provider/MCP；仅需查看图片元信息时使用 image_info。",
+        configurable=True,
+        bindable=False,
+        provider_types=["mcp", "model"],
+        config_schema=_schema(
+            {
+                "provider_type": {"type": "string", "enum": ["mcp", "model"]},
+                "model": {"type": "string"},
+                "mcp_runtime_id": {"type": "string"},
+                "tool_name": {"type": "string"},
+                "output_format": {"type": "string", "enum": ["png", "jpg", "webp"]},
+                "secret_alias": {"type": "string"},
+            }
+        ),
     ),
     _definition(
         value="terminal",
@@ -410,6 +493,8 @@ def get_builtin_tool_definition(value):
 def builtin_tools_for_legacy_view():
     tools = []
     for item in BUILTIN_TOOL_DEFINITIONS:
+        if item.get("visibility") == "hidden":
+            continue
         tool = item["manifest"]["tool"]
         tools.append({
             "value": item["value"],

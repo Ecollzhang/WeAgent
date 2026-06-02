@@ -44,6 +44,26 @@ assertContains(
 )
 assertContains(
   'src/components/AgentEditForm/index.vue',
+  'bindableCapabilities',
+  'Agent capability selector must derive options from backend bindable/configured state'
+)
+assertContains(
+  'src/components/AgentEditForm/index.vue',
+  'isCapabilitySelectable',
+  'Agent capability selector must reject hidden or unconfigured tools before local binding'
+)
+assertContains(
+  'src/components/AgentEditForm/index.vue',
+  'capability.bindable === false',
+  'Agent capability selector must respect backend bindable=false'
+)
+assertContains(
+  'src/components/AgentEditForm/index.vue',
+  '需要先配置',
+  'Agent capability selector must explain why configurable tools are disabled before profile setup'
+)
+assertContains(
+  'src/components/AgentEditForm/index.vue',
   'deleteAgentCapability',
   'Agent edit mode must call the real unbind API for existing capability bindings'
 )

@@ -139,10 +139,54 @@ def _runtime_manifest_record(binding: AgentCapabilityBinding, workspace_root: st
     }
 
 
+def _safe_provider_config(record) -> dict | None:
+    if not record:
+        return None
+    sensitive_keys = {"secret", "secret_alias", "api_key", "token", "password"}
+    safe_config = {}
+    for key, value in (record.config or {}).items():
+        normalized_key = str(key or "").lower()
+        if normalized_key in sensitive_keys or any(item in normalized_key for item in sensitive_keys):
+            continue
+        safe_config[key] = value
+    return {
+        "id": record.id,
+        "profile_name": record.profile_name,
+        "provider_type": record.provider_type,
+        "config": safe_config,
+        "status": record.status,
+        "last_test_status": record.last_test_status,
+    }
+
+
+def _active_tool_provider_config(binding: AgentCapabilityBinding) -> dict | None:
+    if binding.capability.type != "tool":
+        return None
+    agent_user_id = binding.agent.user_id if binding.agent else None
+    if not agent_user_id:
+        return None
+    from app.models.tool_provider_config import ToolProviderConfig
+
+    record = ToolProviderConfig.query.filter_by(
+        user_id=agent_user_id,
+        capability_id=binding.capability_id,
+        status="valid",
+    ).order_by(ToolProviderConfig.updated_at.desc()).first()
+    return _safe_provider_config(record)
+
+
+def _tool_runtime_status(version, provider_config: dict | None) -> str:
+    ui_status = ((version.manifest or {}).get("ui") or {}).get("status") or "deferred"
+    if ui_status == "requires_config" and provider_config:
+        return "implemented"
+    return ui_status
+
+
 def _tool_record(binding: AgentCapabilityBinding, workspace_root: str,
                  runtime_id: str) -> dict:
     capability = binding.capability
     version = binding.capability_version
+    provider_config = _active_tool_provider_config(binding)
     return {
         "runtime_id": runtime_id,
         "capability_id": capability.id,
@@ -156,14 +200,16 @@ def _tool_record(binding: AgentCapabilityBinding, workspace_root: str,
         "permissions": version.permissions or {"required": [], "optional": []},
         "tool_names": (version.manifest or {}).get("tool_names") or [],
         "handler": (version.manifest or {}).get("handler") or "",
-        "status": ((version.manifest or {}).get("ui") or {}).get("status") or "deferred",
+        "status": _tool_runtime_status(version, provider_config),
+        "provider_config": provider_config,
         "doc_path": f"{workspace_root}/.weagent/tools/{_safe_segment(runtime_id)}/TOOL.md",
         "manifest_path": f"{workspace_root}/.weagent/tools/{_safe_segment(runtime_id)}/manifest.json",
     }
 
 
-def _binding_view(binding: AgentCapabilityBinding, capability_record: dict) -> dict:
-    return {
+def _binding_view(binding: AgentCapabilityBinding, capability_record: dict,
+                  tool_record: dict | None = None) -> dict:
+    record = {
         "binding_id": binding.id,
         "capability_id": binding.capability_id,
         "capability_version_id": binding.capability_version_id,
@@ -179,6 +225,13 @@ def _binding_view(binding: AgentCapabilityBinding, capability_record: dict) -> d
         "source_ref": binding.capability.source_ref or "",
         "manifest": binding.capability_version.manifest or {},
     }
+    if tool_record:
+        record["tool_names"] = tool_record.get("tool_names") or []
+        record["handler"] = tool_record.get("handler") or ""
+        record["status"] = tool_record.get("status") or "deferred"
+        if tool_record.get("provider_config"):
+            record["provider_config"] = tool_record.get("provider_config")
+    return record
 
 
 def _permission_grant(binding: AgentCapabilityBinding) -> dict:
@@ -288,7 +341,8 @@ def build_capability_projection(session_id: str, agents: list[dict],
                     binding, workspace_root, runtime_id
                 )
 
-        agent_view["capabilities"].append(_binding_view(binding, capability_record))
+        tool_record = projection["tools"].get(runtime_id) if capability.type == "tool" else None
+        agent_view["capabilities"].append(_binding_view(binding, capability_record, tool_record))
         agent_view["permissions"]["grants"].append(_permission_grant(binding))
         if capability.type == "skill":
             agent_view["skill_index"].append({
@@ -301,7 +355,7 @@ def build_capability_projection(session_id: str, agents: list[dict],
             })
         elif capability.type == "tool":
             tool_record = projection["tools"].get(runtime_id) or {}
-            agent_view["tool_index"].append({
+            tool_index_entry = {
                 "capability_id": capability.id,
                 "runtime_id": runtime_id,
                 "version_id": binding.capability_version_id,
@@ -311,6 +365,9 @@ def build_capability_projection(session_id: str, agents: list[dict],
                 "permissions": tool_record.get("permissions") or {"required": [], "optional": []},
                 "status": tool_record.get("status") or "deferred",
                 "doc_path": tool_record.get("doc_path"),
-            })
+            }
+            if tool_record.get("provider_config"):
+                tool_index_entry["provider_config"] = tool_record.get("provider_config")
+            agent_view["tool_index"].append(tool_index_entry)
 
     return projection

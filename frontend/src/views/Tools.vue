@@ -189,6 +189,14 @@
             <code v-if="selected.source_ref">{{ selected.source_ref }}</code>
           </section>
 
+          <section v-if="selected.type === 'tool' && isConfigurableTool(selected)" class="detail-section">
+            <h4>配置能力</h4>
+            <p>{{ selected.configuration_required_reason || toolStatusReason(selected) || '该能力需要先配置 provider、MCP 或 profile。' }}</p>
+            <el-button size="small" type="primary" icon="el-icon-setting" @click="openProviderConfigDialog(selected)">
+              配置能力
+            </el-button>
+          </section>
+
           <section class="detail-section">
             <h4>{{ selected.type === 'tool' ? '工具定义' : '运行摘要' }}</h4>
             <div class="definition-grid">
@@ -346,6 +354,71 @@
       <span slot="footer">
         <el-button @click="skillDialog.visible = false">取消</el-button>
         <el-button type="primary" @click="handleCreateSkill">保存</el-button>
+      </span>
+    </el-dialog>
+
+    <el-dialog title="配置能力" :visible.sync="providerConfigDialog.visible" width="720px">
+      <el-form label-position="top" v-loading="providerConfigDialog.loading">
+        <el-form-item label="能力">
+          <el-input :value="providerConfigDialog.capability ? providerConfigDialog.capability.name : ''" disabled></el-input>
+        </el-form-item>
+        <el-form-item label="已保存配置">
+          <el-table
+            v-if="providerConfigDialog.providerConfigs.length"
+            :data="providerConfigDialog.providerConfigs"
+            size="mini"
+            border
+          >
+            <el-table-column prop="profile_name" label="名称" min-width="130"></el-table-column>
+            <el-table-column prop="provider_type" label="类型" width="90"></el-table-column>
+            <el-table-column prop="status" label="状态" width="90"></el-table-column>
+            <el-table-column prop="last_test_status" label="测试" width="90"></el-table-column>
+            <el-table-column label="操作" width="260">
+              <template slot-scope="{ row }">
+                <el-button size="mini" @click="editProviderConfig(row)">编辑</el-button>
+                <el-button size="mini" type="success" @click="handleEnableProviderConfig(row)">启用</el-button>
+                <el-button size="mini" @click="handleDisableProviderConfig(row)">停用</el-button>
+                <el-button size="mini" type="danger" @click="handleDeleteProviderConfig(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-alert v-else title="还没有保存的配置" type="info" :closable="false"></el-alert>
+        </el-form-item>
+        <el-form-item label="配置类型">
+          <el-select v-model="providerConfigDialog.provider_type" style="width: 100%">
+            <el-option
+              v-for="provider in providerConfigProviderTypes"
+              :key="provider"
+              :label="provider"
+              :value="provider"
+            ></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="配置名称">
+          <el-input v-model="providerConfigDialog.profile_name" placeholder="例如：默认搜索服务"></el-input>
+        </el-form-item>
+        <el-form-item label="配置 JSON">
+          <el-input
+            v-model="providerConfigDialog.config_text"
+            type="textarea"
+            :rows="8"
+            placeholder="{ }"
+          ></el-input>
+        </el-form-item>
+        <el-alert
+          v-if="providerConfigDialog.error"
+          :title="providerConfigDialog.error"
+          type="error"
+          show-icon
+          :closable="false"
+        ></el-alert>
+      </el-form>
+      <span slot="footer">
+        <el-button @click="providerConfigDialog.visible = false">取消</el-button>
+        <el-button @click="resetProviderConfigForm">新建配置</el-button>
+        <el-button :loading="providerConfigDialog.saving" @click="handleSaveProviderConfig">保存</el-button>
+        <el-button :loading="providerConfigDialog.testing" @click="handleTestProviderConfig">测试配置</el-button>
+        <el-button type="primary" :loading="providerConfigDialog.saving" @click="handleSaveAndEnableProviderConfig">保存并启用</el-button>
       </span>
     </el-dialog>
 
@@ -550,14 +623,21 @@ import AppSidebar from '../components/Sidebar/index.vue'
 import {
   confirmCapabilityImport,
   createCapabilityVersion,
+  createProviderConfig,
   createSkill,
   deleteCapability,
+  deleteProviderConfig,
+  disableProviderConfig,
+  enableProviderConfig,
   getCapabilities,
   getCapabilityAssets,
   getCapabilityAudits,
   getCapabilityDeleteImpact,
+  getProviderConfigs,
   importMcpManifest,
   previewCapabilityImport,
+  testProviderConfig,
+  updateProviderConfig,
 } from '../api/capabilities'
 import {
   createToolsetCategory,
@@ -651,6 +731,19 @@ export default {
         content: '',
         assets: [],
       },
+      providerConfigDialog: {
+        visible: false,
+        capability: null,
+        config_id: '',
+        profile_name: '',
+        provider_type: '',
+        config_text: '{}',
+        providerConfigs: [],
+        loading: false,
+        saving: false,
+        testing: false,
+        error: '',
+      },
     }
   },
   computed: {
@@ -672,6 +765,7 @@ export default {
     filteredCapabilities() {
       const text = this.keyword.trim().toLowerCase()
       return this.capabilities.filter(item => {
+        if (!this.isVisibleCapability(item)) return false
         const sameType = item.type === this.activeType
         if (!sameType) return false
         if (!text) return true
@@ -702,6 +796,10 @@ export default {
       if (this.importDialog.step === 0) return '生成预览'
       if (this.importDialog.step === 1) return '继续确认'
       return '确认导入'
+    },
+    providerConfigProviderTypes() {
+      const ui = (this.latestManifest(this.providerConfigDialog.capability).ui || {})
+      return ui.provider_types || []
     },
   },
   created() {
@@ -775,7 +873,7 @@ export default {
       try {
         const res = await getCapabilities({ category_id: this.activeCategoryId })
         if (res.code === 200) {
-          this.capabilities = res.data || []
+          this.capabilities = (res.data || []).filter(this.isVisibleCapability)
           this.ensureActiveTypeHasContent()
           this.selectFirstCapability()
         }
@@ -850,6 +948,235 @@ export default {
       const counts = category.counts || {}
       return Object.keys(counts).reduce((sum, key) => sum + Number(counts[key] || 0), 0)
     },
+    isVisibleCapability(capability) {
+      if (!capability) return false
+      if (capability.visibility === 'hidden') return false
+      if (capability.type !== 'tool') return true
+      const status = this.toolStatus(capability)
+      return status !== 'deferred' || this.isConfigurableTool(capability)
+    },
+    isConfigurableTool(capability) {
+      if (!capability || capability.type !== 'tool') return false
+      if (capability.configurable === true) return true
+      const ui = this.latestManifest(capability).ui || {}
+      return ui.configurable === true
+    },
+    async openProviderConfigDialog(capability) {
+      const ui = (this.latestManifest(capability).ui || {})
+      const providerTypes = ui.provider_types || []
+      this.providerConfigDialog = {
+        visible: true,
+        capability,
+        config_id: '',
+        profile_name: `${capability.name} 配置`,
+        provider_type: providerTypes[0] || '',
+        config_text: JSON.stringify(this.defaultProviderConfig(providerTypes[0] || ''), null, 2),
+        providerConfigs: [],
+        loading: false,
+        saving: false,
+        testing: false,
+        error: '',
+      }
+      await this.fetchProviderConfigs()
+    },
+    defaultProviderConfig(providerType) {
+      if (providerType === 'http') {
+        return { endpoint: '' }
+      }
+      if (providerType === 'mcp') {
+        return { mcp_runtime_id: '', tool_name: '' }
+      }
+      if (providerType === 'model') {
+        return { model: '' }
+      }
+      if (providerType === 'database') {
+        return {
+          driver: 'mysql',
+          connection_alias: '',
+          readonly: true,
+          max_rows: 100,
+          timeout_seconds: 30,
+        }
+      }
+      return {}
+    },
+    async fetchProviderConfigs() {
+      const capability = this.providerConfigDialog.capability
+      if (!capability) return
+      this.providerConfigDialog.loading = true
+      try {
+        const res = await getProviderConfigs(capability.id)
+        if (res.code === 200) {
+          this.providerConfigDialog.providerConfigs = res.data || []
+        }
+      } catch (e) {
+        this.providerConfigDialog.error = this.apiErrorMessage(e, '加载配置失败')
+      } finally {
+        this.providerConfigDialog.loading = false
+      }
+    },
+    resetProviderConfigForm() {
+      const capability = this.providerConfigDialog.capability
+      const providerTypes = this.providerConfigProviderTypes
+      this.providerConfigDialog.config_id = ''
+      this.providerConfigDialog.profile_name = capability ? `${capability.name} 配置` : ''
+      this.providerConfigDialog.provider_type = providerTypes[0] || ''
+      this.providerConfigDialog.config_text = JSON.stringify(
+        this.defaultProviderConfig(this.providerConfigDialog.provider_type),
+        null,
+        2
+      )
+      this.providerConfigDialog.error = ''
+    },
+    editProviderConfig(config) {
+      this.providerConfigDialog.config_id = config.id
+      this.providerConfigDialog.profile_name = config.profile_name
+      this.providerConfigDialog.provider_type = config.provider_type
+      this.providerConfigDialog.config_text = JSON.stringify(config.config || {}, null, 2)
+      this.providerConfigDialog.error = ''
+    },
+    providerConfigPayload() {
+      let parsed = {}
+      try {
+        parsed = JSON.parse(this.providerConfigDialog.config_text || '{}')
+      } catch (e) {
+        throw new Error('配置 JSON 格式不正确')
+      }
+      return {
+        profile_name: this.providerConfigDialog.profile_name,
+        provider_type: this.providerConfigDialog.provider_type,
+        config: parsed,
+        secret_refs: this.extractSecretRefs(parsed),
+      }
+    },
+    extractSecretRefs(config) {
+      const refs = []
+      const add = value => {
+        const normalized = String(value || '').trim()
+        if (normalized && !refs.includes(normalized)) refs.push(normalized)
+      }
+      add(config.secret_alias)
+      add(config.connection_alias)
+      if (Array.isArray(config.secret_refs)) {
+        config.secret_refs.forEach(add)
+      }
+      return refs
+    },
+    async handleSaveProviderConfig() {
+      const capability = this.providerConfigDialog.capability
+      if (!capability) return null
+      this.providerConfigDialog.saving = true
+      this.providerConfigDialog.error = ''
+      try {
+        const payload = this.providerConfigPayload()
+        const res = this.providerConfigDialog.config_id
+          ? await updateProviderConfig(capability.id, this.providerConfigDialog.config_id, payload)
+          : await createProviderConfig(capability.id, payload)
+        if (res.code === 200 || res.code === 201) {
+          this.$message.success('配置已保存')
+          const saved = res.data
+          this.providerConfigDialog.config_id = saved.id
+          await this.fetchProviderConfigs()
+          return saved
+        }
+      } catch (e) {
+        this.providerConfigDialog.error = this.apiErrorMessage(e, e.message || '保存配置失败')
+      } finally {
+        this.providerConfigDialog.saving = false
+      }
+      return null
+    },
+    async handleTestProviderConfig() {
+      let configId = this.providerConfigDialog.config_id
+      if (!configId) {
+        const saved = await this.handleSaveProviderConfig()
+        configId = saved ? saved.id : ''
+      }
+      if (!configId || !this.providerConfigDialog.capability) return
+      this.providerConfigDialog.testing = true
+      this.providerConfigDialog.error = ''
+      try {
+        const res = await testProviderConfig(this.providerConfigDialog.capability.id, configId)
+        if (res.code === 200) {
+          this.$message.success('配置测试通过')
+          await this.fetchProviderConfigs()
+        }
+      } catch (e) {
+        const failedConfig = e.response && e.response.data ? e.response.data.data : null
+        if (failedConfig) {
+          this.editProviderConfig(failedConfig)
+          await this.fetchProviderConfigs()
+        }
+        this.providerConfigDialog.error = this.apiErrorMessage(e, '配置测试失败')
+      } finally {
+        this.providerConfigDialog.testing = false
+      }
+    },
+    async handleEnableProviderConfig(config) {
+      const capability = this.providerConfigDialog.capability
+      if (!capability || !config) return
+      this.providerConfigDialog.saving = true
+      try {
+        const res = await enableProviderConfig(capability.id, config.id)
+        if (res.code === 200) {
+          this.$message.success('配置已启用')
+          await this.fetchProviderConfigs()
+          await this.fetchCapabilities()
+        }
+      } catch (e) {
+        this.providerConfigDialog.error = this.apiErrorMessage(e, '启用配置失败')
+      } finally {
+        this.providerConfigDialog.saving = false
+      }
+    },
+    async handleDisableProviderConfig(config) {
+      const capability = this.providerConfigDialog.capability
+      if (!capability || !config) return
+      this.providerConfigDialog.saving = true
+      try {
+        const res = await disableProviderConfig(capability.id, config.id)
+        if (res.code === 200) {
+          this.$message.success('配置已停用')
+          await this.fetchProviderConfigs()
+          await this.fetchCapabilities()
+        }
+      } catch (e) {
+        this.providerConfigDialog.error = this.apiErrorMessage(e, '停用配置失败')
+      } finally {
+        this.providerConfigDialog.saving = false
+      }
+    },
+    async handleDeleteProviderConfig(config) {
+      const capability = this.providerConfigDialog.capability
+      if (!capability || !config) return
+      this.providerConfigDialog.saving = true
+      try {
+        const res = await deleteProviderConfig(capability.id, config.id)
+        if (res.code === 200) {
+          this.$message.success('配置已删除')
+          if (this.providerConfigDialog.config_id === config.id) {
+            this.resetProviderConfigForm()
+          }
+          await this.fetchProviderConfigs()
+          await this.fetchCapabilities()
+        }
+      } catch (e) {
+        this.providerConfigDialog.error = this.apiErrorMessage(e, '删除配置失败')
+      } finally {
+        this.providerConfigDialog.saving = false
+      }
+    },
+    async handleSaveAndEnableProviderConfig() {
+      const saved = await this.handleSaveProviderConfig()
+      if (!saved) return
+      await this.handleTestProviderConfig()
+      const latest = this.providerConfigDialog.providerConfigs.find(item => item.id === saved.id) || saved
+      await this.handleEnableProviderConfig(latest)
+    },
+    apiErrorMessage(error, fallback) {
+      const data = error && error.response ? error.response.data : null
+      return (data && data.message) || fallback
+    },
     typeCount(type) {
       if (this.activeCategory && this.activeCategory.counts) {
         return this.activeCategory.counts[type] || 0
@@ -923,6 +1250,10 @@ export default {
         deferred: '未实现',
       }
       return labels[this.toolStatus(capability)] || '未声明'
+    },
+    toolStatusReason(capability) {
+      const ui = this.latestManifest(capability).ui || {}
+      return ui.status_reason || ''
     },
     toolStatusTagType(capability) {
       const status = this.toolStatus(capability)

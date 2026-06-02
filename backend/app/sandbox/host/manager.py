@@ -331,13 +331,13 @@ class DockerContainerManager:
 
             agents_config = []
             try:
-                info = OrchestratorClient(host="localhost", port=host_port).get_session_info()
-                agents_config = info.get("agents", [])
+                agents_config = self._recover_agents_from_labels(container.labels)
             except Exception:
-                pass
+                agents_config = []
             if not agents_config:
                 try:
-                    agents_config = self._recover_agents_from_labels(container.labels)
+                    info = OrchestratorClient(host="localhost", port=host_port).get_session_info()
+                    agents_config = info.get("agents", [])
                 except Exception:
                     agents_config = []
 
@@ -654,6 +654,39 @@ class DockerContainerManager:
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
         return session.client.remove_custom_tool(tool_name)
+
+    # ---- MCP ----
+
+    def list_mcp_servers(self, session_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.list_mcp_servers()
+
+    def start_mcp_server(self, session_id: str, agent_id: str, runtime_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.start_mcp_server(agent_id, runtime_id)
+
+    def list_mcp_tools(self, session_id: str, runtime_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.list_mcp_tools(runtime_id)
+
+    def call_mcp_tool(self, session_id: str, agent_id: str, runtime_id: str,
+                      tool_name: str, args: dict) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.call_mcp_tool(agent_id, runtime_id, tool_name, args)
+
+    def stop_mcp_server(self, session_id: str, runtime_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.stop_mcp_server(runtime_id)
 
     # ---- Services ----
 

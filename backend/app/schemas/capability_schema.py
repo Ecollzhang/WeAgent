@@ -138,3 +138,37 @@ class DraftSyncSchema(Schema):
         unknown = EXCLUDE
 
     records = fields.List(fields.Dict(), required=True)
+
+
+class CreateToolProviderConfigSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    profile_name = fields.String(
+        required=True,
+        validate=validate.Length(min=1, max=120),
+    )
+    provider_type = fields.String(
+        required=True,
+        validate=validate.OneOf(["mcp", "http", "model", "database"]),
+    )
+    config = fields.Dict(load_default=dict)
+    secret_refs = fields.List(fields.String(), load_default=list)
+
+
+class UpdateToolProviderConfigSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    profile_name = fields.String(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Length(min=1, max=120),
+    )
+    provider_type = fields.String(
+        load_default=None,
+        allow_none=True,
+        validate=validate.OneOf(["mcp", "http", "model", "database"]),
+    )
+    config = fields.Dict(load_default=None, allow_none=True)
+    secret_refs = fields.List(fields.String(), load_default=None, allow_none=True)

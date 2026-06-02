@@ -129,7 +129,7 @@ class CapabilityService:
         if category_id:
             query = query.filter(Capability.category_id == category_id)
         records = query.order_by(Capability.created_at.desc()).all()
-        return [self._capability_to_dict(record) for record in records], None
+        return [self._capability_to_dict(record, user_id=user_id) for record in records], None
 
     def get_capability(self, user_id, capability_id):
         capability = self._visible_capability_query(user_id).filter(
@@ -137,7 +137,7 @@ class CapabilityService:
         ).first()
         if not capability:
             return None, "Capability not found"
-        return self._capability_to_dict(capability, include_latest=True), None
+        return self._capability_to_dict(capability, include_latest=True, user_id=user_id), None
 
     def get_versions(self, user_id, capability_id):
         capability = self._visible_capability_query(user_id).filter(
@@ -388,6 +388,11 @@ class CapabilityService:
             return None, "Capability version not found"
         if version_policy not in {"pinned", "follow_latest"}:
             return None, "Invalid version policy"
+        if not self._is_capability_bindable(version.capability, version, user_id=user_id):
+            ui = ((version.manifest or {}).get("ui") or {})
+            if ui.get("status") == "requires_config" and ui.get("configurable"):
+                return None, "Capability requires configuration before binding"
+            return None, "Capability is not bindable"
 
         granted = list(dict.fromkeys(granted_permissions or []))
         declared = _normalize_permissions(version.permissions)
@@ -682,9 +687,9 @@ class CapabilityService:
                 None,
                 category_id=tool.get("category"),
             )
+            source = "hidden" if tool.get("visibility") == "hidden" else "builtin"
             existing = Capability.query.filter_by(
                 type="tool",
-                source="builtin",
                 source_ref=source_ref,
                 is_builtin=True,
             ).first()
@@ -692,6 +697,7 @@ class CapabilityService:
                 existing.category_id = category_id
                 existing.name = tool["name"]
                 existing.description = tool.get("description") or ""
+                existing.source = source
                 latest = (
                     CapabilityVersion.query.get(existing.latest_version_id)
                     if existing.latest_version_id else None
@@ -721,7 +727,7 @@ class CapabilityService:
                 name=tool["name"],
                 slug=f"builtin-{_slugify(source_ref)}",
                 description=tool.get("description") or "",
-                source="builtin",
+                source=source,
                 source_ref=source_ref,
                 is_builtin=True,
             )
@@ -868,7 +874,7 @@ class CapabilityService:
     def _visible_capability_query(self, user_id):
         return Capability.query.filter(
             ((Capability.is_builtin == True) | (Capability.user_id == user_id)),
-            Capability.source != "archived",
+            ~Capability.source.in_(["archived", "hidden"]),
         )
 
     def _draft_query(self, user_id):
@@ -952,19 +958,72 @@ class CapabilityService:
                 return line[2:].strip()
         return ""
 
-    def _capability_to_dict(self, capability, include_latest=True):
+    def _capability_to_dict(self, capability, include_latest=True, user_id=None):
         data = capability.to_dict()
         data["category"] = capability.category.to_dict() if capability.category else None
+        latest = None
         if include_latest:
-            latest = None
             if capability.latest_version_id:
                 latest = CapabilityVersion.query.get(capability.latest_version_id)
             elif capability.versions:
                 latest = capability.versions[-1]
             data["latest_version"] = self._version_to_dict(latest) if latest else None
+        elif capability.latest_version_id:
+            latest = CapabilityVersion.query.get(capability.latest_version_id)
+        if capability.type == "tool":
+            data.update(self._tool_catalog_state(capability, latest, user_id=user_id))
         if capability.type == "plugin":
             data["install_record"] = self._latest_plugin_install_record(capability)
         return data
+
+    def _tool_catalog_state(self, capability, version=None, user_id=None):
+        manifest = (version.manifest if version else {}) or {}
+        ui = manifest.get("ui") or {}
+        status = ui.get("status") or "deferred"
+        visibility = ui.get("visibility") or (
+            "hidden" if capability.source == "hidden" else "visible"
+        )
+        configurable = bool(ui.get("configurable"))
+        configured_profiles_count = (
+            self._valid_tool_provider_config_count(user_id, capability.id)
+            if configurable else 0
+        )
+        bindable = self._is_capability_bindable(capability, version, user_id=user_id)
+        return {
+            "tool_status": status,
+            "visibility": visibility,
+            "configurable": configurable,
+            "bindable": bindable,
+            "configured_profiles_count": configured_profiles_count,
+            "configuration_required_reason": ui.get("status_reason") or "",
+        }
+
+    def _is_capability_bindable(self, capability, version=None, user_id=None):
+        if capability.source in {"archived", "hidden"}:
+            return False
+        if capability.type != "tool":
+            return True
+        manifest = (version.manifest if version else {}) or {}
+        ui = manifest.get("ui") or {}
+        if ui.get("visibility") == "hidden":
+            return False
+        if ui.get("status") == "requires_config":
+            return (
+                bool(ui.get("configurable"))
+                and self._valid_tool_provider_config_count(user_id, capability.id) > 0
+            )
+        return bool(ui.get("bindable", ui.get("status") in {"implemented", "partial"}))
+
+    def _valid_tool_provider_config_count(self, user_id, capability_id):
+        if not user_id:
+            return 0
+        from app.models.tool_provider_config import ToolProviderConfig
+
+        return ToolProviderConfig.query.filter_by(
+            user_id=user_id,
+            capability_id=capability_id,
+            status="valid",
+        ).count()
 
     def _version_to_dict(self, version):
         return version.to_dict()

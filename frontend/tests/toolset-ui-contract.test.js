@@ -63,6 +63,36 @@ assertContains(
 )
 assertContains(
   'src/api/capabilities.js',
+  "service.get(`/capabilities/${id}/provider-configs`",
+  'configurable tools must load provider profiles from the backend'
+)
+assertContains(
+  'src/api/capabilities.js',
+  "service.post(`/capabilities/${id}/provider-configs`",
+  'configurable tools must create provider profiles through the backend'
+)
+assertContains(
+  'src/api/capabilities.js',
+  "service.put(`/capabilities/${id}/provider-configs/${configId}`",
+  'configurable tools must update provider profiles through the backend'
+)
+assertContains(
+  'src/api/capabilities.js',
+  "service.post(`/capabilities/${id}/provider-configs/${configId}/test`",
+  'configurable tools must test provider profiles through the backend'
+)
+assertContains(
+  'src/api/capabilities.js',
+  "service.post(`/capabilities/${id}/provider-configs/${configId}/enable`",
+  'configurable tools must enable provider profiles through the backend'
+)
+assertContains(
+  'src/api/capabilities.js',
+  "service.post(`/capabilities/${id}/provider-configs/${configId}/disable`",
+  'configurable tools must disable provider profiles through the backend'
+)
+assertContains(
+  'src/api/capabilities.js',
   "service.delete(`/agents/${agentId}/capabilities/${bindingId}`",
   'agent capability bindings must have a real unbind API'
 )
@@ -145,6 +175,61 @@ assertContains(
   'src/views/Tools.vue',
   'toolStatusLabel',
   'Tool cards/details must expose implemented/partial/requires-config/deferred status'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'isVisibleCapability',
+  'toolset page must filter hidden/deferred capabilities out of the primary catalog'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'isConfigurableTool',
+  'requires-config tools shown in the catalog must have a real configuration entry point'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'providerConfigDialog',
+  'toolset page must model a frontend provider configuration window'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'providerConfigs',
+  'toolset page must keep provider profile list state'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'fetchProviderConfigs',
+  'toolset page must load saved provider profiles'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'handleSaveProviderConfig',
+  'toolset page must create or update provider profiles'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'handleTestProviderConfig',
+  'toolset page must let users test provider profiles'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'handleEnableProviderConfig',
+  'toolset page must let users enable tested provider profiles'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'handleDisableProviderConfig',
+  'toolset page must let users disable provider profiles'
+)
+assertContains(
+  'src/views/Tools.vue',
+  'openProviderConfigDialog',
+  'tool details must expose a user-facing configuration action for configurable tools'
+)
+assertContains(
+  'src/views/Tools.vue',
+  '配置能力',
+  'configurable provider tools must use user-facing configuration wording'
 )
 assertContains(
   'src/views/Tools.vue',

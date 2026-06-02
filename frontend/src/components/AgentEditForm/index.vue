@@ -101,36 +101,63 @@
       <div class="form-section capability-section">
         <div class="section-heading">
           <div>
-            <h3>默认能力配置</h3>
-            <span>{{ form.capability_bindings.length }} bound</span>
+            <h3>默认工具能力</h3>
+            <span>{{ form.capability_bindings.length }} 个已绑定，默认固定当前版本</span>
           </div>
-          <el-select
-            v-model="selectedCapabilityId"
-            filterable
-            size="small"
-            placeholder="选择 capability"
-            :disabled="readonly"
-            class="capability-select"
-          >
-            <el-option-group
+        </div>
+
+        <div class="capability-picker" v-if="!readonly">
+          <div class="picker-categories">
+            <button
+              type="button"
+              class="picker-category"
+              :class="{ active: capabilityCategoryId === 'all' }"
+              @click="capabilityCategoryId = 'all'"
+            >
+              全部
+            </button>
+            <button
+              v-for="category in toolsetCategories"
+              :key="category.id"
+              type="button"
+              class="picker-category"
+              :class="{ active: capabilityCategoryId === category.id }"
+              @click="capabilityCategoryId = category.id"
+            >
+              <i :class="category.icon || 'el-icon-folder'" :style="{ color: category.color || '#4080ff' }"></i>
+              {{ category.name }}
+            </button>
+          </div>
+
+          <el-tabs v-model="capabilityPickerType" class="picker-tabs">
+            <el-tab-pane
               v-for="group in groupedCapabilities"
               :key="group.type"
-              :label="group.label"
+              :name="group.type"
             >
-              <el-option
-                v-for="capability in group.items"
-                :key="capability.id"
-                :label="capability.name"
-                :value="capability.id"
-              >
-                <span>{{ capability.name }}</span>
-                <span class="option-meta">{{ group.label }} · v{{ latestVersion(capability).version || '1.0.0' }}</span>
-              </el-option>
-            </el-option-group>
-          </el-select>
-          <el-button size="small" icon="el-icon-plus" :disabled="readonly || !selectedCapabilityId" @click="addSelectedCapability">
-            添加
-          </el-button>
+              <span slot="label">{{ group.label }} <b>{{ group.items.length }}</b></span>
+            </el-tab-pane>
+          </el-tabs>
+
+          <div class="picker-list">
+            <button
+              v-for="capability in pickerCapabilities"
+              :key="capability.id"
+              type="button"
+              class="picker-card"
+              :disabled="isCapabilityBound(capability.id)"
+              @click="addCapability(capability)"
+            >
+              <span>
+                <strong>{{ capability.name }}</strong>
+                <small>{{ capability.description || capability.source_ref || '暂无描述' }}</small>
+              </span>
+              <em>v{{ latestVersion(capability).version || '1.0.0' }}</em>
+            </button>
+            <div v-if="pickerCapabilities.length === 0" class="picker-empty">
+              当前分类暂无 {{ typeLabel(capabilityPickerType) }}
+            </div>
+          </div>
         </div>
 
         <div class="binding-list">
@@ -146,9 +173,9 @@
                 </el-tag>
                 <strong>{{ binding.capability.name }}</strong>
                 <span>v{{ binding.capability_version.version || '1.0.0' }}</span>
-                <el-tag v-if="upgradeMap[binding.binding_id]" size="mini" type="warning">upgrade</el-tag>
+                <el-tag v-if="upgradeMap[binding.binding_id]" size="mini" type="warning">可升级</el-tag>
               </div>
-              <p>{{ binding.capability.description || binding.capability.source_ref || 'No description' }}</p>
+              <p>{{ binding.capability.description || binding.capability.source_ref || '暂无描述' }}</p>
               <div class="permissions">
                 <el-checkbox-group v-model="binding.granted_permissions" :disabled="readonly">
                   <el-checkbox
@@ -206,10 +233,12 @@
 import { getTools } from '../../api/tools'
 import { uploadFile } from '../../api/upload'
 import {
+  deleteAgentCapability,
   getAgentCapabilities,
   getAgentCapabilityUpgrades,
   getCapabilities,
 } from '../../api/capabilities'
+import { getToolsetCategories } from '../../api/toolsets'
 
 const TYPE_LABELS = {
   skill: 'Skill',
@@ -242,8 +271,10 @@ export default {
       editTagValue: '',
       allTools: [],
       allCapabilities: [],
+      toolsetCategories: [],
       capabilityLoading: false,
-      selectedCapabilityId: '',
+      capabilityCategoryId: 'all',
+      capabilityPickerType: 'skill',
       upgradeMap: {},
       form: this.emptyForm(),
     }
@@ -253,12 +284,24 @@ export default {
       return ['skill', 'tool', 'mcp', 'plugin'].map(type => ({
         type,
         label: TYPE_LABELS[type],
-        items: this.allCapabilities.filter(item => item.type === type),
+        items: this.filteredCapabilitiesByCategory.filter(item => item.type === type),
       }))
+    },
+    bindableCapabilities() {
+      return this.allCapabilities.filter(this.isCapabilitySelectable)
+    },
+    filteredCapabilitiesByCategory() {
+      if (this.capabilityCategoryId === 'all') return this.bindableCapabilities
+      return this.bindableCapabilities.filter(item => item.category_id === this.capabilityCategoryId)
+    },
+    pickerCapabilities() {
+      const group = this.groupedCapabilities.find(item => item.type === this.capabilityPickerType)
+      return group ? group.items : []
     },
   },
   created() {
     this.fetchTools()
+    this.fetchToolsetCategories()
     this.fetchCapabilities()
   },
   watch: {
@@ -312,6 +355,14 @@ export default {
         if (res.code === 200) this.allTools = res.data || []
       } catch (e) {
         console.error('Failed to load tools', e)
+      }
+    },
+    async fetchToolsetCategories() {
+      try {
+        const res = await getToolsetCategories()
+        if (res.code === 200) this.toolsetCategories = res.data || []
+      } catch (e) {
+        console.error('Failed to load toolset categories', e)
       }
     },
     async fetchCapabilities() {
@@ -369,12 +420,29 @@ export default {
     latestVersion(capability) {
       return capability && capability.latest_version ? capability.latest_version : {}
     },
-    addSelectedCapability() {
-      const capability = this.allCapabilities.find(item => item.id === this.selectedCapabilityId)
+    isCapabilityBound(capabilityId) {
+      return this.form.capability_bindings.some(item => item.capability_id === capabilityId && item.enabled !== false)
+    },
+    isCapabilitySelectable(capability) {
+      if (!capability) return false
+      if (capability.visibility === 'hidden') return false
+      if (capability.bindable === false) return false
+      return true
+    },
+    capabilityDisabledReason(capability) {
+      if (!capability) return ''
+      if (capability.bindable === false && capability.configurable) return '需要先配置'
+      if (capability.bindable === false) return '暂不可绑定'
+      return ''
+    },
+    addCapability(capability) {
       if (!capability || !capability.latest_version) return
-      const exists = this.form.capability_bindings.some(item => item.capability_id === capability.id)
-      if (exists) {
-        this.$message.warning('Capability already bound')
+      if (!this.isCapabilitySelectable(capability)) {
+        this.$message.warning(this.capabilityDisabledReason(capability) || '该能力暂不可绑定')
+        return
+      }
+      if (this.isCapabilityBound(capability.id)) {
+        this.$message.warning('该能力已绑定')
         return
       }
       this.form.capability_bindings.push(this.normalizeBinding({
@@ -386,12 +454,28 @@ export default {
         version_policy: 'pinned',
         granted_permissions: (capability.latest_version.permissions || {}).required || [],
       }))
-      this.selectedCapabilityId = ''
     },
-    removeBinding(index) {
+    async removeBinding(index) {
       const binding = this.form.capability_bindings[index]
       if (binding && binding.binding_id) {
-        binding.enabled = false
+        try {
+          await this.$confirm(`解绑“${binding.capability.name}”？`, '解绑能力', {
+            type: 'warning',
+            confirmButtonText: '解绑',
+            cancelButtonText: '取消',
+          })
+        } catch (e) {
+          return
+        }
+        try {
+          const res = await deleteAgentCapability(this.agent.id, binding.binding_id)
+          if (res.code === 200) {
+            this.form.capability_bindings.splice(index, 1)
+            this.$message.success('能力已解绑')
+          }
+        } catch (e) {
+          this.$message.error('解绑能力失败')
+        }
         return
       }
       this.form.capability_bindings.splice(index, 1)
@@ -532,7 +616,7 @@ export default {
 }
 
 .form-section {
-  max-width: 840px;
+  max-width: 920px;
   margin-bottom: 24px;
 }
 
@@ -601,18 +685,12 @@ export default {
   opacity: 0;
 }
 
-.avatar-actions {
+.avatar-actions,
+.tags-wrapper {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.tags-wrapper {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
 }
 
 .tag-text {
@@ -621,7 +699,7 @@ export default {
   min-width: 20px;
 }
 
-.el-tag {
+.tags-wrapper .el-tag {
   cursor: default;
   color: #fff !important;
 }
@@ -634,9 +712,9 @@ export default {
 }
 
 .section-heading {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(260px, 360px) auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -652,14 +730,111 @@ export default {
   font-size: 12px;
 }
 
-.capability-select {
-  width: 100%;
+.capability-picker {
+  border: 1px solid #e8edf3;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+  margin-bottom: 14px;
 }
 
-.option-meta {
-  float: right;
-  color: #8a94a3;
+.picker-categories {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.picker-category {
+  min-height: 32px;
+  border: 1px solid #e8edf3;
+  background: #fff;
+  border-radius: 6px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #526070;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.picker-category.active,
+.picker-category:hover {
+  border-color: #4080ff;
+  color: #1f2937;
+  background: #f5f9ff;
+}
+
+.picker-tabs {
+  margin-bottom: 8px;
+}
+
+.picker-tabs b {
+  min-width: 22px;
+  display: inline-block;
+  text-align: center;
   font-size: 12px;
+  color: #64748b;
+  background: #eef2f7;
+  border-radius: 999px;
+  margin-left: 4px;
+}
+
+.picker-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.picker-card {
+  min-height: 76px;
+  border: 1px solid #e8edf3;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: start;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-card:hover:not(:disabled) {
+  border-color: #4080ff;
+  background: #f7fbff;
+}
+
+.picker-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.54;
+}
+
+.picker-card strong,
+.picker-card small {
+  display: block;
+}
+
+.picker-card strong {
+  color: #1f2937;
+  margin-bottom: 4px;
+}
+
+.picker-card small,
+.picker-card em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.picker-empty {
+  grid-column: 1 / -1;
+  color: #8a94a3;
+  text-align: center;
+  padding: 28px 0;
 }
 
 .binding-list {
@@ -726,6 +901,6 @@ export default {
 }
 
 .legacy-section {
-  max-width: 840px;
+  max-width: 920px;
 }
 </style>

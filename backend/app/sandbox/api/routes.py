@@ -506,6 +506,73 @@ def remove_custom_tool(session_id: str, tool_name: str):
         return jsonify({"code": 404, "message": str(e)}), 404
 
 
+@sandbox_bp.route("/sessions/<session_id>/mcp/servers", methods=["GET"])
+def list_mcp_servers(session_id: str):
+    try:
+        result = _mgr().list_mcp_servers(session_id)
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route("/sessions/<session_id>/mcp/<runtime_id>/start", methods=["POST"])
+def start_mcp_server(session_id: str, runtime_id: str):
+    data = request.get_json(force=True) or {}
+    agent_id = data.get("agent_id", "")
+    if not agent_id:
+        return jsonify({"code": 400, "message": "agent_id required"}), 400
+    try:
+        result = _mgr().start_mcp_server(session_id, agent_id, runtime_id)
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route("/sessions/<session_id>/mcp/<runtime_id>/tools", methods=["GET"])
+def list_mcp_tools(session_id: str, runtime_id: str):
+    try:
+        result = _mgr().list_mcp_tools(session_id, runtime_id)
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route("/sessions/<session_id>/mcp/<runtime_id>/call", methods=["POST"])
+def call_mcp_tool(session_id: str, runtime_id: str):
+    data = request.get_json(force=True) or {}
+    agent_id = data.get("agent_id", "")
+    tool_name = data.get("tool_name", "")
+    args = data.get("args") or {}
+    if not agent_id:
+        return jsonify({"code": 400, "message": "agent_id required"}), 400
+    if not tool_name:
+        return jsonify({"code": 400, "message": "tool_name required"}), 400
+    try:
+        result = _mgr().call_mcp_tool(session_id, agent_id, runtime_id, tool_name, args)
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route("/sessions/<session_id>/mcp/<runtime_id>/stop", methods=["POST"])
+def stop_mcp_server(session_id: str, runtime_id: str):
+    try:
+        result = _mgr().stop_mcp_server(session_id, runtime_id)
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
 @sandbox_bp.route("/sessions/<session_id>/services", methods=["GET"])
 def list_services(session_id: str):
     try:

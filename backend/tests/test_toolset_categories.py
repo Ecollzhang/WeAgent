@@ -236,6 +236,30 @@ def test_category_counts_exclude_archived_capabilities(client_context):
     ]
 
 
+def test_category_counts_exclude_deferred_non_configurable_tools(client_context):
+    client, headers, _user = client_context
+    toolset_category_service.seed_builtin_categories()
+    capability_service.seed_builtin_tool_capabilities()
+
+    image_analysis = Capability.query.filter_by(source_ref="image_analysis").one()
+    version = CapabilityVersion.query.get(image_analysis.latest_version_id)
+    manifest = dict(version.manifest)
+    ui = dict(manifest.get("ui") or {})
+    ui["status"] = "deferred"
+    ui["configurable"] = False
+    manifest["ui"] = ui
+    version.manifest = manifest
+    db.session.commit()
+
+    response = client.get("/api/toolsets/categories", headers=headers)
+
+    assert response.status_code == 200
+    image_category = next(
+        item for item in response.get_json()["data"] if item["id"] == "tool_image"
+    )
+    assert image_category["counts"]["tool"] == 2
+
+
 def test_cannot_mutate_builtin_or_other_users_category(client_context):
     client, headers, _user = client_context
     toolset_category_service.seed_builtin_categories()

@@ -447,7 +447,11 @@ def test_delete_user_capability_archives_and_unbinds_agents(client_context):
 def test_delete_builtin_capability_is_rejected(client_context):
     client, headers, _user, _agent = client_context
     capability_service.seed_builtin_tool_capabilities()
-    builtin = Capability.query.filter_by(is_builtin=True, type="tool").first()
+    builtin = Capability.query.filter_by(
+        is_builtin=True,
+        type="tool",
+        source_ref="code_search",
+    ).one()
 
     impact_response = client.get(
         f"/api/capabilities/{builtin.id}/delete-impact",

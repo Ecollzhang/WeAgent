@@ -64,14 +64,18 @@ class ClaudeRuntime:
             with open(prompt_path, "w", encoding="utf-8") as f:
                 f.write(self._format_agent_md())
 
-        # Link or copy shared settings.local.json from workspace root
+        # Refresh shared settings.local.json in the agent workspace on every start.
         settings_src = "/workspace/.claude/settings.local.json"
         settings_dst = os.path.join(claude_dir, "settings.local.json")
-        if os.path.exists(settings_src) and not os.path.exists(settings_dst):
+        if os.path.exists(settings_src):
+            if os.path.lexists(settings_dst):
+                try:
+                    os.unlink(settings_dst)
+                except OSError:
+                    os.remove(settings_dst)
             try:
                 os.symlink(settings_src, settings_dst)
             except (OSError, NotImplementedError):
-                # symlink may fail on some systems, copy instead
                 import shutil
                 shutil.copy2(settings_src, settings_dst)
 

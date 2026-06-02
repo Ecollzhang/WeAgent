@@ -46,3 +46,4 @@ from app.models.capability import (  # noqa: E402,F401
     PluginInstallRecord,
     SkillRevisionDraft,
 )
+from app.models.tool_provider_config import ToolProviderConfig  # noqa: E402,F401

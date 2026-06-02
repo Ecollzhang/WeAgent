@@ -16,6 +16,8 @@ from app.schemas.capability_schema import (
     ImportMarkdownSchema,
     ImportNpxManifestSchema,
     ImportPreviewSchema,
+    CreateToolProviderConfigSchema,
+    UpdateToolProviderConfigSchema,
     UpdateCapabilityBindingSchema,
 )
 from app.services.capability_call_sync_service import capability_call_sync_service
@@ -24,6 +26,7 @@ from app.services.capability_import_confirm_service import capability_import_con
 from app.services.capability_import_preview_service import capability_import_preview_service
 from app.services.capability_npx_import_sandbox import capability_npx_import_sandbox
 from app.services.capability_service import capability_service
+from app.services.tool_provider_config_service import tool_provider_config_service
 from app.utils.response import error_response, success_response
 
 
@@ -358,6 +361,110 @@ def list_capability_audits(capability_id):
     if error:
         return error_response(error, code=404)
     return success_response(result)
+
+
+@capability_bp.route("/<capability_id>/provider-configs", methods=["GET"])
+@jwt_required()
+def list_tool_provider_configs(capability_id):
+    user_id = get_jwt_identity()
+    result, error = tool_provider_config_service.list_configs(user_id, capability_id)
+    if error:
+        return error_response(error, code=404)
+    return success_response(result)
+
+
+@capability_bp.route("/<capability_id>/provider-configs", methods=["POST"])
+@jwt_required()
+def create_tool_provider_config(capability_id):
+    user_id = get_jwt_identity()
+    data, validation_error = _load(CreateToolProviderConfigSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    result, error = tool_provider_config_service.create_config(
+        user_id=user_id,
+        capability_id=capability_id,
+        profile_name=data["profile_name"],
+        provider_type=data["provider_type"],
+        config=data.get("config"),
+        secret_refs=data.get("secret_refs"),
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Provider config created", code=201)
+
+
+@capability_bp.route("/<capability_id>/provider-configs/<config_id>", methods=["PUT"])
+@jwt_required()
+def update_tool_provider_config(capability_id, config_id):
+    user_id = get_jwt_identity()
+    data, validation_error = _load(UpdateToolProviderConfigSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    result, error = tool_provider_config_service.update_config(
+        user_id=user_id,
+        capability_id=capability_id,
+        config_id=config_id,
+        **data,
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Provider config updated")
+
+
+@capability_bp.route("/<capability_id>/provider-configs/<config_id>/test", methods=["POST"])
+@jwt_required()
+def test_tool_provider_config(capability_id, config_id):
+    user_id = get_jwt_identity()
+    result, error = tool_provider_config_service.test_config(
+        user_id=user_id,
+        capability_id=capability_id,
+        config_id=config_id,
+    )
+    if error:
+        return error_response(error, code=400, data=result)
+    return success_response(result, message="Provider config tested")
+
+
+@capability_bp.route("/<capability_id>/provider-configs/<config_id>/enable", methods=["POST"])
+@jwt_required()
+def enable_tool_provider_config(capability_id, config_id):
+    user_id = get_jwt_identity()
+    result, error = tool_provider_config_service.enable_config(
+        user_id=user_id,
+        capability_id=capability_id,
+        config_id=config_id,
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Provider config enabled")
+
+
+@capability_bp.route("/<capability_id>/provider-configs/<config_id>/disable", methods=["POST"])
+@jwt_required()
+def disable_tool_provider_config(capability_id, config_id):
+    user_id = get_jwt_identity()
+    result, error = tool_provider_config_service.disable_config(
+        user_id=user_id,
+        capability_id=capability_id,
+        config_id=config_id,
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Provider config disabled")
+
+
+@capability_bp.route("/<capability_id>/provider-configs/<config_id>", methods=["DELETE"])
+@jwt_required()
+def delete_tool_provider_config(capability_id, config_id):
+    user_id = get_jwt_identity()
+    result, error = tool_provider_config_service.delete_config(
+        user_id=user_id,
+        capability_id=capability_id,
+        config_id=config_id,
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Provider config deleted")
 
 
 @capability_bp.route("/<capability_id>/delete-impact", methods=["GET"])

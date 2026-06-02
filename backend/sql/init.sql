@@ -325,6 +325,30 @@ CREATE TABLE IF NOT EXISTS `capability_call_records` (
     CONSTRAINT `capability_call_records_ibfk_2` FOREIGN KEY (`capability_version_id`) REFERENCES `capability_versions` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `tool_provider_configs` (
+    `user_id` VARCHAR(36) NOT NULL,
+    `capability_id` VARCHAR(36) NOT NULL,
+    `profile_name` VARCHAR(120) NOT NULL DEFAULT 'Default',
+    `provider_type` ENUM('mcp', 'http', 'model', 'database') NOT NULL,
+    `config` JSON DEFAULT NULL,
+    `secret_refs` JSON DEFAULT NULL,
+    `status` ENUM('draft', 'valid', 'invalid', 'disabled') NOT NULL DEFAULT 'draft',
+    `last_test_status` VARCHAR(30) NOT NULL DEFAULT '',
+    `last_test_error` TEXT,
+    `last_test_result` JSON DEFAULT NULL,
+    `id` VARCHAR(36) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_tool_provider_config_profile` (`user_id`, `capability_id`, `profile_name`),
+    KEY `ix_tool_provider_configs_user_id` (`user_id`),
+    KEY `ix_tool_provider_configs_capability_id` (`capability_id`),
+    KEY `ix_tool_provider_configs_provider_type` (`provider_type`),
+    KEY `ix_tool_provider_configs_status` (`status`),
+    CONSTRAINT `tool_provider_configs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+    CONSTRAINT `tool_provider_configs_ibfk_2` FOREIGN KEY (`capability_id`) REFERENCES `capabilities` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `plugin_install_records` (
     `user_id` VARCHAR(36) NOT NULL,
     `plugin_capability_id` VARCHAR(36) NOT NULL,

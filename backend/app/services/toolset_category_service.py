@@ -3,7 +3,7 @@ import re
 from sqlalchemy import func, or_
 
 from app import db
-from app.models.capability import CAPABILITY_TYPES, Capability
+from app.models.capability import CAPABILITY_TYPES, Capability, CapabilityVersion
 from app.models.toolset_category import ToolsetCategory
 
 
@@ -183,21 +183,34 @@ class ToolsetCategoryService:
         )
 
     def _counts_by_category(self, user_id):
-        rows = db.session.query(
-            Capability.category_id,
-            Capability.type,
-            func.count(Capability.id),
-        ).filter(
+        capabilities = Capability.query.filter(
             (Capability.is_builtin == True) | (Capability.user_id == user_id),
-            Capability.source != "archived",
-        ).group_by(Capability.category_id, Capability.type).all()
+            ~Capability.source.in_(["archived", "hidden"]),
+        ).all()
         counts = {}
-        for category_id, capability_type, count in rows:
-            if not category_id:
+        for capability in capabilities:
+            if not capability.category_id:
                 continue
-            counts.setdefault(category_id, self._empty_counts())
-            counts[category_id][capability_type] = int(count)
+            if not self._is_countable_capability(capability):
+                continue
+            counts.setdefault(capability.category_id, self._empty_counts())
+            counts[capability.category_id][capability.type] += 1
         return counts
+
+    def _is_countable_capability(self, capability):
+        if capability.type != "tool":
+            return True
+
+        version = None
+        if capability.latest_version_id:
+            version = CapabilityVersion.query.get(capability.latest_version_id)
+        manifest = (version.manifest if version else {}) or {}
+        ui = manifest.get("ui") or {}
+        if ui.get("visibility") == "hidden":
+            return False
+
+        status = ui.get("status") or "deferred"
+        return status != "deferred" or bool(ui.get("configurable"))
 
     def _empty_counts(self):
         return {capability_type: 0 for capability_type in CAPABILITY_TYPES}

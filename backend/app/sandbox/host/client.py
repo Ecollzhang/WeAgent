@@ -11,6 +11,13 @@ import urllib.error
 from typing import Optional
 
 
+def _timeout_from_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 class OrchestratorClient:
     """HTTP client for the container-side OrchestratorServer."""
 
@@ -42,11 +49,17 @@ class OrchestratorClient:
                 return {"status": "error", "error": f"HTTP {e.code}: {body}"}
         except urllib.error.URLError as e:
             return {"status": "error", "error": f"Connection failed: {e.reason}"}
+        except TimeoutError:
+            return {"status": "error", "error": f"Request timed out after {timeout}s"}
 
     # ---- Health ----
 
     def health_check(self) -> dict:
-        return self._request("GET", "/api/health")
+        return self._request(
+            "GET",
+            "/api/health",
+            timeout=_timeout_from_env("SANDBOX_HEALTH_TIMEOUT_SECONDS", 2),
+        )
 
     # ---- Capabilities ----
 
@@ -108,8 +121,11 @@ class OrchestratorClient:
     def read_file(self, agent_id: str, path: str) -> dict:
         """Read a file from the container's workspace."""
         import urllib.parse
-        return self._request("GET",
-            f"/api/agents/{agent_id}/read_file?path={urllib.parse.quote(path)}")
+        return self._request(
+            "GET",
+            f"/api/agents/{agent_id}/read_file?path={urllib.parse.quote(path)}",
+            timeout=_timeout_from_env("SANDBOX_FILE_TIMEOUT_SECONDS", 5),
+        )
 
     def read_raw_file(self, agent_id: str, path: str) -> tuple[bytes, str]:
         """Read raw file content with MIME type for browser rendering.
@@ -168,7 +184,11 @@ class OrchestratorClient:
             f"&include_hidden={str(include_hidden).lower()}"
             f"&max_depth={max_depth}"
         )
-        return self._request("GET", f"/api/files/tree?{query}")
+        return self._request(
+            "GET",
+            f"/api/files/tree?{query}",
+            timeout=_timeout_from_env("SANDBOX_FILE_TIMEOUT_SECONDS", 5),
+        )
 
     def read_session_raw_file(self, path: str) -> tuple[bytes, str]:
         """Read raw file content without requiring an agent id."""
@@ -214,7 +234,12 @@ class OrchestratorClient:
 
     def update_model_config(self, config: dict) -> dict:
         """Hot-update model config inside the container."""
-        return self._request("POST", "/api/config/model", config)
+        return self._request(
+            "POST",
+            "/api/config/model",
+            config,
+            timeout=_timeout_from_env("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", 5),
+        )
 
     # ---- Progress ----
 
@@ -227,7 +252,11 @@ class OrchestratorClient:
     # ---- Session ----
 
     def get_session_info(self) -> dict:
-        return self._request("GET", "/api/session")
+        return self._request(
+            "GET",
+            "/api/session",
+            timeout=_timeout_from_env("SANDBOX_SESSION_INFO_TIMEOUT_SECONDS", 3),
+        )
 
     # ---- Tools ----
 

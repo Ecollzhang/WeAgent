@@ -51,6 +51,9 @@
             <el-form-item label="API Base URL" v-if="modelConfig.model === 'custom'">
               <el-input v-model="modelConfig.base_url" placeholder="https://api.example.com/v1"></el-input>
             </el-form-item>
+            <el-form-item label="自定义模型名称" v-if="modelConfig.model === 'custom'">
+              <el-input v-model="modelConfig.custom_model" placeholder="例如 deepseek-v4-pro"></el-input>
+            </el-form-item>
             <el-form-item label="API Base URL" v-else>
               <el-input v-model="modelConfig.base_url" placeholder="https://api.openai.com/v1"></el-input>
             </el-form-item>
@@ -140,6 +143,7 @@ export default {
       modelConfig: {
         api_key: '',
         model: 'claude-3.5-sonnet',
+        custom_model: '',
         base_url: '',
         temperature: 0.7,
         max_tokens: 4096,
@@ -172,9 +176,21 @@ export default {
   },
   methods: {
     async handleSaveModel() {
+      if (this.modelConfig.model === 'custom' && !String(this.modelConfig.custom_model || '').trim()) {
+        this.$message.warning('请填写自定义模型名称')
+        return
+      }
       this.saving = true
       try {
-        await this.$store.dispatch('settings/saveModelConfig', this.modelConfig)
+        const saved = await this.$store.dispatch('settings/saveModelConfig', this.modelConfig)
+        const syncErrors = ((saved && saved.container_sync && saved.container_sync.updated) || [])
+          .filter(item => item.status === 'error')
+        if (syncErrors.length > 0) {
+          this.$message.warning('模型配置已保存，部分运行中沙盒同步失败')
+        } else {
+          this.$message.success('模型配置已保存')
+        }
+        return
         this.$message.success('模型配置已保存')
       } finally {
         this.saving = false
