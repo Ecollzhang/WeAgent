@@ -32,6 +32,37 @@
 8. Skill draft sync.
 9. End-to-end verification and regression checks.
 
+**Extension planning artifacts:**
+
+- `.planning/phases/001-toolset/002-toolset-library-merge-SPEC.md`
+- `.planning/phases/001-toolset/002-toolset-library-merge-PLAN.md`
+- `.planning/phases/001-toolset/003-external-toolset-import-SPEC.md`
+- `.planning/phases/001-toolset/003-external-toolset-import-PLAN.md`
+- `.planning/phases/001-toolset/005-builtin-tool-runtime-SPEC.md`
+- `.planning/phases/001-toolset/005-builtin-tool-runtime-PLAN.md`
+
+### Phase 005: Built-in Tool Runtime and Markdown Contract
+
+**Directory:** `.planning/phases/001-toolset`
+**Status:** Planned
+**Goal:** Convert built-in Tool cards into real, categorized, documented, permission-gated, audited sandbox Tools with `TOOL.md`, `weagent.tool/v1` manifests, runtime handlers, and per-Agent progressive disclosure.
+
+**Canonical references:**
+
+- `.planning/phases/001-toolset/005-builtin-tool-runtime-SPEC.md`
+- `.planning/phases/001-toolset/005-builtin-tool-runtime-PLAN.md`
+
+**Checkpoints:**
+
+1. Contract and regression tests.
+2. Canonical built-in Tool definitions.
+3. Tool runtime projection and progressive disclosure.
+4. Runtime gate and audit hardening.
+5. First implemented Tool set by category.
+6. Toolset UI status and documentation view.
+7. Docker UAT guide and real sandbox smoke.
+8. Integration regression and cleanup.
+
 ## Future Phases
 
 ### Phase 002: Claude and Codex Compatibility Mapping

@@ -542,6 +542,11 @@ class Orchestrator:
     def list_tools(self) -> list[dict]:
         return self.tools.list_tools()
 
+    def _agent_tool_index(self, agent_id: str) -> list[dict]:
+        projection = self.capability_projection or {}
+        agent_view = (projection.get("agents") or {}).get(agent_id) or {}
+        return agent_view.get("tool_index") or []
+
     # ---- MCP runtime ----
 
     def start_mcp_server(self, agent_id: str, runtime_id: str) -> dict:
@@ -722,10 +727,28 @@ class Orchestrator:
 
     def _tool_instructions(self, agent_id: str) -> str:
         """Generate tool usage instructions for the system prompt."""
-        tools = self.tools.list_tools()
-        if not tools:
-            return ""
-        tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
+        tool_index = self._agent_tool_index(agent_id)
+        if tool_index:
+            tool_lines = []
+            for item in tool_index:
+                names = ", ".join(item.get("tool_names") or [])
+                status = item.get("status") or "deferred"
+                doc_path = item.get("doc_path") or ""
+                description = item.get("description") or item.get("name") or ""
+                tool_lines.append(
+                    f"  - {item.get('name')}: {description} "
+                    f"(status: {status}; tools: {names}; doc: {doc_path})"
+                )
+            tool_list = "\n".join(tool_lines)
+            tool_hint = (
+                "只调用上面列出的 Tool。需要更多说明时，先读取对应 doc 路径中的 TOOL.md。\n"
+            )
+        else:
+            tools = self.tools.list_tools()
+            if not tools:
+                return ""
+            tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
+            tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n"
         work_dir = self._agent_work_dir(agent_id)
         return (
             "\n\n===== 沙箱协作和工具说明 =====\n"
@@ -734,7 +757,8 @@ class Orchestrator:
             "  - 公共协作目录：/workspace/shared/\n"
             "  - 可读取其他 Agent 目录进行协作：/workspace/agents/<Agent名称>/\n\n"
             "可用工具：\n"
-            f"{tool_list}\n\n"
+            f"{tool_list}\n"
+            f"{tool_hint}\n"
             "如需调用系统注册工具，输出如下格式，系统会在回复后执行：\n"
             "<tool_call>{\"name\":\"工具名\",\"args\":{\"参数名\":\"参数值\"}}</tool_call>\n\n"
             "如需输出文件内容，使用如下格式，系统会自动写入：\n"

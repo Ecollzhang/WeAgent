@@ -19,6 +19,9 @@ class CreateSkillSchema(Schema):
     permissions = fields.Nested(PermissionDeclarationSchema, load_default=dict)
     meta = fields.Dict(load_default=dict)
     source_ref = fields.String(load_default="manual")
+    category_id = fields.String(load_default=None, allow_none=True)
+    category_slug = fields.String(load_default=None, allow_none=True)
+    assets = fields.List(fields.Dict(), load_default=list)
 
 
 class ImportMarkdownSchema(Schema):
@@ -27,6 +30,8 @@ class ImportMarkdownSchema(Schema):
 
     markdown = fields.String(required=True)
     source_ref = fields.String(load_default="markdown")
+    category_id = fields.String(load_default=None, allow_none=True)
+    category_slug = fields.String(load_default=None, allow_none=True)
 
 
 class ImportNpxManifestSchema(Schema):
@@ -35,6 +40,35 @@ class ImportNpxManifestSchema(Schema):
 
     manifest = fields.Dict(required=True)
     source_ref = fields.String(load_default="")
+    category_id = fields.String(load_default=None, allow_none=True)
+    category_slug = fields.String(load_default=None, allow_none=True)
+
+
+class ImportPreviewSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    source_type = fields.String(
+        required=True,
+        validate=validate.OneOf(["markdown", "upload", "repo", "npx"]),
+    )
+    source_ref = fields.String(load_default="")
+    markdown = fields.String(load_default=None, allow_none=True)
+    repo_path = fields.String(load_default=None, allow_none=True)
+    upload_name = fields.String(load_default=None, allow_none=True)
+    upload_base64 = fields.String(load_default=None, allow_none=True)
+
+
+class ImportConfirmSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    import_job_id = fields.String(required=True)
+    selected_entries = fields.List(fields.String(), load_default=list)
+    category_id = fields.String(load_default=None, allow_none=True)
+    category_slug = fields.String(load_default=None, allow_none=True)
+    override_confirmed = fields.Boolean(load_default=False)
+    override_reason = fields.String(load_default="")
 
 
 class BindCapabilitySchema(Schema):
@@ -73,6 +107,7 @@ class CreateCapabilityVersionSchema(Schema):
     permissions = fields.Nested(PermissionDeclarationSchema, load_default=dict)
     meta = fields.Dict(load_default=dict)
     version = fields.String(load_default=None, allow_none=True)
+    assets = fields.List(fields.Dict(), load_default=list)
 
 
 class DraftPublishSchema(Schema):
@@ -80,6 +115,8 @@ class DraftPublishSchema(Schema):
         unknown = EXCLUDE
 
     version = fields.String(load_default=None, allow_none=True)
+    override_confirmed = fields.Boolean(load_default=False)
+    override_reason = fields.String(load_default="")
 
 
 class DraftForkSchema(Schema):

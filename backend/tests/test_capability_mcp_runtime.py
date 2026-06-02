@@ -373,3 +373,54 @@ def test_mcp_runtime_permission_failure_records_bound_capability_metadata():
         assert record["status"] == "failed"
         assert record["tool_name"] == "echo"
         assert "Missing granted permissions" in record["error"]
+
+
+def test_host_sandbox_api_exposes_mcp_runtime_controls(monkeypatch):
+    from app.sandbox.api import routes as sandbox_routes
+
+    app = create_app("testing")
+    calls = []
+
+    class FakeManager:
+        def list_mcp_servers(self, session_id):
+            calls.append(("list", session_id))
+            return {"status": "ok", "servers": ["memory"]}
+
+        def start_mcp_server(self, session_id, agent_id, runtime_id):
+            calls.append(("start", session_id, agent_id, runtime_id))
+            return {"status": "ok", "runtime_id": runtime_id}
+
+        def list_mcp_tools(self, session_id, runtime_id):
+            calls.append(("tools", session_id, runtime_id))
+            return {"status": "ok", "tools": [{"name": "create_entities"}]}
+
+        def call_mcp_tool(self, session_id, agent_id, runtime_id, tool_name, args):
+            calls.append(("call", session_id, agent_id, runtime_id, tool_name, args))
+            return {"status": "ok", "result": {"content": [{"type": "text", "text": "ok"}]}}
+
+        def stop_mcp_server(self, session_id, runtime_id):
+            calls.append(("stop", session_id, runtime_id))
+            return {"status": "ok", "stopped": True}
+
+    monkeypatch.setattr(sandbox_routes, "_mgr", lambda: FakeManager())
+    client = app.test_client()
+
+    assert client.get("/api/sandbox/sessions/session-1/mcp/servers").status_code == 200
+    assert client.post(
+        "/api/sandbox/sessions/session-1/mcp/memory/start",
+        json={"agent_id": "agent-1"},
+    ).status_code == 200
+    assert client.get("/api/sandbox/sessions/session-1/mcp/memory/tools").status_code == 200
+    assert client.post(
+        "/api/sandbox/sessions/session-1/mcp/memory/call",
+        json={"agent_id": "agent-1", "tool_name": "create_entities", "args": {"entities": []}},
+    ).status_code == 200
+    assert client.post("/api/sandbox/sessions/session-1/mcp/memory/stop").status_code == 200
+
+    assert calls == [
+        ("list", "session-1"),
+        ("start", "session-1", "agent-1", "memory"),
+        ("tools", "session-1", "memory"),
+        ("call", "session-1", "agent-1", "memory", "create_entities", {"entities": []}),
+        ("stop", "session-1", "memory"),
+    ]

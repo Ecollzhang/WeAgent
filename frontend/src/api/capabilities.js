@@ -28,12 +28,44 @@ export function importNpxManifest(data) {
   return service.post('/capabilities/import/npx-manifest', data)
 }
 
+export function importMcpManifest(data) {
+  return service.post('/capabilities/import/mcp-manifest', data)
+}
+
+export function previewCapabilityImport(data) {
+  return service.post('/capabilities/import/preview', data)
+}
+
+export function confirmCapabilityImport(data) {
+  return service.post('/capabilities/import/confirm', data)
+}
+
+export function getCapabilityAssets(id, params = {}) {
+  return service.get(`/capabilities/${id}/assets`, { params })
+}
+
+export function getCapabilityAudits(id) {
+  return service.get(`/capabilities/${id}/audits`)
+}
+
+export function getCapabilityDeleteImpact(id) {
+  return service.get(`/capabilities/${id}/delete-impact`)
+}
+
+export function deleteCapability(id) {
+  return service.delete(`/capabilities/${id}`)
+}
+
 export function bindAgentCapability(agentId, data) {
   return service.post(`/agents/${agentId}/capabilities`, data)
 }
 
 export function updateAgentCapability(agentId, bindingId, data) {
   return service.put(`/agents/${agentId}/capabilities/${bindingId}`, data)
+}
+
+export function deleteAgentCapability(agentId, bindingId) {
+  return service.delete(`/agents/${agentId}/capabilities/${bindingId}`)
 }
 
 export function getAgentCapabilities(agentId) {

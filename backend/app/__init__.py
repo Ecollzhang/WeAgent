@@ -93,6 +93,22 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN stopped_at DATETIME DEFAULT NULL'))
             conn.commit()
 
+    # user_model_configs table
+    if 'user_model_configs' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('user_model_configs')]
+        with db.engine.connect() as conn:
+            if 'custom_model' not in cols:
+                conn.execute(text('ALTER TABLE user_model_configs ADD COLUMN custom_model VARCHAR(100) NOT NULL DEFAULT ""'))
+            conn.commit()
+
+    # capabilities table
+    if 'capabilities' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('capabilities')]
+        with db.engine.connect() as conn:
+            if 'category_id' not in cols:
+                conn.execute(text('ALTER TABLE capabilities ADD COLUMN category_id VARCHAR(36) DEFAULT NULL'))
+            conn.commit()
+
 
 def create_app(config_name=None):
     """Flask application factory."""
@@ -123,6 +139,7 @@ def create_app(config_name=None):
     from app.controllers.agent_controller import agent_bp
     from app.controllers.artifact_controller import artifact_bp
     from app.controllers.tool_controller import tool_bp
+    from app.controllers.toolset_controller import toolset_bp
     from app.controllers.upload_controller import upload_bp
     from app.controllers.settings_controller import settings_bp
     from app.controllers.capability_controller import capability_bp, agent_capability_bp
@@ -133,6 +150,7 @@ def create_app(config_name=None):
     app.register_blueprint(agent_bp, url_prefix='/api/agents')
     app.register_blueprint(artifact_bp, url_prefix='/api/artifacts')
     app.register_blueprint(tool_bp, url_prefix='/api/tools')
+    app.register_blueprint(toolset_bp, url_prefix='/api/toolsets')
     app.register_blueprint(upload_bp, url_prefix='/api/upload')
     app.register_blueprint(settings_bp, url_prefix='/api/settings')
     app.register_blueprint(capability_bp, url_prefix='/api/capabilities')
@@ -173,13 +191,17 @@ def create_app(config_name=None):
         from app.models.agent_category import AgentCategory
         from app.models.artifact import Artifact
         from app.models.agent_tool import AgentTool
+        from app.models.toolset_category import ToolsetCategory
         from app.models.user_model_config import UserModelConfig
         from app.models.agent_run import AgentRun
         from app.models.capability import (
             AgentCapabilityBinding,
             Capability,
             CapabilityCallRecord,
+            CapabilityImportJob,
+            CapabilitySecurityAudit,
             CapabilityVersion,
+            CapabilityVersionAsset,
             SkillRevisionDraft,
         )
 
@@ -201,6 +223,13 @@ def create_app(config_name=None):
             tool_service.seed_default_tools()
         except Exception as e:
             print(f'[WeAgent] Tool seed note: {e}')
+
+        # Seed default toolset categories
+        try:
+            from app.services.toolset_category_service import toolset_category_service
+            toolset_category_service.seed_builtin_categories()
+        except Exception as e:
+            print(f'[WeAgent] Toolset category seed note: {e}')
 
         # Seed capability wrappers for built-in platform tools
         try:

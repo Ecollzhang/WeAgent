@@ -9,7 +9,9 @@ from app.models.capability import (
     AgentCapabilityBinding,
     Capability,
     CapabilityCallRecord,
+    CapabilitySecurityAudit,
     CapabilityVersion,
+    CapabilityVersionAsset,
     PluginInstallRecord,
     SkillRevisionDraft,
 )
@@ -24,6 +26,48 @@ REQUIRED_PERMISSIONS = {
     "modify_skill",
     "start_service",
 }
+
+
+BUILTIN_MCP_CAPABILITIES = [
+    {
+        "type": "mcp",
+        "name": "Memory MCP",
+        "slug": "builtin-mcp-memory",
+        "description": "Official MCP memory server for storing and retrieving structured entities.",
+        "source": "builtin",
+        "source_ref": "@modelcontextprotocol/server-memory",
+        "category_id": "tool_data",
+        "version": "1.0.0",
+        "manifest": {
+            "schema_version": "weagent.capability/v1",
+            "source": {
+                "type": "npx",
+                "package": "@modelcontextprotocol/server-memory",
+                "version": "latest",
+            },
+            "entry": {
+                "command": "npx",
+                "args": ["--yes", "@modelcontextprotocol/server-memory"],
+            },
+            "tools": [
+                {"name": "create_entities", "description": "Create memory graph entities."},
+                {"name": "create_relations", "description": "Create relations between entities."},
+                {"name": "add_observations", "description": "Add observations to existing entities."},
+                {"name": "delete_entities", "description": "Delete entities from the memory graph."},
+                {"name": "delete_observations", "description": "Delete observations from entities."},
+                {"name": "delete_relations", "description": "Delete relations from the memory graph."},
+                {"name": "read_graph", "description": "Read the memory graph."},
+                {"name": "search_nodes", "description": "Search stored memory nodes."},
+                {"name": "open_nodes", "description": "Open specific memory graph nodes."},
+            ],
+        },
+        "permissions": {"required": ["run_command"], "optional": []},
+        "meta": {
+            "seeded_from": "official_modelcontextprotocol_server",
+            "uat_sample": True,
+        },
+    }
+]
 
 
 def _slugify(value: str) -> str:
@@ -49,13 +93,41 @@ def _checksum(*parts) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def _asset_checksum(asset) -> str:
+    digest = hashlib.sha256()
+    digest.update(str(asset.get("content") or "").encode("utf-8"))
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _normalize_assets(assets=None) -> list[dict]:
+    normalized = []
+    for asset in assets or []:
+        path = str(asset.get("path") or "").replace("\\", "/").strip("/")
+        if not path:
+            continue
+        content = asset.get("content") or ""
+        kind = asset.get("kind") or "reference"
+        normalized.append({
+            "path": path,
+            "kind": kind,
+            "content": content,
+            "size": int(asset.get("size") or len(content.encode("utf-8"))),
+            "sha256": asset.get("sha256") or _asset_checksum({"content": content}),
+            "mime_type": asset.get("mime_type") or "text/plain",
+            "meta": asset.get("meta") or {},
+        })
+    return sorted(normalized, key=lambda item: item["path"])
+
+
 class CapabilityService:
     """Capability library and Agent binding business rules."""
 
-    def list_capabilities(self, user_id, capability_type=None):
+    def list_capabilities(self, user_id, capability_type=None, category_id=None):
         query = self._visible_capability_query(user_id)
         if capability_type:
             query = query.filter(Capability.type == capability_type)
+        if category_id:
+            query = query.filter(Capability.category_id == category_id)
         records = query.order_by(Capability.created_at.desc()).all()
         return [self._capability_to_dict(record) for record in records], None
 
@@ -79,14 +151,25 @@ class CapabilityService:
         return [self._version_to_dict(version) for version in versions], None
 
     def create_skill(self, user_id, name, markdown, description="", permissions=None,
-                     meta=None, source="user", source_ref="manual"):
+                     meta=None, source="user", source_ref="manual",
+                     category_id=None, category_slug=None, assets=None):
         if not name or not str(name).strip():
             return None, "Capability name is required"
         if markdown is None:
             return None, "Skill markdown is required"
 
+        try:
+            resolved_category_id = self._resolve_category_id(
+                user_id,
+                category_id=category_id,
+                category_slug=category_slug,
+            )
+        except ValueError as exc:
+            return None, str(exc)
+
         capability = Capability(
             user_id=user_id,
+            category_id=resolved_category_id,
             type="skill",
             name=name.strip(),
             slug=self._unique_slug(user_id, name),
@@ -106,12 +189,14 @@ class CapabilityService:
             permissions=permissions,
             meta=meta,
             created_by=user_id,
+            assets=assets,
         )
         capability.latest_version_id = version.id
         db.session.commit()
         return self._capability_to_dict(capability, include_latest=True), None
 
-    def import_skill_markdown(self, user_id, markdown, source_ref="markdown"):
+    def import_skill_markdown(self, user_id, markdown, source_ref="markdown",
+                              category_id=None, category_slug=None):
         name = self._title_from_markdown(markdown) or "Imported Skill"
         return self.create_skill(
             user_id=user_id,
@@ -120,9 +205,12 @@ class CapabilityService:
             source="markdown",
             source_ref=source_ref,
             meta={"imported": True},
+            category_id=category_id,
+            category_slug=category_slug,
         )
 
-    def import_npx_manifest(self, user_id, manifest, source_ref=""):
+    def import_npx_manifest(self, user_id, manifest, source_ref="",
+                            category_id=None, category_slug=None):
         if not isinstance(manifest, dict):
             return None, "Manifest must be an object"
         capabilities = manifest.get("capabilities") or []
@@ -138,8 +226,20 @@ class CapabilityService:
                     return None, f"Unsupported manifest capability type: {capability_type}"
                 name = item.get("name") or "Imported Capability"
                 permissions = _normalize_permissions(item.get("permissions"))
+                item_category_id = self._resolve_category_id(
+                    user_id,
+                    category_id=item.get("category_id"),
+                    category_slug=item.get("category") or item.get("category_slug"),
+                ) if (
+                    item.get("category_id") or item.get("category") or item.get("category_slug")
+                ) else self._resolve_category_id(
+                    user_id,
+                    category_id=category_id,
+                    category_slug=category_slug,
+                )
                 capability = Capability(
                     user_id=user_id,
+                    category_id=item_category_id,
                     type=capability_type,
                     name=name,
                     slug=self._unique_slug(user_id, name),
@@ -188,8 +288,25 @@ class CapabilityService:
 
         return [self._capability_to_dict(item, include_latest=True) for item in imported], None
 
+    def import_mcp_manifest(self, user_id, manifest, source_ref="",
+                            category_id=None, category_slug=None):
+        if not isinstance(manifest, dict):
+            return None, "Manifest must be an object"
+        capabilities = manifest.get("capabilities") or []
+        if not any(item.get("type") == "mcp" for item in capabilities):
+            return None, "MCP manifest must include at least one MCP capability"
+        if any(item.get("type") != "mcp" for item in capabilities):
+            return None, "MCP manifest endpoint accepts only MCP capabilities"
+        return self.import_npx_manifest(
+            user_id=user_id,
+            manifest=manifest,
+            source_ref=source_ref,
+            category_id=category_id,
+            category_slug=category_slug,
+        )
+
     def create_version(self, capability_id, content="", manifest=None, permissions=None,
-                       meta=None, version=None, created_by=None):
+                       meta=None, version=None, created_by=None, assets=None):
         capability = Capability.query.get(capability_id)
         if not capability:
             return None, "Capability not found"
@@ -203,6 +320,7 @@ class CapabilityService:
                 permissions=permissions,
                 meta=meta,
                 created_by=created_by,
+                assets=assets,
             )
         except ValueError as exc:
             return None, str(exc)
@@ -212,7 +330,7 @@ class CapabilityService:
         return self._version_to_dict(version_record), None
 
     def create_user_version(self, user_id, capability_id, content="", manifest=None,
-                            permissions=None, meta=None, version=None):
+                            permissions=None, meta=None, version=None, assets=None):
         capability = self._visible_capability_query(user_id).filter(
             Capability.id == capability_id
         ).first()
@@ -228,6 +346,7 @@ class CapabilityService:
             meta=meta,
             version=version,
             created_by=user_id,
+            assets=assets,
         )
 
     def bind_to_agent(self, agent_id, capability_version_id, granted_permissions=None,
@@ -365,7 +484,8 @@ class CapabilityService:
         drafts = query.order_by(SkillRevisionDraft.created_at.desc()).all()
         return [self._draft_to_dict(draft) for draft in drafts], None
 
-    def publish_draft(self, user_id, draft_id, version=None):
+    def publish_draft(self, user_id, draft_id, version=None,
+                      override_confirmed=False, override_reason=""):
         draft = self._draft_query(user_id).filter(SkillRevisionDraft.id == draft_id).first()
         if not draft:
             return None, "Draft not found"
@@ -373,6 +493,21 @@ class CapabilityService:
             return None, "Draft is not pending review"
 
         source_version = draft.source_version
+        assets = self._draft_assets(draft, source_version)
+        audit_files = self._draft_audit_files(draft, assets)
+        from app.services.capability_security_audit_service import (
+            capability_security_audit_service,
+        )
+        audit_record, audit_error = capability_security_audit_service.audit_and_record(
+            user_id=user_id,
+            files=audit_files,
+            capability_id=draft.source_skill_id,
+            draft_id=draft.id,
+            override_confirmed=override_confirmed,
+            override_reason=override_reason,
+        )
+        if audit_error:
+            return None, audit_error
         version_result, error = self.create_version(
             capability_id=draft.source_skill_id,
             content=draft.full_markdown,
@@ -381,10 +516,15 @@ class CapabilityService:
             meta={"published_from_draft": draft.id},
             version=version,
             created_by=user_id,
+            assets=assets,
         )
         if error:
             return None, error
 
+        if audit_record:
+            audit = CapabilitySecurityAudit.query.get(audit_record["id"])
+            if audit:
+                audit.capability_version_id = version_result["id"]
         draft.status = "published"
         draft.reviewed_at = datetime.utcnow()
         db.session.commit()
@@ -406,6 +546,8 @@ class CapabilityService:
             meta={"forked_from_draft": draft.id, "source_skill_id": draft.source_skill_id},
             source="user",
             source_ref=f"draft:{draft.id}",
+            category_id=draft.source_skill.category_id,
+            assets=self._draft_assets(draft, draft.source_version),
         )
         if error:
             return None, error
@@ -476,11 +618,70 @@ class CapabilityService:
         records = query.order_by(CapabilityCallRecord.created_at.desc()).all()
         return [self._call_record_to_dict(record) for record in records], None
 
-    def seed_builtin_tool_capabilities(self):
-        from app.services.tool_service import BUILTIN_TOOLS
+    def get_delete_impact(self, user_id, capability_id):
+        capability = self._visible_capability_query(user_id).filter(
+            Capability.id == capability_id
+        ).first()
+        if not capability:
+            return None, "Capability not found"
+        return self._delete_impact(capability, user_id), None
 
-        for tool in BUILTIN_TOOLS:
+    def archive_user_capability(self, user_id, capability_id):
+        capability = self._visible_capability_query(user_id).filter(
+            Capability.id == capability_id
+        ).first()
+        if not capability:
+            return None, "Capability not found"
+        if capability.is_builtin:
+            return None, "Built-in capabilities cannot be deleted"
+        if capability.user_id != user_id:
+            return None, "Capability not found"
+
+        impact = self._delete_impact(capability, user_id)
+        bindings = self._capability_bindings_for_user_agents(capability.id, user_id)
+        for binding in bindings:
+            db.session.delete(binding)
+
+        if capability.type == "plugin":
+            PluginInstallRecord.query.filter_by(
+                user_id=user_id,
+                plugin_capability_id=capability.id,
+            ).update({"status": "removed"})
+
+        capability.source = "archived"
+        capability.slug = f"archived-{capability.id}-{capability.slug}"[:160]
+        db.session.commit()
+
+        impact["archived"] = True
+        impact["removed_bindings"] = len(bindings)
+        return impact, None
+
+    def delete_user_agent_binding(self, user_id, agent_id, binding_id):
+        agent = Agent.query.filter_by(id=agent_id, user_id=user_id).first()
+        if not agent:
+            return None, "Agent not found"
+        binding = AgentCapabilityBinding.query.filter_by(
+            id=binding_id,
+            agent_id=agent_id,
+        ).first()
+        if not binding:
+            return None, "Agent capability binding not found"
+        db.session.delete(binding)
+        db.session.commit()
+        return {"deleted": True}, None
+
+    def seed_builtin_tool_capabilities(self):
+        from app.services.builtin_tool_definitions import get_builtin_tool_definitions
+        from app.services.toolset_category_service import toolset_category_service
+
+        toolset_category_service.seed_builtin_categories()
+
+        for tool in get_builtin_tool_definitions():
             source_ref = tool["value"]
+            category_id = self._resolve_category_id(
+                None,
+                category_id=tool.get("category"),
+            )
             existing = Capability.query.filter_by(
                 type="tool",
                 source="builtin",
@@ -488,8 +689,34 @@ class CapabilityService:
                 is_builtin=True,
             ).first()
             if existing:
+                existing.category_id = category_id
+                existing.name = tool["name"]
+                existing.description = tool.get("description") or ""
+                latest = (
+                    CapabilityVersion.query.get(existing.latest_version_id)
+                    if existing.latest_version_id else None
+                )
+                desired_permissions = self._builtin_tool_permissions(source_ref)
+                desired_manifest = tool["manifest"]
+                desired_content = tool["markdown"]
+                if (
+                    not latest
+                    or (latest.manifest or {}) != desired_manifest
+                    or (latest.permissions or {}) != desired_permissions
+                    or (latest.content or "") != desired_content
+                ):
+                    version = self._make_version(
+                        capability=existing,
+                        version=self._next_version(existing),
+                        content=desired_content,
+                        manifest=desired_manifest,
+                        permissions=desired_permissions,
+                        meta={"seeded_from": "builtin_tool_definitions"},
+                    )
+                    existing.latest_version_id = version.id
                 continue
             capability = Capability(
+                category_id=category_id,
                 type="tool",
                 name=tool["name"],
                 slug=f"builtin-{_slugify(source_ref)}",
@@ -503,20 +730,86 @@ class CapabilityService:
             version = self._make_version(
                 capability=capability,
                 version="1.0.0",
-                manifest={"tool": tool, "runtime": "builtin"},
+                content=tool["markdown"],
+                manifest=tool["manifest"],
                 permissions=self._builtin_tool_permissions(source_ref),
-                meta={"seeded_from": "tool_service.BUILTIN_TOOLS"},
+                meta={"seeded_from": "builtin_tool_definitions"},
             )
             capability.latest_version_id = version.id
+        self._seed_builtin_mcp_capabilities()
         db.session.commit()
 
+    def _seed_builtin_mcp_capabilities(self):
+        for item in BUILTIN_MCP_CAPABILITIES:
+            category_id = self._resolve_category_id(
+                None,
+                category_id=item.get("category_id"),
+            )
+            existing = Capability.query.filter_by(
+                type=item["type"],
+                source=item["source"],
+                source_ref=item["source_ref"],
+                is_builtin=True,
+            ).first()
+            if existing:
+                existing.category_id = category_id
+                existing.description = item["description"]
+                latest = (
+                    CapabilityVersion.query.get(existing.latest_version_id)
+                    if existing.latest_version_id else None
+                )
+                if (
+                    not latest
+                    or (latest.manifest or {}) != item["manifest"]
+                    or (latest.permissions or {}) != item["permissions"]
+                ):
+                    version = self._make_version(
+                        capability=existing,
+                        version=self._next_version(existing),
+                        manifest=item["manifest"],
+                        permissions=item["permissions"],
+                        meta=item["meta"],
+                    )
+                    existing.latest_version_id = version.id
+                continue
+            capability = Capability(
+                category_id=category_id,
+                type=item["type"],
+                name=item["name"],
+                slug=item["slug"],
+                description=item["description"],
+                source=item["source"],
+                source_ref=item["source_ref"],
+                is_builtin=True,
+            )
+            db.session.add(capability)
+            db.session.flush()
+            version = self._make_version(
+                capability=capability,
+                version=item["version"],
+                manifest=item["manifest"],
+                permissions=item["permissions"],
+                meta=item["meta"],
+            )
+            capability.latest_version_id = version.id
+
+    def _resolve_category_id(self, user_id, category_id=None, category_slug=None):
+        from app.services.toolset_category_service import toolset_category_service
+
+        return toolset_category_service.resolve_category_id(
+            user_id,
+            category_id=category_id,
+            category_slug=category_slug,
+        )
+
     def _make_version(self, capability, version, content="", manifest=None,
-                      permissions=None, meta=None, created_by=None):
+                      permissions=None, meta=None, created_by=None, assets=None):
         normalized_permissions = (
             permissions if permissions and "required" in permissions else _normalize_permissions(permissions)
         )
         if permissions and "required" in permissions:
             normalized_permissions = _normalize_permissions(permissions)
+        normalized_assets = _normalize_assets(assets)
         version_record = CapabilityVersion(
             capability=capability,
             version=version,
@@ -524,11 +817,24 @@ class CapabilityService:
             manifest=manifest or {},
             permissions=normalized_permissions,
             meta=meta or {},
-            checksum=_checksum(content, manifest, normalized_permissions, meta),
+            checksum=_checksum(content, manifest, normalized_permissions, meta, normalized_assets),
             created_by=created_by,
         )
         db.session.add(version_record)
         db.session.flush()
+        for asset in normalized_assets:
+            db.session.add(CapabilityVersionAsset(
+                capability_version_id=version_record.id,
+                path=asset["path"],
+                kind=asset["kind"],
+                content=asset["content"],
+                size=asset["size"],
+                sha256=asset["sha256"],
+                mime_type=asset["mime_type"],
+                meta=asset["meta"],
+            ))
+        if normalized_assets:
+            db.session.flush()
         return version_record
 
     def _make_plugin_install_record(self, user_id, capability, version, source,
@@ -561,7 +867,8 @@ class CapabilityService:
 
     def _visible_capability_query(self, user_id):
         return Capability.query.filter(
-            (Capability.is_builtin == True) | (Capability.user_id == user_id)
+            ((Capability.is_builtin == True) | (Capability.user_id == user_id)),
+            Capability.source != "archived",
         )
 
     def _draft_query(self, user_id):
@@ -569,6 +876,44 @@ class CapabilityService:
             Capability,
             SkillRevisionDraft.source_skill_id == Capability.id,
         ).filter((Capability.is_builtin == True) | (Capability.user_id == user_id))
+
+    def _draft_assets(self, draft, source_version):
+        diff = draft.diff or {}
+        if "proposed_assets" in diff:
+            return diff.get("proposed_assets") or []
+        assets = []
+        for asset in source_version.assets or []:
+            path = str(asset.path or "").replace("\\", "/").strip("/")
+            if not path or path == "SKILL.md":
+                continue
+            assets.append({
+                "path": path,
+                "kind": asset.kind,
+                "content": asset.content or "",
+                "size": asset.size,
+                "sha256": asset.sha256,
+                "mime_type": asset.mime_type or "text/plain",
+                "meta": asset.meta or {},
+            })
+        return assets
+
+    def _draft_audit_files(self, draft, assets):
+        files = [{
+            "path": "SKILL.md",
+            "kind": "skill_md",
+            "content": draft.full_markdown or "",
+            "size": len((draft.full_markdown or "").encode("utf-8")),
+        }]
+        for asset in assets or []:
+            content = asset.get("content") or ""
+            files.append({
+                "path": asset.get("path") or "",
+                "kind": asset.get("kind") or "reference",
+                "content": content,
+                "size": asset.get("size") or len(content.encode("utf-8")),
+                "mime_type": asset.get("mime_type") or "text/plain",
+            })
+        return files
 
     def _parse_datetime(self, value):
         if not value:
@@ -581,16 +926,12 @@ class CapabilityService:
             return None
 
     def _builtin_tool_permissions(self, tool_value):
-        permissions_by_tool = {
-            "file_operations": {"required": ["read_workspace"], "optional": ["write_workspace"]},
-            "document_parse": {"required": ["read_workspace"], "optional": []},
-            "web_search": {"required": ["network"], "optional": []},
-            "web_fetch": {"required": ["network"], "optional": []},
-            "api_client": {"required": ["network"], "optional": ["use_secret"]},
-            "terminal": {"required": ["run_command"], "optional": ["read_workspace", "write_workspace"]},
-            "git_operations": {"required": ["run_command"], "optional": ["read_workspace", "write_workspace"]},
-        }
-        return permissions_by_tool.get(tool_value, {"required": [], "optional": []})
+        from app.services.builtin_tool_definitions import get_builtin_tool_definition
+
+        definition = get_builtin_tool_definition(tool_value)
+        if definition:
+            return definition["permissions"]
+        return {"required": [], "optional": []}
 
     def _unique_slug(self, user_id, name):
         base = _slugify(name)
@@ -613,6 +954,7 @@ class CapabilityService:
 
     def _capability_to_dict(self, capability, include_latest=True):
         data = capability.to_dict()
+        data["category"] = capability.category.to_dict() if capability.category else None
         if include_latest:
             latest = None
             if capability.latest_version_id:
@@ -644,6 +986,41 @@ class CapabilityService:
         data["capability"] = self._capability_to_dict(record.capability, include_latest=False)
         data["capability_version"] = self._version_to_dict(record.capability_version)
         return data
+
+    def _capability_bindings_for_user_agents(self, capability_id, user_id):
+        return AgentCapabilityBinding.query.join(
+            Agent,
+            AgentCapabilityBinding.agent_id == Agent.id,
+        ).filter(
+            AgentCapabilityBinding.capability_id == capability_id,
+            Agent.user_id == user_id,
+        ).all()
+
+    def _delete_impact(self, capability, user_id):
+        bindings = self._capability_bindings_for_user_agents(capability.id, user_id)
+        affected = []
+        seen = set()
+        for binding in bindings:
+            if binding.agent_id in seen:
+                continue
+            seen.add(binding.agent_id)
+            affected.append({
+                "id": binding.agent.id,
+                "name": binding.agent.name,
+            })
+        return {
+            "capability_id": capability.id,
+            "name": capability.name,
+            "type": capability.type,
+            "is_builtin": bool(capability.is_builtin),
+            "can_delete": bool(not capability.is_builtin and capability.user_id == user_id),
+            "binding_count": len(bindings),
+            "call_record_count": CapabilityCallRecord.query.filter_by(
+                capability_id=capability.id,
+            ).count(),
+            "affected_agents": affected,
+            "archive_mode": "soft_delete",
+        }
 
     def _latest_plugin_install_record(self, capability):
         record = PluginInstallRecord.query.filter_by(

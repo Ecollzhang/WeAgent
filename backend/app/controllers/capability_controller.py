@@ -1,3 +1,5 @@
+import base64
+
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from marshmallow import ValidationError
@@ -10,12 +12,17 @@ from app.schemas.capability_schema import (
     DraftSyncSchema,
     DraftForkSchema,
     DraftPublishSchema,
+    ImportConfirmSchema,
     ImportMarkdownSchema,
     ImportNpxManifestSchema,
+    ImportPreviewSchema,
     UpdateCapabilityBindingSchema,
 )
 from app.services.capability_call_sync_service import capability_call_sync_service
 from app.services.capability_draft_sync_service import capability_draft_sync_service
+from app.services.capability_import_confirm_service import capability_import_confirm_service
+from app.services.capability_import_preview_service import capability_import_preview_service
+from app.services.capability_npx_import_sandbox import capability_npx_import_sandbox
 from app.services.capability_service import capability_service
 from app.utils.response import error_response, success_response
 
@@ -38,6 +45,7 @@ def list_capabilities():
     result, error = capability_service.list_capabilities(
         user_id=user_id,
         capability_type=request.args.get("type"),
+        category_id=request.args.get("category_id"),
     )
     if error:
         return error_response(error, code=400)
@@ -59,6 +67,9 @@ def create_skill():
         permissions=data.get("permissions"),
         meta=data.get("meta"),
         source_ref=data.get("source_ref", "manual"),
+        category_id=data.get("category_id"),
+        category_slug=data.get("category_slug"),
+        assets=data.get("assets"),
     )
     if error:
         return error_response(error, code=400)
@@ -76,6 +87,8 @@ def import_markdown_skill():
         user_id=user_id,
         markdown=data["markdown"],
         source_ref=data.get("source_ref", "markdown"),
+        category_id=data.get("category_id"),
+        category_slug=data.get("category_slug"),
     )
     if error:
         return error_response(error, code=400)
@@ -93,10 +106,94 @@ def import_npx_manifest():
         user_id=user_id,
         manifest=data["manifest"],
         source_ref=data.get("source_ref", ""),
+        category_id=data.get("category_id"),
+        category_slug=data.get("category_slug"),
     )
     if error:
         return error_response(error, code=400)
     return success_response(result, message="Capabilities imported", code=201)
+
+
+@capability_bp.route("/import/mcp-manifest", methods=["POST"])
+@jwt_required()
+def import_mcp_manifest():
+    user_id = get_jwt_identity()
+    data, validation_error = _load(ImportNpxManifestSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    result, error = capability_service.import_mcp_manifest(
+        user_id=user_id,
+        manifest=data["manifest"],
+        source_ref=data.get("source_ref", ""),
+        category_id=data.get("category_id"),
+        category_slug=data.get("category_slug"),
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="MCP capabilities imported", code=201)
+
+
+@capability_bp.route("/import/preview", methods=["POST"])
+@jwt_required()
+def preview_import():
+    user_id = get_jwt_identity()
+    data, validation_error = _load(ImportPreviewSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    source_type = data["source_type"]
+    if source_type == "markdown":
+        result, error = capability_import_preview_service.preview_markdown(
+            user_id=user_id,
+            markdown=data.get("markdown"),
+            source_ref=data.get("source_ref") or "markdown",
+        )
+    elif source_type == "upload":
+        try:
+            zip_bytes = base64.b64decode(data.get("upload_base64") or "", validate=True)
+        except (ValueError, TypeError):
+            return error_response("Upload bundle must be base64 encoded", code=400)
+        result, error = capability_import_preview_service.preview_zip_bundle(
+            user_id=user_id,
+            zip_bytes=zip_bytes,
+            source_ref=data.get("source_ref") or data.get("upload_name") or "bundle.zip",
+        )
+    elif source_type == "repo":
+        result, error = capability_import_preview_service.preview_repo_static(
+            user_id=user_id,
+            repo_path=data.get("repo_path"),
+            source_ref=data.get("source_ref") or data.get("repo_path") or "repo",
+        )
+    elif source_type == "npx":
+        result, error = capability_npx_import_sandbox.preview_npx(
+            user_id=user_id,
+            source_ref=data.get("source_ref") or "",
+        )
+    else:
+        return error_response("Unsupported import source type", code=400)
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Import preview created", code=201)
+
+
+@capability_bp.route("/import/confirm", methods=["POST"])
+@jwt_required()
+def confirm_import():
+    user_id = get_jwt_identity()
+    data, validation_error = _load(ImportConfirmSchema)
+    if validation_error:
+        return error_response(validation_error, code=400)
+    result, error = capability_import_confirm_service.confirm_import_job(
+        user_id=user_id,
+        import_job_id=data["import_job_id"],
+        selected_entries=data.get("selected_entries"),
+        category_id=data.get("category_id"),
+        category_slug=data.get("category_slug"),
+        override_confirmed=data.get("override_confirmed", False),
+        override_reason=data.get("override_reason", ""),
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Import confirmed", code=201)
 
 
 @capability_bp.route("/drafts", methods=["GET"])
@@ -139,6 +236,8 @@ def publish_draft(draft_id):
         user_id=user_id,
         draft_id=draft_id,
         version=data.get("version"),
+        override_confirmed=data.get("override_confirmed", False),
+        override_reason=data.get("override_reason", ""),
     )
     if error:
         return error_response(error, code=400)
@@ -227,10 +326,58 @@ def create_capability_version(capability_id):
         permissions=data.get("permissions"),
         meta=data.get("meta"),
         version=data.get("version"),
+        assets=data.get("assets"),
     )
     if error:
         return error_response(error, code=400)
     return success_response(result, message="Capability version created", code=201)
+
+
+@capability_bp.route("/<capability_id>/assets", methods=["GET"])
+@jwt_required()
+def list_capability_assets(capability_id):
+    user_id = get_jwt_identity()
+    result, error = capability_import_confirm_service.list_assets(
+        user_id=user_id,
+        capability_id=capability_id,
+        version_id=request.args.get("version_id"),
+    )
+    if error:
+        return error_response(error, code=404)
+    return success_response(result)
+
+
+@capability_bp.route("/<capability_id>/audits", methods=["GET"])
+@jwt_required()
+def list_capability_audits(capability_id):
+    user_id = get_jwt_identity()
+    result, error = capability_import_confirm_service.list_audits(
+        user_id=user_id,
+        capability_id=capability_id,
+    )
+    if error:
+        return error_response(error, code=404)
+    return success_response(result)
+
+
+@capability_bp.route("/<capability_id>/delete-impact", methods=["GET"])
+@jwt_required()
+def get_capability_delete_impact(capability_id):
+    user_id = get_jwt_identity()
+    result, error = capability_service.get_delete_impact(user_id, capability_id)
+    if error:
+        return error_response(error, code=404)
+    return success_response(result)
+
+
+@capability_bp.route("/<capability_id>", methods=["DELETE"])
+@jwt_required()
+def delete_capability(capability_id):
+    user_id = get_jwt_identity()
+    result, error = capability_service.archive_user_capability(user_id, capability_id)
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Capability archived")
 
 
 @agent_capability_bp.route("/<agent_id>/capabilities", methods=["POST"])
@@ -292,3 +439,17 @@ def update_agent_capability(agent_id, binding_id):
     if error:
         return error_response(error, code=400)
     return success_response(result, message="Agent capability updated")
+
+
+@agent_capability_bp.route("/<agent_id>/capabilities/<binding_id>", methods=["DELETE"])
+@jwt_required()
+def delete_agent_capability(agent_id, binding_id):
+    user_id = get_jwt_identity()
+    result, error = capability_service.delete_user_agent_binding(
+        user_id=user_id,
+        agent_id=agent_id,
+        binding_id=binding_id,
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message="Agent capability unbound")

@@ -6,6 +6,9 @@ VERSION_POLICIES = ("pinned", "follow_latest")
 CALL_STATUSES = ("started", "completed", "failed")
 DRAFT_STATUSES = ("pending_review", "published", "forked", "rejected")
 PLUGIN_INSTALL_STATUSES = ("installed", "failed", "removed")
+ASSET_KINDS = ("skill_md", "script", "reference", "template", "manifest", "virtual")
+IMPORT_JOB_STATUSES = ("previewed", "confirmed", "failed", "expired")
+AUDIT_RISK_LEVELS = ("low", "medium", "high")
 
 
 class Capability(BaseModel):
@@ -13,6 +16,12 @@ class Capability(BaseModel):
     __tablename__ = "capabilities"
 
     user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=True, index=True)
+    category_id = db.Column(
+        db.String(36),
+        db.ForeignKey("toolset_categories.id"),
+        nullable=True,
+        index=True,
+    )
     type = db.Column(db.Enum(*CAPABILITY_TYPES, name="capability_type"),
                      nullable=False, index=True)
     name = db.Column(db.String(120), nullable=False)
@@ -30,6 +39,7 @@ class Capability(BaseModel):
         lazy="select",
     )
     owner = db.relationship("User", backref="capabilities", lazy="select")
+    category = db.relationship("ToolsetCategory", backref="capabilities", lazy="select")
 
     __table_args__ = (
         db.UniqueConstraint("user_id", "slug", name="uq_capability_user_slug"),
@@ -52,9 +62,49 @@ class CapabilityVersion(BaseModel):
 
     capability = db.relationship("Capability", back_populates="versions", lazy="select")
     creator = db.relationship("User", backref="capability_versions", lazy="select")
+    assets = db.relationship(
+        "CapabilityVersionAsset",
+        back_populates="capability_version",
+        cascade="all, delete-orphan",
+        lazy="select",
+    )
 
     __table_args__ = (
         db.UniqueConstraint("capability_id", "version", name="uq_capability_version"),
+    )
+
+
+class CapabilityVersionAsset(BaseModel):
+    """File asset that belongs to an immutable capability version."""
+    __tablename__ = "capability_version_assets"
+
+    capability_version_id = db.Column(
+        db.String(36),
+        db.ForeignKey("capability_versions.id"),
+        nullable=False,
+        index=True,
+    )
+    path = db.Column(db.String(500), nullable=False, index=True)
+    kind = db.Column(db.Enum(*ASSET_KINDS, name="capability_asset_kind"),
+                     nullable=False, default="reference", index=True)
+    content = db.Column(db.Text, default="")
+    size = db.Column(db.Integer, nullable=False, default=0)
+    sha256 = db.Column(db.String(128), nullable=False, default="", index=True)
+    mime_type = db.Column(db.String(120), default="")
+    meta = db.Column(db.JSON, default=dict)
+
+    capability_version = db.relationship(
+        "CapabilityVersion",
+        back_populates="assets",
+        lazy="select",
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "capability_version_id",
+            "path",
+            name="uq_capability_version_asset_path",
+        ),
     )
 
 
@@ -148,6 +198,57 @@ class PluginInstallRecord(BaseModel):
             name="uq_plugin_install_version",
         ),
     )
+
+
+class CapabilityImportJob(BaseModel):
+    """Preview job created before external capability import is confirmed."""
+    __tablename__ = "capability_import_jobs"
+
+    user_id = db.Column(db.String(36), db.ForeignKey("users.id"),
+                        nullable=False, index=True)
+    source_type = db.Column(db.String(30), nullable=False, index=True)
+    source_ref = db.Column(db.String(500), default="", index=True)
+    status = db.Column(db.Enum(*IMPORT_JOB_STATUSES, name="capability_import_job_status"),
+                       nullable=False, default="previewed", index=True)
+    preview_payload = db.Column(db.JSON, default=dict)
+    audit_summary = db.Column(db.JSON, default=dict)
+    expires_at = db.Column(db.DateTime, nullable=True, index=True)
+
+    owner = db.relationship("User", backref="capability_import_jobs", lazy="select")
+
+
+class CapabilitySecurityAudit(BaseModel):
+    """Security audit attached to an import job, capability version, or draft."""
+    __tablename__ = "capability_security_audits"
+
+    user_id = db.Column(db.String(36), db.ForeignKey("users.id"),
+                        nullable=False, index=True)
+    capability_id = db.Column(db.String(36), db.ForeignKey("capabilities.id"),
+                              nullable=True, index=True)
+    capability_version_id = db.Column(
+        db.String(36),
+        db.ForeignKey("capability_versions.id"),
+        nullable=True,
+        index=True,
+    )
+    import_job_id = db.Column(db.String(36), db.ForeignKey("capability_import_jobs.id"),
+                              nullable=True, index=True)
+    draft_id = db.Column(db.String(36), db.ForeignKey("skill_revision_drafts.id"),
+                         nullable=True, index=True)
+    risk_level = db.Column(db.Enum(*AUDIT_RISK_LEVELS, name="capability_audit_risk_level"),
+                           nullable=False, default="low", index=True)
+    risk_items = db.Column(db.JSON, default=list)
+    blocking_items = db.Column(db.JSON, default=list)
+    inferred_permissions = db.Column(db.JSON, default=list)
+    overridden = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    override_reason = db.Column(db.Text, default="")
+    confirmed_at = db.Column(db.DateTime, nullable=True)
+
+    owner = db.relationship("User", backref="capability_security_audits", lazy="select")
+    capability = db.relationship("Capability", lazy="select")
+    capability_version = db.relationship("CapabilityVersion", lazy="select")
+    import_job = db.relationship("CapabilityImportJob", lazy="select")
+    draft = db.relationship("SkillRevisionDraft", lazy="select")
 
 
 class SkillRevisionDraft(BaseModel):

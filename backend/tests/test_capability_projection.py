@@ -166,6 +166,51 @@ def test_projection_separates_same_skill_when_agents_pin_different_versions(app_
     assert "v2 rules" in projection["skills"][agent_b_skill["runtime_id"]]["content"]
 
 
+def test_projection_includes_skill_version_assets(app_context):
+    _user, agent_a, _agent_b = _create_user_and_agents()
+    skill, error = capability_service.create_skill(
+        user_id="user-1",
+        name="Scripted Skill",
+        markdown="# Scripted Skill\nUse the helper script.",
+        permissions={"required": [], "optional": ["read_workspace"]},
+        assets=[
+            {
+                "path": "scripts/check.mjs",
+                "kind": "script",
+                "content": "console.log('ok')\n",
+            },
+            {
+                "path": "references/policy.md",
+                "kind": "reference",
+                "content": "# Policy\n",
+            },
+        ],
+    )
+    assert error is None
+    result, error = capability_service.bind_to_agent(
+        agent_id=agent_a.id,
+        capability_version_id=skill["latest_version"]["id"],
+        granted_permissions=["read_workspace"],
+    )
+    assert error is None
+
+    projection = build_capability_projection(
+        session_id="session-1",
+        agents=[{"agent_id": agent_a.id, "role": agent_a.name}],
+    )
+
+    assets = projection["skills"][skill["id"]]["assets"]
+    assert [item["path"] for item in assets] == [
+        "references/policy.md",
+        "scripts/check.mjs",
+    ]
+    assert assets[1]["kind"] == "script"
+    assert assets[1]["content"] == "console.log('ok')\n"
+    assert assets[1]["runtime_path"] == (
+        f"/workspace/.weagent/skills/{skill['id']}/scripts/check.mjs"
+    )
+
+
 def test_projection_keeps_skill_mcp_plugin_and_tool_as_peer_types(app_context):
     _user, agent_a, _agent_b = _create_user_and_agents()
     imported, error = capability_service.import_npx_manifest(

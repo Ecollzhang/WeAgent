@@ -171,6 +171,80 @@ def test_bound_builtin_tool_call_records_permission_failure():
         assert "Missing granted permissions" in record["error"]
 
 
+def test_capability_aware_session_rejects_unbound_tool_call():
+    with _workspace_tempdir() as workspace:
+        workspace_path = Path(workspace)
+        (workspace_path / "sample.txt").write_text("hello audit", encoding="utf-8")
+        projection = _tool_projection()
+        projection["agents"]["agent-1"]["capabilities"] = []
+        projection["agents"]["agent-1"]["permissions"]["grants"] = []
+        write_projection(projection, workspace_root=str(workspace_path))
+        write_run_snapshot(projection, "run-1", workspace_root=str(workspace_path))
+
+        registry = container_tools.ToolRegistry(workspace_root=str(workspace_path))
+        container_tools.register_builtin_tools(registry)
+
+        result = json.loads(
+            registry.call_from_agent(
+                "agent-1",
+                "read_file",
+                {"path": "sample.txt"},
+                run_id="run-1",
+                session_id="session-1",
+            )
+        )
+
+        assert result["status"] == "error"
+        assert "not bound" in result["error"]
+
+
+def test_deferred_builtin_tool_binding_is_not_executable():
+    with _workspace_tempdir() as workspace:
+        workspace_path = Path(workspace)
+        projection = _tool_projection()
+        projection["capabilities"]["tool-1"]["source_ref"] = "code_generator"
+        projection["tools"]["tool-1"]["source_ref"] = "code_generator"
+        projection["tools"]["tool-1"]["manifest"] = {
+            "schema_version": "weagent.tool/v1",
+            "runtime": "builtin",
+            "handler": "code.generate",
+            "tool_names": ["code_generator"],
+            "ui": {"status": "deferred"},
+        }
+        projection["agents"]["agent-1"]["capabilities"][0]["source_ref"] = "code_generator"
+        projection["agents"]["agent-1"]["capabilities"][0]["manifest"] = (
+            projection["tools"]["tool-1"]["manifest"]
+        )
+        projection["agents"]["agent-1"]["capabilities"][0]["granted_permissions"] = []
+        write_projection(projection, workspace_root=str(workspace_path))
+        write_run_snapshot(projection, "run-1", workspace_root=str(workspace_path))
+
+        registry = container_tools.ToolRegistry(workspace_root=str(workspace_path))
+        container_tools.register_builtin_tools(registry)
+
+        result = json.loads(
+            registry.call_from_agent(
+                "agent-1",
+                "code_generator",
+                {},
+                run_id="run-1",
+                session_id="session-1",
+            )
+        )
+
+        assert result["status"] == "error"
+        assert "not executable" in result["error"]
+
+        calls = (workspace_path / ".weagent" / "runs" / "run-1" / "calls.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        assert len(calls) == 1
+        record = json.loads(calls[0])
+        assert record["tool_name"] == "code_generator"
+        assert record["status"] == "failed"
+        assert "not executable" in record["error"]
+
+
 @pytest.fixture()
 def app_context():
     app = create_app("testing")

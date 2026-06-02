@@ -34,11 +34,15 @@ class BaseModel(db.Model):
         db.session.commit()
 
 
+from app.models.toolset_category import ToolsetCategory  # noqa: E402,F401
 from app.models.capability import (  # noqa: E402,F401
     AgentCapabilityBinding,
     Capability,
     CapabilityCallRecord,
+    CapabilityImportJob,
+    CapabilitySecurityAudit,
     CapabilityVersion,
+    CapabilityVersionAsset,
     PluginInstallRecord,
     SkillRevisionDraft,
 )

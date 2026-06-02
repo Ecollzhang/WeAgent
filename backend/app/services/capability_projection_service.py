@@ -19,6 +19,7 @@ def _agent_files(agent_id: str, workspace_root: str) -> dict:
     return {
         "capabilities": f"{base}/capabilities.json",
         "skill_index": f"{base}/skill-index.json",
+        "tool_index": f"{base}/tool-index.json",
         "permissions": f"{base}/permissions.json",
     }
 
@@ -30,6 +31,7 @@ def _agent_bootstrap(agent_id: str, workspace_root: str) -> str:
         f"runtime projection under {workspace_root}/.weagent.\n"
         f"- Capability view: {files['capabilities']}\n"
         f"- Skill index: {files['skill_index']}\n"
+        f"- Tool index: {files['tool_index']}\n"
         f"- Permission grants: {files['permissions']}\n"
         "Use only capabilities listed in your agent view."
     )
@@ -44,6 +46,22 @@ def _version_dict(version) -> dict:
         "permissions": version.permissions or {"required": [], "optional": []},
         "meta": version.meta or {},
         "created_at": version.created_at.isoformat() if version.created_at else None,
+    }
+
+
+def _asset_dict(asset, workspace_root: str, runtime_id: str) -> dict:
+    path = str(asset.path or "").replace("\\", "/").strip("/")
+    skill_base = f"{workspace_root}/.weagent/skills/{_safe_segment(runtime_id)}"
+    return {
+        "id": asset.id,
+        "path": path,
+        "kind": asset.kind,
+        "content": asset.content or "",
+        "size": asset.size,
+        "sha256": asset.sha256,
+        "mime_type": asset.mime_type or "text/plain",
+        "meta": asset.meta or {},
+        "runtime_path": f"{skill_base}/{path}" if path else skill_base,
     }
 
 
@@ -85,6 +103,11 @@ def _skill_record(binding: AgentCapabilityBinding, workspace_root: str,
     capability = binding.capability
     version = binding.capability_version
     skill_base = f"{workspace_root}/.weagent/skills/{_safe_segment(runtime_id)}"
+    assets = [
+        _asset_dict(asset, workspace_root, runtime_id)
+        for asset in sorted(version.assets or [], key=lambda item: item.path or "")
+        if str(asset.path or "").replace("\\", "/").strip("/") != "SKILL.md"
+    ]
     return {
         "runtime_id": runtime_id,
         "capability_id": capability.id,
@@ -94,6 +117,7 @@ def _skill_record(binding: AgentCapabilityBinding, workspace_root: str,
         "content": version.content or "",
         "manifest": version.manifest or {},
         "permissions": version.permissions or {"required": [], "optional": []},
+        "assets": assets,
         "path": f"{skill_base}/SKILL.md",
         "manifest_path": f"{skill_base}/manifest.json",
     }
@@ -115,7 +139,8 @@ def _runtime_manifest_record(binding: AgentCapabilityBinding, workspace_root: st
     }
 
 
-def _tool_record(binding: AgentCapabilityBinding, runtime_id: str) -> dict:
+def _tool_record(binding: AgentCapabilityBinding, workspace_root: str,
+                 runtime_id: str) -> dict:
     capability = binding.capability
     version = binding.capability_version
     return {
@@ -124,10 +149,16 @@ def _tool_record(binding: AgentCapabilityBinding, runtime_id: str) -> dict:
         "version_id": version.id,
         "name": capability.name,
         "description": capability.description or "",
+        "content": version.content or "",
         "source": capability.source,
         "source_ref": capability.source_ref or "",
         "manifest": version.manifest or {},
         "permissions": version.permissions or {"required": [], "optional": []},
+        "tool_names": (version.manifest or {}).get("tool_names") or [],
+        "handler": (version.manifest or {}).get("handler") or "",
+        "status": ((version.manifest or {}).get("ui") or {}).get("status") or "deferred",
+        "doc_path": f"{workspace_root}/.weagent/tools/{_safe_segment(runtime_id)}/TOOL.md",
+        "manifest_path": f"{workspace_root}/.weagent/tools/{_safe_segment(runtime_id)}/manifest.json",
     }
 
 
@@ -214,6 +245,7 @@ def build_capability_projection(session_id: str, agents: list[dict],
             "role": agent_cfg.get("role") or agent_id,
             "capabilities": [],
             "skill_index": [],
+            "tool_index": [],
             "permissions": {"agent_id": agent_id, "grants": []},
             "files": _agent_files(agent_id, workspace_root),
             "bootstrap": _agent_bootstrap(agent_id, workspace_root),
@@ -227,6 +259,7 @@ def build_capability_projection(session_id: str, agents: list[dict],
                 "role": binding.agent_id,
                 "capabilities": [],
                 "skill_index": [],
+                "tool_index": [],
                 "permissions": {"agent_id": binding.agent_id, "grants": []},
                 "files": _agent_files(binding.agent_id, workspace_root),
                 "bootstrap": _agent_bootstrap(binding.agent_id, workspace_root),
@@ -251,7 +284,9 @@ def build_capability_projection(session_id: str, agents: list[dict],
                     binding, workspace_root, "plugins", runtime_id
                 )
             elif capability.type == "tool":
-                projection["tools"][runtime_id] = _tool_record(binding, runtime_id)
+                projection["tools"][runtime_id] = _tool_record(
+                    binding, workspace_root, runtime_id
+                )
 
         agent_view["capabilities"].append(_binding_view(binding, capability_record))
         agent_view["permissions"]["grants"].append(_permission_grant(binding))
@@ -263,6 +298,19 @@ def build_capability_projection(session_id: str, agents: list[dict],
                 "name": capability.name,
                 "description": capability.description or "",
                 "path": capability_record["path"],
+            })
+        elif capability.type == "tool":
+            tool_record = projection["tools"].get(runtime_id) or {}
+            agent_view["tool_index"].append({
+                "capability_id": capability.id,
+                "runtime_id": runtime_id,
+                "version_id": binding.capability_version_id,
+                "name": capability.name,
+                "description": capability.description or "",
+                "tool_names": tool_record.get("tool_names") or [],
+                "permissions": tool_record.get("permissions") or {"required": [], "optional": []},
+                "status": tool_record.get("status") or "deferred",
+                "doc_path": tool_record.get("doc_path"),
             })
 
     return projection

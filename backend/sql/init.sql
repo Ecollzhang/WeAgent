@@ -19,7 +19,26 @@ CREATE TABLE IF NOT EXISTS `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ========================================
--- Agent 分类表
+-- User model config table
+-- ========================================
+CREATE TABLE IF NOT EXISTS `user_model_configs` (
+    `user_id` VARCHAR(36) NOT NULL,
+    `api_key` TEXT DEFAULT NULL,
+    `base_url` VARCHAR(500) DEFAULT NULL,
+    `model` VARCHAR(100) NOT NULL DEFAULT 'claude-3.5-sonnet',
+    `custom_model` VARCHAR(100) NOT NULL DEFAULT '',
+    `temperature` FLOAT NOT NULL DEFAULT 0.7,
+    `max_tokens` INT NOT NULL DEFAULT 4096,
+    `id` VARCHAR(36) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `ix_user_model_configs_user_id` (`user_id`),
+    CONSTRAINT `user_model_configs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ========================================
+-- Agent category table
 -- ========================================
 CREATE TABLE IF NOT EXISTS `agent_categories` (
     `name` VARCHAR(100) NOT NULL,
@@ -165,10 +184,32 @@ CREATE TABLE IF NOT EXISTS `agent_tools` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ========================================
+-- Toolset category tables
+-- ========================================
+CREATE TABLE IF NOT EXISTS `toolset_categories` (
+    `user_id` VARCHAR(36) DEFAULT NULL,
+    `name` VARCHAR(100) NOT NULL,
+    `slug` VARCHAR(120) NOT NULL,
+    `icon` VARCHAR(50) DEFAULT NULL,
+    `color` VARCHAR(20) DEFAULT NULL,
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `is_builtin` TINYINT(1) NOT NULL DEFAULT 0,
+    `id` VARCHAR(36) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_toolset_category_user_slug` (`user_id`, `slug`),
+    KEY `ix_toolset_categories_user_id` (`user_id`),
+    KEY `ix_toolset_categories_slug` (`slug`),
+    CONSTRAINT `toolset_categories_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ========================================
 -- Capability library tables
 -- ========================================
 CREATE TABLE IF NOT EXISTS `capabilities` (
     `user_id` VARCHAR(36) DEFAULT NULL,
+    `category_id` VARCHAR(36) DEFAULT NULL,
     `type` ENUM('skill', 'tool', 'mcp', 'plugin') NOT NULL,
     `name` VARCHAR(120) NOT NULL,
     `slug` VARCHAR(160) NOT NULL,
@@ -183,11 +224,13 @@ CREATE TABLE IF NOT EXISTS `capabilities` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_capability_user_slug` (`user_id`, `slug`),
     KEY `ix_capabilities_user_id` (`user_id`),
+    KEY `ix_capabilities_category_id` (`category_id`),
     KEY `ix_capabilities_type` (`type`),
     KEY `ix_capabilities_slug` (`slug`),
     KEY `ix_capabilities_source` (`source`),
     KEY `ix_capabilities_latest_version_id` (`latest_version_id`),
-    CONSTRAINT `capabilities_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+    CONSTRAINT `capabilities_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+    CONSTRAINT `capabilities_ibfk_2` FOREIGN KEY (`category_id`) REFERENCES `toolset_categories` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `capability_versions` (
@@ -208,6 +251,27 @@ CREATE TABLE IF NOT EXISTS `capability_versions` (
     KEY `created_by` (`created_by`),
     CONSTRAINT `capability_versions_ibfk_1` FOREIGN KEY (`capability_id`) REFERENCES `capabilities` (`id`),
     CONSTRAINT `capability_versions_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `capability_version_assets` (
+    `capability_version_id` VARCHAR(36) NOT NULL,
+    `path` VARCHAR(500) NOT NULL,
+    `kind` ENUM('skill_md', 'script', 'reference', 'template', 'manifest', 'virtual') NOT NULL DEFAULT 'reference',
+    `content` TEXT,
+    `size` INT NOT NULL DEFAULT 0,
+    `sha256` VARCHAR(128) NOT NULL DEFAULT '',
+    `mime_type` VARCHAR(120) DEFAULT NULL,
+    `meta` JSON DEFAULT NULL,
+    `id` VARCHAR(36) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_capability_version_asset_path` (`capability_version_id`, `path`),
+    KEY `ix_capability_version_assets_version_id` (`capability_version_id`),
+    KEY `ix_capability_version_assets_path` (`path`),
+    KEY `ix_capability_version_assets_kind` (`kind`),
+    KEY `ix_capability_version_assets_sha256` (`sha256`),
+    CONSTRAINT `capability_version_assets_ibfk_1` FOREIGN KEY (`capability_version_id`) REFERENCES `capability_versions` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `agent_capability_bindings` (
@@ -287,6 +351,26 @@ CREATE TABLE IF NOT EXISTS `plugin_install_records` (
     CONSTRAINT `plugin_install_records_ibfk_3` FOREIGN KEY (`plugin_version_id`) REFERENCES `capability_versions` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `capability_import_jobs` (
+    `user_id` VARCHAR(36) NOT NULL,
+    `source_type` VARCHAR(30) NOT NULL,
+    `source_ref` VARCHAR(500) DEFAULT NULL,
+    `status` ENUM('previewed', 'confirmed', 'failed', 'expired') NOT NULL DEFAULT 'previewed',
+    `preview_payload` JSON DEFAULT NULL,
+    `audit_summary` JSON DEFAULT NULL,
+    `expires_at` DATETIME DEFAULT NULL,
+    `id` VARCHAR(36) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    PRIMARY KEY (`id`),
+    KEY `ix_capability_import_jobs_user_id` (`user_id`),
+    KEY `ix_capability_import_jobs_source_type` (`source_type`),
+    KEY `ix_capability_import_jobs_source_ref` (`source_ref`),
+    KEY `ix_capability_import_jobs_status` (`status`),
+    KEY `ix_capability_import_jobs_expires_at` (`expires_at`),
+    CONSTRAINT `capability_import_jobs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `skill_revision_drafts` (
     `source_skill_id` VARCHAR(36) NOT NULL,
     `source_version_id` VARCHAR(36) NOT NULL,
@@ -307,4 +391,35 @@ CREATE TABLE IF NOT EXISTS `skill_revision_drafts` (
     KEY `ix_skill_revision_drafts_status` (`status`),
     CONSTRAINT `skill_revision_drafts_ibfk_1` FOREIGN KEY (`source_skill_id`) REFERENCES `capabilities` (`id`),
     CONSTRAINT `skill_revision_drafts_ibfk_2` FOREIGN KEY (`source_version_id`) REFERENCES `capability_versions` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `capability_security_audits` (
+    `user_id` VARCHAR(36) NOT NULL,
+    `capability_id` VARCHAR(36) DEFAULT NULL,
+    `capability_version_id` VARCHAR(36) DEFAULT NULL,
+    `import_job_id` VARCHAR(36) DEFAULT NULL,
+    `draft_id` VARCHAR(36) DEFAULT NULL,
+    `risk_level` ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'low',
+    `risk_items` JSON DEFAULT NULL,
+    `blocking_items` JSON DEFAULT NULL,
+    `inferred_permissions` JSON DEFAULT NULL,
+    `overridden` TINYINT(1) NOT NULL DEFAULT 0,
+    `override_reason` TEXT,
+    `confirmed_at` DATETIME DEFAULT NULL,
+    `id` VARCHAR(36) NOT NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    PRIMARY KEY (`id`),
+    KEY `ix_capability_security_audits_user_id` (`user_id`),
+    KEY `ix_capability_security_audits_capability_id` (`capability_id`),
+    KEY `ix_capability_security_audits_version_id` (`capability_version_id`),
+    KEY `ix_capability_security_audits_import_job_id` (`import_job_id`),
+    KEY `ix_capability_security_audits_draft_id` (`draft_id`),
+    KEY `ix_capability_security_audits_risk_level` (`risk_level`),
+    KEY `ix_capability_security_audits_overridden` (`overridden`),
+    CONSTRAINT `capability_security_audits_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+    CONSTRAINT `capability_security_audits_ibfk_2` FOREIGN KEY (`capability_id`) REFERENCES `capabilities` (`id`),
+    CONSTRAINT `capability_security_audits_ibfk_3` FOREIGN KEY (`capability_version_id`) REFERENCES `capability_versions` (`id`),
+    CONSTRAINT `capability_security_audits_ibfk_4` FOREIGN KEY (`import_job_id`) REFERENCES `capability_import_jobs` (`id`),
+    CONSTRAINT `capability_security_audits_ibfk_5` FOREIGN KEY (`draft_id`) REFERENCES `skill_revision_drafts` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

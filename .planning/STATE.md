@@ -1,10 +1,10 @@
 # Toolset Planning State
 
-**Updated:** 2026-05-29
+**Updated:** 2026-06-01
 **Active branch:** `feature/toolset`
 **Remote target:** `origin/feature/toolset`
 **Current phase:** `001-toolset`
-**Status:** Checkpoint 9 complete; Phase 001 ready for review
+**Status:** 005 built-in Tool runtime SPEC/PLAN drafted
 
 ## Completed
 
@@ -27,6 +27,18 @@
 - Completed Checkpoint 7 Plugin manifest import and install-record visibility.
 - Completed Checkpoint 8 Skill draft sync from workspace runtime changes to DB drafts.
 - Completed Checkpoint 9 end-to-end regression and preservation checks.
+- Added 003 External Toolset Import and Audit SPEC/PLAN.
+- Confirmed ability-library mode comes first; named toolset/profile bundles are deferred.
+- Confirmed Agent create and edit flows both need default capability selection.
+- Confirmed npx executable imports require Docker import sandbox with basic in-container safety checks.
+- Confirmed uploaded script changes may be drafted by Agent but require user review, re-audit, and confirmation before DB publication.
+- Confirmed expert mode permits high-risk publication only with second confirmation and audit logging.
+- Clarified detection engine requirements for syntax checks, lexical scanning, illegal library/API scanning, illegal operation scanning, and risk-to-permission mapping.
+- Confirmed built-in Tools are mostly display shells today, while sandbox runtime only has a few basic callables.
+- Confirmed built-in Tools must be read-only for users; user-created Tools may be editable after audit and publication.
+- Confirmed Tool Markdown is necessary for Agent instructions, but manifest and handler remain the execution contract.
+- Confirmed Tool disclosure should be progressive: Agent sees tool index first, then reads `TOOL.md` when needed.
+- Added 005 Built-in Tool Runtime and Markdown Contract SPEC/PLAN.
 
 ## Current Branch Notes
 
@@ -36,4 +48,4 @@
 
 ## Next Action
 
-Review Phase 001 Toolset Capabilities v1, then decide whether to run manual UI acceptance or prepare the phase for merge.
+Review `005-builtin-tool-runtime-SPEC.md` and `005-builtin-tool-runtime-PLAN.md`, then begin Checkpoint A if the scope is approved.
