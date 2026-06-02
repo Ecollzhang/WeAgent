@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from unittest.mock import patch
+import os
 
 from app.sandbox.container.agent import AgentRuntime
 from app.sandbox.container.orchestrator import Orchestrator
@@ -62,6 +63,34 @@ class ProviderConfigStage3Test(unittest.TestCase):
         agent = result["agent"]
         self.assertEqual("claude", agent["provider"])
         self.assertEqual("claude", agent["adapter_name"])
+
+    def test_update_model_config_propagates_codex_provider_env(self):
+        with patch("app.sandbox.container.orchestrator.os.makedirs"), \
+             patch("app.sandbox.container.orchestrator.trust_projects"), \
+             patch("app.sandbox.container.orchestrator.register_builtin_tools"), \
+             patch("app.sandbox.container.orchestrator.log_event"), \
+             patch("app.sandbox.container.orchestrator.write_settings"), \
+             patch.dict(os.environ, {}, clear=True):
+            orchestrator = Orchestrator()
+            result = orchestrator.update_model_config({
+                "api_key": "sk-claude",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+                "model": "mimo-v2.5-pro",
+                "CODEX_API_KEY": "sk-codex",
+                "CODEX_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
+                "CODEX_MODEL": "mimo-v2.5-pro",
+            })
+
+            self.assertEqual("ok", result["status"])
+            self.assertEqual("https://token-plan-cn.xiaomimimo.com/v1", os.environ["CODEX_BASE_URL"])
+            self.assertEqual("mimo-v2.5-pro", os.environ["CODEX_MODEL"])
+            self.assertEqual("sk-codex", os.environ["CODEX_API_KEY"])
+            self.assertEqual("https://token-plan-cn.xiaomimimo.com/v1", result["codex_base_url"])
+
+    def test_unexpected_provider_status_is_runtime_error(self):
+        self.assertTrue(Orchestrator._is_agent_runtime_error(
+            "unexpected status 404 Not Found, url: https://example.com/responses"
+        ))
 
 
 if __name__ == "__main__":

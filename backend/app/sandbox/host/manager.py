@@ -497,9 +497,28 @@ class DockerContainerManager:
             "base_url": env_vars.get("ANTHROPIC_BASE_URL") or env_vars.get("DEEPSEEK_BASE_URL") or "",
             "model": env_vars.get("ANTHROPIC_MODEL") or env_vars.get("DEEPSEEK_MODEL") or "",
         }
+        provider_keys = [
+            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+            "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
+            "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+            "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL",
+            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML",
+            "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "OPENCODE_MODEL",
+        ]
         config["api_key"] = _clean_config_value(config["api_key"])
         config["base_url"] = _clean_base_url(config["base_url"])
         config["model"] = _clean_config_value(config["model"])
+        for key in provider_keys:
+            value = env_vars.get(key)
+            if value is None:
+                continue
+            if key.endswith("BASE_URL"):
+                config[key] = _clean_base_url(value)
+            elif key.endswith("API_KEY") or key.endswith("AUTH_TOKEN") or key.endswith("MODEL"):
+                config[key] = _clean_config_value(value)
+            else:
+                config[key] = value
         return session.client.update_model_config(config)
 
     def update_model_config_for_user_sessions(self, user_id: str, env_vars: dict) -> dict:

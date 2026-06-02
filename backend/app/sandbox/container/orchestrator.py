@@ -1705,12 +1705,31 @@ class Orchestrator:
             os.environ["ANTHROPIC_MODEL"] = model_name
         os.environ.update(claude_env())
 
+        provider_env_keys = [
+            "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
+            "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+            "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL",
+            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML",
+            "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "OPENCODE_MODEL",
+        ]
+        for key in provider_env_keys:
+            value = config.get(key)
+            if value is None:
+                continue
+            if key.endswith("BASE_URL"):
+                value = clean_base_url(value)
+            elif key.endswith("API_KEY") or key.endswith("MODEL"):
+                value = clean_config_value(value)
+            if value:
+                os.environ[key] = value
+
         for agent in self.agents.values():
             agent.start()
         return {
             "status": "ok",
             "model": model_name,
             "base_url": base_url,
+            "codex_base_url": os.environ.get("CODEX_BASE_URL", ""),
             "agents": list(self.agents.keys()),
         }
 
@@ -1781,6 +1800,7 @@ class Orchestrator:
         error_markers = (
             "failed to authenticate",
             "api error",
+            "unexpected status",
             "insufficient balance",
             "invalid api key",
             "missing or invalid",

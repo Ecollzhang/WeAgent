@@ -15,6 +15,21 @@ def _mask_key(api_key):
     return f'{api_key[:4]}****{api_key[-4:]}'
 
 
+def _openai_compatible_base_url(base_url):
+    """Derive the OpenAI-compatible endpoint used by Codex/OpenCode.
+
+    Some Claude Code providers are configured with an Anthropic-compatible
+    suffix (`/anthropic`). Codex uses the OpenAI Responses API shape, so it
+    must target the sibling `/v1` endpoint when the provider exposes one.
+    """
+    text = _clean_config_value(base_url).rstrip('/')
+    if not text:
+        return ''
+    if text.endswith('/anthropic'):
+        return text[:-len('/anthropic')] + '/v1'
+    return text
+
+
 class SettingsService:
     """User settings persistence."""
 
@@ -89,6 +104,12 @@ class SettingsService:
         model_name = self._effective_model(config)
         if model_name:
             env['ANTHROPIC_MODEL'] = model_name
+        codex_base_url = _openai_compatible_base_url(config.base_url)
+        env['CODEX_API_KEY'] = _clean_config_value(config.api_key)
+        if codex_base_url:
+            env['CODEX_BASE_URL'] = codex_base_url
+        if model_name:
+            env['CODEX_MODEL'] = model_name
         return env, None
 
 

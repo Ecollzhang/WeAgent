@@ -53,6 +53,9 @@ def test_custom_model_name_is_persisted_and_injected_as_effective_model(monkeypa
         assert env_error is None
         assert env_vars["ANTHROPIC_MODEL"] == "deepseek-v4-pro"
         assert env_vars["ANTHROPIC_BASE_URL"] == "https://api.example.com/v1"
+        assert env_vars["CODEX_API_KEY"] == "sk-test-custom-model-key"
+        assert env_vars["CODEX_MODEL"] == "deepseek-v4-pro"
+        assert env_vars["CODEX_BASE_URL"] == "https://api.example.com/v1"
 
         db.session.remove()
         db.drop_all()
@@ -83,6 +86,37 @@ def test_preset_model_ignores_custom_model_for_container_injection(monkeypatch):
         env_vars, env_error = settings_service.get_container_env_vars(user.id)
         assert env_error is None
         assert env_vars["ANTHROPIC_MODEL"] == "qwen-plus"
+        assert env_vars["CODEX_MODEL"] == "qwen-plus"
+
+        db.session.remove()
+        db.drop_all()
+
+
+def test_anthropic_base_url_derives_codex_v1_endpoint(monkeypatch):
+    app = create_app("testing")
+    with app.app_context():
+        monkeypatch.setattr("app.sandbox.get_manager", lambda: FakeSandboxManager())
+        db.drop_all()
+        db.create_all()
+        user = _create_user()
+
+        result, error = settings_service.save_model_config(
+            user.id,
+            {
+                "api_key": "sk-test-anthropic-key",
+                "model": "custom",
+                "custom_model": "mimo-v2.5-pro",
+                "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic/",
+            },
+        )
+
+        assert error is None
+        assert result["effective_model"] == "mimo-v2.5-pro"
+        env_vars, env_error = settings_service.get_container_env_vars(user.id)
+        assert env_error is None
+        assert env_vars["ANTHROPIC_BASE_URL"] == "https://token-plan-cn.xiaomimimo.com/anthropic"
+        assert env_vars["CODEX_BASE_URL"] == "https://token-plan-cn.xiaomimimo.com/v1"
+        assert env_vars["CODEX_MODEL"] == "mimo-v2.5-pro"
 
         db.session.remove()
         db.drop_all()
