@@ -54,3 +54,7 @@ htmlcov/
 
 # ===== docs =====
 docs/archive-registry.md
+
+# ===== planning runtime files =====
+.planning/tmp/
+.planning/*.lock
