@@ -5,7 +5,9 @@ from app import create_app, db
 from app.models.agent import Agent
 from app.models.capability import Capability
 from app.models.user import User
+from app.services.builtin_tool_definitions import builtin_tools_for_legacy_view
 from app.services.capability_service import capability_service
+from app.services.tool_service import tool_service
 from app.services.toolset_category_service import toolset_category_service
 
 
@@ -120,3 +122,13 @@ def test_hidden_and_unconfigured_tools_cannot_be_bound_to_agent(client_context):
     )
 
     assert accepted.status_code == 201
+
+
+def test_legacy_tool_seed_omits_capability_runtime_status(client_context):
+    _client, _headers, _user, _agent = client_context
+
+    legacy_tools = builtin_tools_for_legacy_view()
+
+    assert legacy_tools
+    assert all("status" not in item for item in legacy_tools)
+    tool_service.seed_default_tools()

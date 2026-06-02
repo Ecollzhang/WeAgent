@@ -503,6 +503,5 @@ def builtin_tools_for_legacy_view():
             "icon": tool["icon"],
             "color": tool["color"],
             "description": item["description"],
-            "status": item["status"],
         })
     return tools
