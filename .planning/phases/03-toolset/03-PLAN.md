@@ -66,9 +66,14 @@ must_haves:
       provides: Locked merge requirements and boundaries.
     - path: .planning/phases/03-toolset/03-PLAN.md
       provides: Merge execution checklist.
+    - path: .planning/phases/03-toolset/03-VERIFY.md
+      provides: Merge verification and sandbox smoke results.
 ---
 
 # Phase 03 Plan: Toolset Desktop Merge
+
+Status: verified on 2026-06-02. See `03-VERIFY.md` for test, build, and
+Docker sandbox smoke results.
 
 ## Objective
 
@@ -254,12 +259,12 @@ Verification:
 
 ## Success Criteria
 
-- [ ] Merge branch is created and pushed as `combine/toolset_v1.1.0`.
-- [ ] Web toolset module is available on desktop backend/frontend.
-- [ ] Agent provider selection and capability binding both work.
-- [ ] Sandbox runtime preserves desktop provider architecture.
-- [ ] `.weagent/*` projection exists in sandbox and points each Agent to its own view.
-- [ ] Skill lifecycle remains usable.
-- [ ] Configurable Tool lifecycle remains usable.
-- [ ] MCP minimal runtime remains testable.
-- [ ] Tests/build/smoke results are reported.
+- [x] Merge branch is created and pushed as `combine/toolset_v1.1.0`.
+- [x] Web toolset module is available on desktop backend/frontend.
+- [x] Agent provider selection and capability binding both work.
+- [x] Sandbox runtime preserves desktop provider architecture.
+- [x] `.weagent/*` projection exists in sandbox and points each Agent to its own view.
+- [x] Skill lifecycle remains usable.
+- [x] Configurable Tool lifecycle remains usable.
+- [x] MCP minimal runtime remains testable.
+- [x] Tests/build/smoke results are reported.

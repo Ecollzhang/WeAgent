@@ -2,22 +2,22 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
+status: verified
 last_updated: "2026-06-02T00:00:00.000Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # Planning State
 
 **Project:** WeAgent
 **Current branch:** combine/toolset_v1.1.0
-**Status:** Phase 03 planning
+**Status:** Phase 03 verified
 **Last activity:** 2026-06-02
 
 ## Accumulated Context
@@ -25,7 +25,7 @@ progress:
 ### Pending Todos
 
 - Agent adapter streaming factory: define and implement a factory-created streaming adapter layer for Codex and Claude Code.
-- Merge `feature/toolset` into the desktop runtime base as Phase 03.
+- Phase 03 follow-up: open/review PR for `combine/toolset_v1.1.0` after human UAT.
 
 ## Decisions
 
@@ -41,3 +41,11 @@ progress:
 - Web frontend toolset management is in scope; desktop client toolset UI is out of scope.
 - Desktop sandbox provider runtime, service proxy, and backend port remain authoritative.
 - Toolset capability projection, MCP runtime, provider config, and built-in Tool audit are attached to the desktop runtime instead of replacing it.
+
+## Latest Verification
+
+- Phase 03 merge checkpoint pushed: `bbf6fd6 merge: combine toolset with desktop runtime`.
+- Backend verification: `python -m pytest -q` passed with `201 passed`.
+- Frontend verification: `npm run build` passed with asset-size warnings only; frontend contract tests passed.
+- Docker smoke: rebuilt `weagent-sandbox:latest`, started a temporary container, verified `/api/health`, `.weagent/*` projection, Agent creation, and Agent skill-index reads.
+- Details are recorded in `.planning/phases/03-toolset/03-VERIFY.md`.
