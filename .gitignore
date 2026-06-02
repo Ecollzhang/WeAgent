@@ -57,6 +57,7 @@ htmlcov/
 # ===== docs =====
 docs/archive-registry.md
 .planning/*.lock
+.planning/tmp/
 .pycache_verify/
 
 # ===== Multi-platform clients =====

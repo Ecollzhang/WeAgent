@@ -33,3 +33,27 @@ REQ-13: Keep context behavior deterministic and testable: turn 2 in the same con
 REQ-14: Avoid claiming native Claude/Codex session parity in this phase; native provider resume, interactive choices, background jobs, and hook UI are deferred unless they are required to preserve text/file context.
 
 REQ-15: Document the exact context contract, retention limits, and provider-dependent gaps so frontend/manual tests can distinguish WeAgent conversation context from provider-native runtime state.
+
+## Phase 3: Toolset Desktop Merge
+
+REQ-16: Create `combine/toolset_v1.1.0` from `origin/feature/desktop_app_support_v1.0.6` and merge `origin/feature/toolset` as a module.
+
+REQ-17: Keep Web frontend toolset management in scope while leaving desktop client toolset UI out of scope for this phase.
+
+REQ-18: Preserve desktop sandbox provider runtime, service proxy, backend port, and provider runner architecture as the execution base.
+
+REQ-19: Migrate toolset capability data models, schemas, controllers, services, seed logic, and DB-backed APIs into the desktop base.
+
+REQ-20: Make Agent create/edit support both provider selection and capability bindings without overwriting either side.
+
+REQ-21: Inject DB-backed capability runtime projection into sandbox as canonical `/workspace/.weagent/*` files.
+
+REQ-22: Preserve real Skill projection, minimal MCP runtime/list/call records, and built-in Tool call audit records.
+
+REQ-23: Provide Web configuration windows for configurable Tools, including create, test, save, enable, and disable flows.
+
+REQ-24: Hide or exclude deferred/non-configurable built-in Tools from Web display and tab counts.
+
+REQ-25: Keep desktop `.planning` Phase 01/02 as the top-level planning history and add toolset as Phase 03.
+
+REQ-26: Verify the merged branch with focused backend tests, frontend build, and Docker sandbox smoke when Docker is available.

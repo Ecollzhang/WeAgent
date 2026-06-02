@@ -2,29 +2,30 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-last_updated: "2026-05-25T00:00:00.000Z"
-last_activity: 2026-05-25
+status: planning
+last_updated: "2026-06-02T00:00:00.000Z"
+last_activity: 2026-06-02
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 2
+  total_plans: 3
   completed_plans: 2
-  percent: 100
+  percent: 67
 ---
 
 # Planning State
 
 **Project:** WeAgent
-**Current branch:** agent_adapter
-**Status:** Phase 02 completed
-**Last activity:** 2026-05-25
+**Current branch:** combine/toolset_v1.1.0
+**Status:** Phase 03 planning
+**Last activity:** 2026-06-02
 
 ## Accumulated Context
 
 ### Pending Todos
 
 - Agent adapter streaming factory: define and implement a factory-created streaming adapter layer for Codex and Claude Code.
+- Merge `feature/toolset` into the desktop runtime base as Phase 03.
 
 ## Decisions
 
@@ -36,3 +37,7 @@ progress:
 - Task 5-6 are now complete for normalized message events: backend orchestrator, SSE named events, and frontend temporary streaming message rendering.
 - Phase 2 focuses on WeAgent-owned conversation context continuity: transcript, file/artifact context, compact summaries, and provider-neutral prompt assembly.
 - Phase 2 is implemented with a 20-message default transcript window and `artifact.created` context recording; native provider session resume remains deferred.
+- Phase 3 uses `origin/feature/desktop_app_support_v1.0.6` as the base and treats `origin/feature/toolset` as a module to embed.
+- Web frontend toolset management is in scope; desktop client toolset UI is out of scope.
+- Desktop sandbox provider runtime, service proxy, and backend port remain authoritative.
+- Toolset capability projection, MCP runtime, provider config, and built-in Tool audit are attached to the desktop runtime instead of replacing it.

@@ -57,8 +57,36 @@
 - Tests proving turn 2 can see turn 1 messages and recorded file context.
 - Documentation of what context is preserved and what is still provider-dependent.
 
+## Phase 3: Toolset Desktop Merge
+
+**Goal:** Embed the DB-backed Toolset/Capability module from `feature/toolset` into the desktop runtime base while preserving the desktop sandbox provider architecture.
+
+**Requirements:** REQ-16, REQ-17, REQ-18, REQ-19, REQ-20, REQ-21, REQ-22, REQ-23, REQ-24, REQ-25, REQ-26
+
+**Canonical references:**
+
+- `.planning/phases/03-toolset/03-SPEC.md`
+- `.planning/phases/03-toolset/03-PLAN.md`
+- `.planning/phases/01-agent-adapter-streaming-factory/01-01-PLAN.md`
+- `.planning/phases/02-conversation-context-system/02-01-PLAN.md`
+- `backend/app/sandbox/container/providers/factory.py`
+- `backend/app/sandbox/container/agent.py`
+- `backend/app/sandbox/host/manager.py`
+- `frontend/src/components/AgentEditForm/index.vue`
+- `frontend/src/views/Tools.vue`
+
+**Planned outputs:**
+
+- Merge branch `combine/toolset_v1.1.0`.
+- Capability/Toolset DB models, APIs, seed logic, and Web UI on the desktop base.
+- Agent provider selection plus capability binding in one Web form.
+- Sandbox `.weagent/*` capability projection integrated with desktop provider runners.
+- Minimal MCP runtime and built-in Tool call records preserved.
+- Verification report covering tests, build, and sandbox smoke.
+
 ## Deferred
 
+- Full execution of arbitrary user-defined script Tools.
 - Full Claude Agent SDK integration.
 - Codex TypeScript SDK bridge.
 - Multi-run persistence table for every raw event.
