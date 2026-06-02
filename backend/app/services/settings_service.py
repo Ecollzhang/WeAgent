@@ -1,4 +1,5 @@
 from app.models.user_model_config import UserModelConfig
+from urllib.parse import urlparse
 
 
 def _clean_config_value(value):
@@ -28,6 +29,11 @@ def _openai_compatible_base_url(base_url):
     if text.endswith('/anthropic'):
         return text[:-len('/anthropic')] + '/v1'
     return text
+
+
+def _codex_should_use_relay(base_url):
+    host = urlparse(_clean_config_value(base_url).rstrip('/')).netloc.lower()
+    return any(marker in host for marker in ('deepseek', 'xiaomimimo'))
 
 
 class SettingsService:
@@ -108,6 +114,8 @@ class SettingsService:
         env['CODEX_API_KEY'] = _clean_config_value(config.api_key)
         if codex_base_url:
             env['CODEX_BASE_URL'] = codex_base_url
+        if _codex_should_use_relay(codex_base_url or config.base_url):
+            env['CODEX_USE_RELAY'] = '1'
         if model_name:
             env['CODEX_MODEL'] = model_name
         return env, None

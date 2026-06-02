@@ -116,6 +116,7 @@ def test_anthropic_base_url_derives_codex_v1_endpoint(monkeypatch):
         assert env_error is None
         assert env_vars["ANTHROPIC_BASE_URL"] == "https://token-plan-cn.xiaomimimo.com/anthropic"
         assert env_vars["CODEX_BASE_URL"] == "https://token-plan-cn.xiaomimimo.com/v1"
+        assert env_vars["CODEX_USE_RELAY"] == "1"
         assert env_vars["CODEX_MODEL"] == "mimo-v2.5-pro"
 
         db.session.remove()

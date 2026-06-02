@@ -79,12 +79,14 @@ class ProviderConfigStage3Test(unittest.TestCase):
                 "CODEX_API_KEY": "sk-codex",
                 "CODEX_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
                 "CODEX_MODEL": "mimo-v2.5-pro",
+                "CODEX_USE_RELAY": "1",
             })
 
             self.assertEqual("ok", result["status"])
             self.assertEqual("https://token-plan-cn.xiaomimimo.com/v1", os.environ["CODEX_BASE_URL"])
             self.assertEqual("mimo-v2.5-pro", os.environ["CODEX_MODEL"])
             self.assertEqual("sk-codex", os.environ["CODEX_API_KEY"])
+            self.assertEqual("1", os.environ["CODEX_USE_RELAY"])
             self.assertEqual("https://token-plan-cn.xiaomimimo.com/v1", result["codex_base_url"])
 
     def test_unexpected_provider_status_is_runtime_error(self):

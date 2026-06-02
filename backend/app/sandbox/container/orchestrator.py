@@ -1709,7 +1709,7 @@ class Orchestrator:
             "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
             "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
             "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL",
-            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML",
+            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML", "CODEX_USE_RELAY",
             "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "OPENCODE_MODEL",
         ]
         for key in provider_env_keys:
