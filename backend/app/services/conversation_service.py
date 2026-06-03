@@ -191,6 +191,14 @@ class ConversationService:
             if pid.startswith('agent_'):
                 agent_ids.append(pid.replace('agent_', ''))
         if len([aid for aid in agent_ids if aid != MODERATOR_AGENT_ID]) >= 2:
+            if not Agent.query.get(MODERATOR_AGENT_ID):
+                try:
+                    from app.services.agent_service import agent_service
+                    agent_service.seed_default_data()
+                except Exception:
+                    pass
+            if not Agent.query.get(MODERATOR_AGENT_ID):
+                return participant_ids
             moderator_pid = f'agent_{MODERATOR_AGENT_ID}'
             participant_ids = [pid for pid in participant_ids if pid != moderator_pid]
             participant_ids.append(moderator_pid)

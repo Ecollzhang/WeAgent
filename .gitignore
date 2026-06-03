@@ -63,4 +63,5 @@ docs/archive-registry.md
 clients/**/node_modules/
 clients/**/dist/
 clients/desktop/release/
+clients/android/android/
 clients/android/ios/

@@ -21,6 +21,10 @@
 - **打包**: electron-builder
 - **定位**: 独立桌面客户端，仅连接外部后端服务，不内置后端
 
+### Android 端
+- **核心**: Capacitor + Vue 2.7 + Vite
+- **定位**: 独立 Android 客户端，业务界面使用 Vue 实现，通过 WebView 连接后端 API
+
 ## 环境要求
 
 - Python 3.10+
@@ -166,6 +170,34 @@ clients/desktop/release/
 
 打开浏览器访问 `http://localhost:8080`
 
+### 7. Android 端启动与构建
+
+Android 端代码位于 `clients/android`，当前已实现后端地址配置、登录、注册、会话、Agent 和个人设置页。Android 真机测试时，后端地址必须填写后端机器的局域网 IP，例如 `http://192.168.1.8:5000`，不能填写 `localhost`。
+
+```bash
+cd clients/android
+
+# 安装依赖
+npm install
+
+# WebView 页面开发预览
+npm run dev
+
+# 构建静态资源
+npm run build
+
+# 首次生成 Capacitor Android 工程
+npm run cap:add:android
+
+# 后续同步 Web 资源到 Android 工程
+npm run cap:sync
+
+# 使用 Android Studio 打开原生工程
+npm run cap:open
+```
+
+调试阶段 Capacitor 已允许明文 HTTP，便于连接局域网后端。公网生产环境建议切换 HTTPS。
+
 ## 项目结构
 
 ```
@@ -197,6 +229,10 @@ WeAgent/
 │       ├── src/                # 桌面端 Vue 页面与服务封装
 │       ├── logo.png            # 桌面端应用图标源文件
 │       └── package.json        # 桌面端依赖与打包配置
+│   └── android/                # Capacitor Android 客户端
+│       ├── src/                # Android 端 Vue 页面与服务封装
+│       ├── capacitor.config.json
+│       └── package.json
 ├── .gitignore
 └── README.md
 ```

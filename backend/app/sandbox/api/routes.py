@@ -629,6 +629,8 @@ def serve_workspace_file(session_id: str, filepath: str):
         normalized_mime = (mime_type or "").split(";", 1)[0].strip().lower()
         if normalized_mime in {"text/html", "application/xhtml+xml"}:
             content_bytes = _inject_html_base(content_bytes, session_id, workspace_path)
+        elif normalized_mime == "text/css":
+            content_bytes = _rewrite_workspace_css(content_bytes, session_id, workspace_path)
         return Response(content_bytes, mimetype=mime_type)
     except FileNotFoundError:
         return jsonify({"code": 404, "message": "File not found"}), 404
@@ -643,7 +645,73 @@ def _inject_html_base(content: bytes, session_id: str, workspace_path: str) -> b
     except UnicodeDecodeError:
         return content
 
-    if re.search(r"<base\s", html, flags=re.IGNORECASE):
+    rel_dir = os.path.dirname(workspace_path.replace("\\", "/"))
+    if rel_dir.startswith("/workspace"):
+        rel_dir = rel_dir[len("/workspace"):].lstrip("/")
+
+    encoded_session = quote(session_id, safe="")
+    encoded_dir = "/".join(quote(part, safe="") for part in rel_dir.split("/") if part)
+    if encoded_dir:
+        base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/{encoded_dir}/"
+    else:
+        base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/"
+
+    html = re.sub(r"<base\s[^>]*>", "", html, flags=re.IGNORECASE)
+    html = _rewrite_workspace_root_paths(html, base_href)
+    base_tag = f'<base href="{base_href}">'
+    if re.search(r"<head[^>]*>", html, flags=re.IGNORECASE):
+        html = re.sub(r"(<head[^>]*>)", r"\1" + base_tag, html, count=1, flags=re.IGNORECASE)
+    else:
+        html = base_tag + html
+    return html.encode("utf-8")
+
+
+def _rewrite_workspace_root_paths(html: str, base_href: str) -> str:
+    """Treat root-relative assets in preview HTML as relative to the file directory."""
+    def rewrite(value: str) -> str:
+        if not value.startswith("/") or value.startswith("//"):
+            return value
+        if value.startswith("/api/"):
+            return value
+        return base_href + value.lstrip("/")
+
+    def attr_repl(match):
+        return f'{match.group(1)}={match.group(2)}{rewrite(match.group(3))}{match.group(2)}'
+
+    html = re.sub(
+        r'\b(src|href|action)=([\'"])(/(?!/)[^\'"]*)\2',
+        attr_repl,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    def css_url_repl(match):
+        quote_char = match.group(1) or ""
+        return f"url({quote_char}{rewrite(match.group(2))}{quote_char})"
+
+    html = re.sub(
+        r'url\(\s*([\'"]?)(/(?!/)[^\'")]+)\1',
+        css_url_repl,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    def css_import_repl(match):
+        quote_char = match.group(1)
+        return f"@import {quote_char}{rewrite(match.group(2))}{quote_char}"
+
+    return re.sub(
+        r'@import\s+([\'"])(/(?!/)[^\'"]+)\1',
+        css_import_repl,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+
+def _rewrite_workspace_css(content: bytes, session_id: str, workspace_path: str) -> bytes:
+    try:
+        css = content.decode("utf-8")
+    except UnicodeDecodeError:
         return content
 
     rel_dir = os.path.dirname(workspace_path.replace("\\", "/"))
@@ -656,13 +724,7 @@ def _inject_html_base(content: bytes, session_id: str, workspace_path: str) -> b
         base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/{encoded_dir}/"
     else:
         base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/"
-
-    base_tag = f'<base href="{base_href}">'
-    if re.search(r"<head[^>]*>", html, flags=re.IGNORECASE):
-        html = re.sub(r"(<head[^>]*>)", r"\1" + base_tag, html, count=1, flags=re.IGNORECASE)
-    else:
-        html = base_tag + html
-    return html.encode("utf-8")
+    return _rewrite_workspace_root_paths(css, base_href).encode("utf-8")
 
 
 @sandbox_bp.route("/sessions/<session_id>/agents/<agent_id>/stop", methods=["POST"])

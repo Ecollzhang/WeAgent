@@ -1,0 +1,28 @@
+{
+  "name": "weagent-android",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/patch-gradle-mirrors.cjs",
+    "patch:gradle-mirrors": "node scripts/patch-gradle-mirrors.cjs",
+    "android:backup-shell": "node scripts/backup-android-shell.cjs",
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cap:add:android": "npm run patch:gradle-mirrors && npm run build && npx cap add android",
+    "cap:sync": "npm run patch:gradle-mirrors && npm run build && npx cap sync android",
+    "cap:open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/core": "^6.2.1",
+    "axios": "^1.6.2",
+    "vue": "^2.7.16",
+    "vue-router": "^3.6.5"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.1",
+    "@vitejs/plugin-vue2": "^2.3.1",
+    "vite": "^5.2.0"
+  }
+}
