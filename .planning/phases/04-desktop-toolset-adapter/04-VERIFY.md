@@ -125,3 +125,73 @@ The user expanded the desired outcome beyond the initial Phase 04 scope. Phase 0
   - The build emitted `Tools-*.js` and `Tools-*.css`, proving the desktop Toolset route/page compiles.
   - Dependency installation required calling the real npm CLI directly because the local npm shim points to a missing AppData npm path.
   - `npm install` reported 11 dependency audit issues in the existing Electron/Vue2 dependency tree; this was not fixed in this checkpoint because it may require dependency upgrades outside the Toolset feature scope.
+
+## Checkpoint E: Runtime Projection Evidence
+
+### Evidence
+
+- Existing projection tests were rerun and passed.
+- `tests/test_capability_projection.py` proves DB-backed Agent bindings generate:
+  - shared `.weagent/capabilities/index.json`,
+  - per-agent `.weagent/agents/<agent_id>/capabilities.json`,
+  - per-agent `skill-index.json`,
+  - per-agent `tool-index.json`,
+  - per-agent `permissions.json`.
+- `tests/test_capability_container_projection.py` proves container-side projection writing/reading works.
+
+### Command
+
+```powershell
+python -m pytest tests\test_capability_projection.py tests\test_capability_container_projection.py -q
+```
+
+This subset was included in the provider/runtime verification command below.
+
+## Checkpoint F: Codex Provider Evidence
+
+### Evidence
+
+- `tests/test_sandbox_codex_runner_stage4.py::test_setup_writes_bound_mcp_servers_into_codex_config` proves Codex reads the bound Agent capability view and writes the MCP server into `config.toml`.
+- The asserted config contains:
+  - `[mcp_servers.memory_mcp]`
+  - `command = "npx"`
+  - `args = ["--yes", "@modelcontextprotocol/server-memory"]`
+- This is config/runtime evidence without requiring live Codex network access.
+
+## Checkpoint G: Claude Provider Evidence
+
+### Evidence
+
+- Added `tests/test_sandbox_provider_runner_stage2.py::test_claude_setup_writes_capability_bootstrap_to_prompt_files`.
+- The test proves Claude provider setup writes both `.claude/agent.md` and `CLAUDE.md` with the capability bootstrap paths:
+  - `/workspace/.weagent/agents/agent-1/capabilities.json`
+  - `/workspace/.weagent/agents/agent-1/skill-index.json`
+  - `/workspace/.weagent/agents/agent-1/tool-index.json`
+  - `/workspace/.weagent/agents/agent-1/permissions.json`
+- This is prompt/context evidence without requiring live Claude network access.
+
+## Checkpoint H: Built-in Tool / MCP Binding Evidence
+
+### Evidence
+
+- `tests/test_configured_tool_runtime_gate.py` proves configured Tool projection and call-record behavior.
+- `tests/test_capability_mcp_runtime.py` proves imported npx MCP bindings require `run_command`, can be represented in runtime projection, and can be used through the MCP runtime path.
+- `tests/test_builtin_tool_handlers.py` proves implemented built-in Tool handlers remain callable through the sandbox tool registry.
+
+## Runtime Verification Commands
+
+### Provider Injection Subset
+
+```powershell
+python -m pytest tests\test_sandbox_provider_runner_stage2.py tests\test_sandbox_codex_runner_stage4.py tests\test_capability_projection.py tests\test_capability_container_projection.py tests\test_capability_mcp_runtime.py tests\test_configured_tool_runtime_gate.py -q
+```
+
+Result: `37 passed`.
+
+### Toolset Capability Subset
+
+```powershell
+python -m pytest tests\test_capability_api.py tests\test_capability_import_preview.py tests\test_capability_import_confirm.py tests\test_capability_import_security.py tests\test_capability_npx_import_sandbox.py tests\test_capability_mcp_runtime.py tests\test_capability_projection.py tests\test_capability_container_projection.py tests\test_tool_provider_config_api.py tests\test_builtin_tool_handlers.py tests\test_configured_tool_runtime_gate.py tests\test_toolset_categories.py -q
+```
+
+Result: `60 passed`.
