@@ -195,3 +195,71 @@ python -m pytest tests\test_capability_api.py tests\test_capability_import_previ
 ```
 
 Result: `60 passed`.
+
+## Final Verification
+
+### Backend Full Test Suite
+
+Command:
+
+```powershell
+python -m pytest -q
+```
+
+Working directory: `backend`
+
+Result: `207 passed`.
+
+Notes:
+
+- Warnings are existing SQLAlchemy legacy/deprecation warnings and Flask-SQLAlchemy teardown warnings.
+- No backend test failed.
+
+### Web Frontend Build
+
+Command:
+
+```powershell
+node "G:\software\Node\node_modules\npm\bin\npm-cli.js" run build
+```
+
+Working directory: `frontend`
+
+Result: passed.
+
+Notes:
+
+- Vue CLI reported asset-size warnings for the existing large vendor bundle/background image.
+- No Web build error occurred.
+
+### Desktop Build
+
+Command:
+
+```powershell
+node "G:\software\Node\node_modules\npm\bin\npm-cli.js" run build
+```
+
+Working directory: `clients/desktop`
+
+Result: passed.
+
+Notes:
+
+- Vite emitted the expected `Tools-*.js` and `Tools-*.css` chunks.
+- Vite reported the existing large chunk warning.
+- No desktop build error occurred.
+
+## Final Status
+
+- Checkpoint A: complete.
+- Checkpoint B: complete.
+- Checkpoint C: complete.
+- Checkpoint D: complete.
+- Checkpoint D2: complete.
+- Checkpoint E: verified by projection tests.
+- Checkpoint F: verified by Codex MCP config test.
+- Checkpoint G: verified by Claude prompt/bootstrap test.
+- Checkpoint H: verified by MCP runtime, configured Tool runtime, and built-in Tool handler tests.
+- Checkpoint I: desktop build passed; Web build and full backend tests also passed.
+- Checkpoint J: this verification report is complete for implementation handoff.
