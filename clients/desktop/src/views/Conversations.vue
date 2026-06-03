@@ -5,7 +5,7 @@
       <nav class="sidebar-nav">
         <button class="sidebar-btn active" title="会话"><i class="el-icon-chat-dot-round"></i></button>
         <button class="sidebar-btn" title="智能体" @click="$router.push('/agents')"><i class="el-icon-user"></i></button>
-        <button class="sidebar-btn" title="工具" disabled><i class="el-icon-s-tools"></i></button>
+        <button class="sidebar-btn" title="工具" @click="$router.push('/tools')"><i class="el-icon-s-tools"></i></button>
         <button class="sidebar-btn" title="设置" @click="$router.push('/settings')"><i class="el-icon-setting"></i></button>
       </nav>
       <button class="sidebar-user" title="退出登录" @click="logout"><i class="el-icon-switch-button"></i></button>

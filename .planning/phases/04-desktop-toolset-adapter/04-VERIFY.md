@@ -50,3 +50,78 @@ The user expanded the desired outcome beyond the initial Phase 04 scope. Phase 0
 - Provider config create/test/save/enable/disable/delete.
 - Runtime execution remains in backend/sandbox/provider runtime; Electron does not directly execute npx, MCP servers, Docker, scripts, or built-in Tools.
 
+## Checkpoint B: Desktop API Wrappers
+
+### Implemented
+
+- Added `clients/desktop/src/api/capabilities.js`.
+- Added `clients/desktop/src/api/toolsets.js`.
+- Added compatibility re-export modules:
+  - `clients/desktop/src/api/tools.js`
+  - `clients/desktop/src/api/upload.js`
+- Exported the shared desktop `request()` function from `clients/desktop/src/services/api.js` so desktop API wrappers use the same server URL and auth-token behavior as the existing desktop client.
+
+### Covered API Families
+
+- Capability list/detail/version/assets/audits/delete impact.
+- Skill creation and version creation.
+- Import preview/confirm and MCP manifest import.
+- Provider config create/update/test/enable/disable/delete.
+- Agent capability binding/list/delete/update.
+- Toolset category list/create/update/delete.
+
+## Checkpoint C: Desktop Toolset Entry
+
+### Implemented
+
+- Added desktop route `/tools`.
+- Added `clients/desktop/src/views/Tools.vue` using the Web Toolset page as the functional baseline.
+- Added `clients/desktop/src/components/Sidebar/index.vue` so the Toolset page has the same desktop sidebar navigation.
+- Enabled Tools navigation from desktop Conversations, Agents, Settings, and the new Sidebar component.
+- Registered Element UI globally in `clients/desktop/src/main.js`, because the migrated Toolset management UI uses Element dialogs, tables, tabs, forms, alerts, tags, and loading directives.
+
+### Management Workflows Present
+
+- Category-first navigation.
+- Skill/MCP/Plugin/Tool tabs.
+- Capability cards and detail panel.
+- New Skill Markdown.
+- Skill Markdown version edit.
+- Markdown file/text import.
+- zip bundle import.
+- npx import preview/confirm.
+- MCP manifest preview/confirm.
+- Security audit preview/detail.
+- High-risk expert confirmation.
+- User capability delete with impact preview.
+- Provider config create/test/save/enable/disable/delete.
+
+## Checkpoint D: Desktop Agent Binding UI
+
+### Implemented
+
+- Updated `clients/desktop/src/views/Agents.vue` to use capability binding as the primary toolset UX.
+- Agent create/edit now loads:
+  - toolset categories,
+  - bindable capabilities,
+  - existing Agent capability bindings.
+- Agent create/edit can add Skill/MCP/Plugin/Tool bindings with pinned versions.
+- Existing bindings can be removed through the real `DELETE /api/agents/<agent_id>/capabilities/<binding_id>` API.
+- Save payload now includes `capability_bindings` while preserving provider selection and legacy `tool_ids` compatibility metadata.
+
+## Checkpoint D2: Desktop Management Workflows
+
+### Implemented
+
+- Desktop Tools page exposes the same core management flows as Web through backend APIs.
+- Electron still does not directly execute npx, MCP servers, Docker, scripts, or built-in Tools.
+
+## Desktop Build Check
+
+- Command: `node "G:\software\Node\node_modules\npm\bin\npm-cli.js" run build` in `clients/desktop`.
+- Result: passed.
+- Notes:
+  - Vite reports the usual chunk-size warning for the large Element UI bundle.
+  - The build emitted `Tools-*.js` and `Tools-*.css`, proving the desktop Toolset route/page compiles.
+  - Dependency installation required calling the real npm CLI directly because the local npm shim points to a missing AppData npm path.
+  - `npm install` reported 11 dependency audit issues in the existing Electron/Vue2 dependency tree; this was not fixed in this checkpoint because it may require dependency upgrades outside the Toolset feature scope.
