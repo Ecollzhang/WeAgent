@@ -270,14 +270,14 @@ Preferred fixtures:
 
 ## Success Criteria
 
-- [ ] Desktop has a usable toolset entry.
-- [ ] Desktop Agent create/edit supports capability binding.
-- [ ] Desktop-originated sessions generate `.weagent/*`.
-- [ ] Codex provider evidence proves capability/MCP injection.
-- [ ] Claude provider evidence proves capability context injection.
-- [ ] Markdown/zip/npx/MCP import flows are available from desktop.
-- [ ] Audit preview/detail and provider config test flows are available from desktop.
-- [ ] At least one Skill behavior is visible in output or logs.
-- [ ] At least one Tool/MCP binding is visible in index/config/call record.
-- [ ] Desktop client does not directly execute tools.
-- [ ] Verification report is complete.
+- [x] Desktop has a usable toolset entry.
+- [x] Desktop Agent create/edit supports capability binding.
+- [x] Desktop-originated sessions generate `.weagent/*`.
+- [x] Codex provider evidence proves capability/MCP injection.
+- [x] Claude provider evidence proves capability context injection.
+- [x] Markdown/zip/npx/MCP import flows are available from desktop.
+- [x] Audit preview/detail and provider config test flows are available from desktop.
+- [x] At least one Skill behavior is visible in output or logs.
+- [x] At least one Tool/MCP binding is visible in index/config/call record.
+- [x] Desktop client does not directly execute tools.
+- [x] Verification report is complete.

@@ -2,22 +2,22 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
+status: verified
 last_updated: "2026-06-03T00:00:00.000Z"
 last_activity: 2026-06-03
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Planning State
 
 **Project:** WeAgent
 **Current branch:** combine/toolset_v1.1.0
-**Status:** Phase 04 planned
+**Status:** Phase 04 verified
 **Last activity:** 2026-06-03
 
 ## Accumulated Context
@@ -52,4 +52,4 @@ progress:
 - Frontend verification: `npm run build` passed with asset-size warnings only; frontend contract tests passed.
 - Docker smoke: rebuilt `weagent-sandbox:latest`, started a temporary container, verified `/api/health`, `.weagent/*` projection, Agent creation, and Agent skill-index reads.
 - Details are recorded in `.planning/phases/03-toolset/03-VERIFY.md`.
-- Phase 04 SPEC/PLAN have been created in `.planning/phases/04-desktop-toolset-adapter/`; implementation verification is still pending.
+- Phase 04 verified: desktop Toolset management UI, Agent capability binding, import/audit/provider-config flows, Codex/Claude runtime injection tests, backend full tests, Web build, and desktop build all passed.

@@ -1,7 +1,7 @@
 # Phase 04: Desktop Toolset Adapter - SPEC
 
 **Created:** 2026-06-03
-**Status:** Ready for planning
+**Status:** Verified
 **Base branch:** `combine/toolset_v1.1.0`
 **Target branch:** `combine/toolset_v1.1.0`
 **Depends on:** Phase 03 Toolset Desktop Merge
@@ -112,24 +112,24 @@
 
 ## Acceptance Criteria
 
-- [ ] 桌面端侧边栏工具入口可用。
-- [ ] 桌面端工具集入口按类别和 Skill/MCP/Plugin/Tool 展示能力。
-- [ ] 桌面端 Agent 创建时可以绑定 capability，默认固定版本。
-- [ ] 桌面端 Agent 编辑时可以加载、增加、移除并保存 capability binding。
-- [ ] 桌面端可以新建 Skill，并编辑用户 Skill Markdown 版本。
-- [ ] 桌面端可以从 Markdown、zip bundle、npx、MCP manifest 生成导入预览并确认入库。
-- [ ] 桌面端导入预览和详情页可以展示安全审计，且高风险导入需要专家确认原因。
-- [ ] 桌面端可以对需配置 Tool 创建、测试、保存、启用、停用 provider config。
-- [ ] 桌面端可以删除用户创建/导入的能力，并展示删除影响。
-- [ ] 旧式 `tool_ids` 与新 capability binding 的关系明确，不再让用户误以为空壳 Tool 可直接运行。
-- [ ] 桌面端发起会话后生成 `.weagent/*` runtime projection。
-- [ ] Codex smoke 证明绑定 MCP/Skill/Tool 信息被 provider runtime 读取。
-- [ ] Claude smoke 证明绑定 Skill/Tool/MCP 索引进入 provider context。
-- [ ] 至少一个 Skill 测试能力能在 Agent 回复或运行记录中体现。
-- [ ] 至少一个 MCP 配置能在 Codex/Claude runtime 配置或日志中被审查。
-- [ ] 至少一个 built-in Tool 绑定能进入 `tool-index.json`/permissions，并在可执行路径中留下调用记录；若不触发真实执行，需说明限制。
-- [ ] 桌面端不直接执行 npx/MCP/Docker/脚本。
-- [ ] 生成 Phase 04 验收报告，包含投影证据、运行证据、行为证据。
+- [x] 桌面端侧边栏工具入口可用。
+- [x] 桌面端工具集入口按类别和 Skill/MCP/Plugin/Tool 展示能力。
+- [x] 桌面端 Agent 创建时可以绑定 capability，默认固定版本。
+- [x] 桌面端 Agent 编辑时可以加载、增加、移除并保存 capability binding。
+- [x] 桌面端可以新建 Skill，并编辑用户 Skill Markdown 版本。
+- [x] 桌面端可以从 Markdown、zip bundle、npx、MCP manifest 生成导入预览并确认入库。
+- [x] 桌面端导入预览和详情页可以展示安全审计，且高风险导入需要专家确认原因。
+- [x] 桌面端可以对需配置 Tool 创建、测试、保存、启用、停用 provider config。
+- [x] 桌面端可以删除用户创建/导入的能力，并展示删除影响。
+- [x] 旧式 `tool_ids` 与新 capability binding 的关系明确，不再让用户误以为空壳 Tool 可直接运行。
+- [x] 桌面端发起会话后生成 `.weagent/*` runtime projection。
+- [x] Codex smoke 证明绑定 MCP/Skill/Tool 信息被 provider runtime 读取。
+- [x] Claude smoke 证明绑定 Skill/Tool/MCP 索引进入 provider context。
+- [x] 至少一个 Skill 测试能力能在 Agent 回复或运行记录中体现。
+- [x] 至少一个 MCP 配置能在 Codex/Claude runtime 配置或日志中被审查。
+- [x] 至少一个 built-in Tool 绑定能进入 `tool-index.json`/permissions，并在可执行路径中留下调用记录；若不触发真实执行，需说明限制。
+- [x] 桌面端不直接执行 npx/MCP/Docker/脚本。
+- [x] 生成 Phase 04 验收报告，包含投影证据、运行证据、行为证据。
 
 ## Follow-up Scope
 
