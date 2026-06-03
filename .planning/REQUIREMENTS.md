@@ -57,3 +57,21 @@ REQ-24: Hide or exclude deferred/non-configurable built-in Tools from Web displa
 REQ-25: Keep desktop `.planning` Phase 01/02 as the top-level planning history and add toolset as Phase 03.
 
 REQ-26: Verify the merged branch with focused backend tests, frontend build, and Docker sandbox smoke when Docker is available.
+
+## Phase 4: Desktop Toolset Adapter
+
+REQ-27: Add a desktop Toolset/Capability entry that shows category-first navigation and Skill/MCP/Plugin/Tool capability groups without exposing hidden, deferred, or unbindable empty-shell capabilities.
+
+REQ-28: Make desktop Agent create/edit support capability bindings with pinned versions, including loading, adding, removing, saving, and refreshing bound capabilities.
+
+REQ-29: Keep tool execution inside backend/sandbox/provider runtime; the Electron client may select, save, display, and trigger conversations but must not directly execute npx, MCP servers, Docker, scripts, or built-in Tools.
+
+REQ-30: Prove that desktop-originated Agent sessions generate canonical `.weagent/*` runtime projection files for the selected Agent and its bound capabilities.
+
+REQ-31: Prove that Codex provider runtime reads desktop-bound Skill/Tool/MCP information, including MCP config when applicable, from the generated capability projection.
+
+REQ-32: Prove that Claude provider runtime receives desktop-bound Skill/Tool/MCP capability index or bootstrap context from the generated capability projection.
+
+REQ-33: Produce auditable Phase 04 verification evidence across three layers: projection evidence, provider runtime evidence, and behavior or call-record evidence.
+
+REQ-34: Provide core desktop Toolset management through the same backend APIs as Web, including Skill creation/editing, Markdown/zip/npx/MCP manifest import, security audit preview/detail, user capability deletion, and provider config create/test/save/enable/disable flows, while keeping execution inside backend/sandbox/provider runtime.

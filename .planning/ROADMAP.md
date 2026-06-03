@@ -84,6 +84,36 @@
 - Minimal MCP runtime and built-in Tool call records preserved.
 - Verification report covering tests, build, and sandbox smoke.
 
+## Phase 4: Desktop Toolset Adapter
+
+**Goal:** Give the desktop client a Toolset/Capability management entry and prove that desktop-created Agent sessions really inject bound Skill, Tool, and MCP capabilities into Codex and Claude provider runtimes.
+
+**Requirements:** REQ-27, REQ-28, REQ-29, REQ-30, REQ-31, REQ-32, REQ-33, REQ-34
+
+**Canonical references:**
+
+- `.planning/phases/04-desktop-toolset-adapter/04-SPEC.md`
+- `.planning/phases/04-desktop-toolset-adapter/04-PLAN.md`
+- `.planning/phases/03-toolset/03-SPEC.md`
+- `.planning/phases/03-toolset/03-PLAN.md`
+- `clients/desktop/src/views/Agents.vue`
+- `clients/desktop/src/router/index.js`
+- `clients/desktop/src/services/api.js`
+- `backend/app/sandbox/container/providers/codex.py`
+- `backend/app/sandbox/container/providers/claude.py`
+- `backend/app/sandbox/container/capabilities.py`
+
+**Planned outputs:**
+
+- Desktop Toolset/Capability management entry with category-first navigation and Skill/MCP/Plugin/Tool tabs.
+- Desktop workflows for Skill Markdown creation/editing, Markdown/zip/npx/MCP manifest import, security audit preview/detail, capability deletion, and provider config test/save/enable/disable.
+- Desktop Agent create/edit support for capability binding with pinned versions.
+- Desktop API wrappers for toolset categories, capability list, and agent capability binding/unbinding.
+- Runtime smoke proving desktop-originated sessions generate `.weagent/*` projection.
+- Codex smoke proving MCP/Skill/Tool capability injection is visible in runtime config/context.
+- Claude smoke proving Skill/Tool/MCP capability index is visible in runtime context.
+- Verification report containing projection evidence, runtime evidence, and behavior/call evidence.
+
 ## Deferred
 
 - Full execution of arbitrary user-defined script Tools.
@@ -93,3 +123,4 @@
 - UI redesign for rich tool timeline.
 - Native provider session resume for Claude/Codex.
 - Interactive choice continuation protocol.
+- Full desktop arbitrary script Tool editor/executor and secret-vault management UI.

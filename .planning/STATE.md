@@ -2,23 +2,23 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verified
-last_updated: "2026-06-02T00:00:00.000Z"
-last_activity: 2026-06-02
+status: planning
+last_updated: "2026-06-03T00:00:00.000Z"
+last_activity: 2026-06-03
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 3
+  total_plans: 4
   completed_plans: 3
-  percent: 100
+  percent: 75
 ---
 
 # Planning State
 
 **Project:** WeAgent
 **Current branch:** combine/toolset_v1.1.0
-**Status:** Phase 03 verified
-**Last activity:** 2026-06-02
+**Status:** Phase 04 planned
+**Last activity:** 2026-06-03
 
 ## Accumulated Context
 
@@ -41,6 +41,9 @@ progress:
 - Web frontend toolset management is in scope; desktop client toolset UI is out of scope.
 - Desktop sandbox provider runtime, service proxy, and backend port remain authoritative.
 - Toolset capability projection, MCP runtime, provider config, and built-in Tool audit are attached to the desktop runtime instead of replacing it.
+- Phase 4 prioritizes desktop Toolset management entry plus runtime proof for Codex/Claude; core import/audit/provider-config flows are now in scope through backend APIs.
+- Electron client must not directly execute npx, MCP servers, Docker, scripts, or built-in Tools; execution stays in backend/sandbox/provider runtime.
+- Phase 4 verification must include projection evidence, provider runtime evidence, and behavior or call-record evidence.
 
 ## Latest Verification
 
@@ -49,3 +52,4 @@ progress:
 - Frontend verification: `npm run build` passed with asset-size warnings only; frontend contract tests passed.
 - Docker smoke: rebuilt `weagent-sandbox:latest`, started a temporary container, verified `/api/health`, `.weagent/*` projection, Agent creation, and Agent skill-index reads.
 - Details are recorded in `.planning/phases/03-toolset/03-VERIFY.md`.
+- Phase 04 SPEC/PLAN have been created in `.planning/phases/04-desktop-toolset-adapter/`; implementation verification is still pending.
