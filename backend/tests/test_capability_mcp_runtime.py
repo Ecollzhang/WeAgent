@@ -79,6 +79,8 @@ def _write_fixture_mcp_server(path: Path):
             import json
             import sys
 
+            initialized = False
+
             def respond(message):
                 sys.stdout.write(json.dumps(message) + "\\n")
                 sys.stdout.flush()
@@ -89,6 +91,8 @@ def _write_fixture_mcp_server(path: Path):
                 request_id = request.get("id")
                 params = request.get("params") or {}
                 if method == "initialize":
+                    if not params.get("protocolVersion") or not params.get("clientInfo"):
+                        continue
                     respond({
                         "jsonrpc": "2.0",
                         "id": request_id,
@@ -97,7 +101,16 @@ def _write_fixture_mcp_server(path: Path):
                             "serverInfo": {"name": "fixture-mcp", "version": "1.0.0"},
                         },
                     })
+                elif method == "notifications/initialized":
+                    initialized = True
                 elif method == "tools/list":
+                    if not initialized:
+                        respond({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {"code": -32000, "message": "Client not initialized"},
+                        })
+                        continue
                     respond({
                         "jsonrpc": "2.0",
                         "id": request_id,

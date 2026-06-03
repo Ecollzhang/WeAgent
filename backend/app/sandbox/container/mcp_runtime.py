@@ -39,7 +39,7 @@ class McpRuntime:
     """Start and call manifest-backed MCP servers inside a sandbox workspace."""
 
     def __init__(self, workspace_root: str = DEFAULT_WORKSPACE_ROOT,
-                 request_timeout: float = 30):
+                 request_timeout: float = 90):
         self.workspace_root = workspace_root
         self.request_timeout = request_timeout
         self._servers: dict[str, _McpServer] = {}
@@ -82,7 +82,15 @@ class McpRuntime:
         self._start_reader_threads(server)
 
         try:
-            initialized = self._send_request(runtime_id, "initialize", {})
+            initialized = self._send_request(runtime_id, "initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "weagent-sandbox",
+                    "version": "0.1.0",
+                },
+            })
+            self._send_notification(runtime_id, "notifications/initialized", {})
         except Exception as exc:
             self.stop_server(runtime_id)
             return {"status": "error", "error": f"MCP initialize failed: {exc}"}
@@ -306,6 +314,20 @@ class McpRuntime:
 
         stderr = "\n".join(server.stderr_lines[-20:])
         raise TimeoutError(f"MCP request timed out: {method}. stderr: {stderr}")
+
+    def _send_notification(self, runtime_id: str, method: str, params: dict):
+        server = self._servers.get(runtime_id)
+        if not server or server.process.poll() is not None:
+            raise RuntimeError(f"MCP server not running: {runtime_id}")
+        if not server.process.stdin:
+            raise RuntimeError("MCP server stdin is closed")
+        notification = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params or {},
+        }
+        server.process.stdin.write(json.dumps(notification, ensure_ascii=False) + "\n")
+        server.process.stdin.flush()
 
     def _append_call_record(self, agent_id: str, capability: dict, runtime_id: str,
                             tool_name: str, args: dict, run_id: Optional[str],

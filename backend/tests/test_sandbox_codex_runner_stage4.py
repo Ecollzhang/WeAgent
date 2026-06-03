@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from app.sandbox.container.agent import AgentRuntime
+from app.sandbox.container.capabilities import write_projection
 from app.sandbox.container.providers import CodexRunner, ProviderRunnerFactory
 
 
@@ -82,6 +83,75 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn('base_url = "http://127.0.0.1:4446/v1"', config)
         self.assertEqual({"OPENAI_API_KEY": "sk-test"}, auth)
         self.assertTrue(runtime.provider_runner.runnable)
+
+    def test_setup_writes_bound_mcp_servers_into_codex_config(self):
+        runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
+        projection = {
+            "schema_version": "weagent.capability_projection/v1",
+            "session_id": "session-1",
+            "capabilities": {},
+            "skills": {},
+            "mcp": {
+                "mcp-memory": {
+                    "runtime_id": "mcp-memory",
+                    "capability_id": "mcp-memory",
+                    "version_id": "version-1",
+                    "name": "Memory MCP",
+                    "manifest": {
+                        "entry": {
+                            "command": "npx",
+                            "args": ["--yes", "@modelcontextprotocol/server-memory"],
+                        }
+                    },
+                    "permissions": {"required": ["run_command"], "optional": []},
+                }
+            },
+            "plugins": {},
+            "tools": {},
+            "agents": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "capabilities": [
+                        {
+                            "runtime_id": "mcp-memory",
+                            "capability_id": "mcp-memory",
+                            "capability_version_id": "version-1",
+                            "type": "mcp",
+                            "name": "Memory MCP",
+                            "granted_permissions": ["run_command"],
+                            "manifest": {
+                                "entry": {
+                                    "command": "npx",
+                                    "args": ["--yes", "@modelcontextprotocol/server-memory"],
+                                }
+                            },
+                        }
+                    ],
+                    "skill_index": [],
+                    "tool_index": [],
+                    "permissions": {"agent_id": "agent-1", "grants": []},
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "coder")
+            write_projection(projection, workspace_root=tmpdir)
+            with patch("app.sandbox.container.providers.codex.log_agent"), patch.dict("os.environ", {
+                "CODEX_API_KEY": "sk-test",
+                "CODEX_BASE_URL": "https://api.openai.com/v1",
+                "CODEX_MODEL": "gpt-5.1-codex",
+                "WEAGENT_WORKSPACE_ROOT": tmpdir,
+            }, clear=True):
+                runtime.provider_runner.setup()
+
+            home_dir = runtime.provider_runner.home_dir
+            with open(os.path.join(home_dir, "config.toml"), "r", encoding="utf-8") as f:
+                config = f.read()
+
+        self.assertIn("[mcp_servers.memory_mcp]", config)
+        self.assertIn('command = "npx"', config)
+        self.assertIn('args = ["--yes", "@modelcontextprotocol/server-memory"]', config)
 
     def test_setup_fails_fast_without_codex_credentials(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
