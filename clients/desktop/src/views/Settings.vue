@@ -6,6 +6,7 @@
         <button class="sidebar-btn" title="会话" @click="$router.push('/conversations')"><i class="el-icon-chat-dot-round"></i></button>
         <button class="sidebar-btn" title="智能体" @click="$router.push('/agents')"><i class="el-icon-user"></i></button>
         <button class="sidebar-btn" title="工具" disabled><i class="el-icon-s-tools"></i></button>
+        <button class="sidebar-btn" title="我的收藏" @click="$router.push('/favorites')"><i class="el-icon-collection-tag"></i></button>
         <button class="sidebar-btn active" title="设置"><i class="el-icon-setting"></i></button>
       </nav>
       <button class="sidebar-user" title="退出登录" @click="logout"><i class="el-icon-switch-button"></i></button>

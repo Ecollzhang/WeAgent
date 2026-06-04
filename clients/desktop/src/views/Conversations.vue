@@ -6,6 +6,7 @@
         <button class="sidebar-btn active" title="会话"><i class="el-icon-chat-dot-round"></i></button>
         <button class="sidebar-btn" title="智能体" @click="$router.push('/agents')"><i class="el-icon-user"></i></button>
         <button class="sidebar-btn" title="工具" disabled><i class="el-icon-s-tools"></i></button>
+        <button class="sidebar-btn" title="我的收藏" @click="$router.push('/favorites')"><i class="el-icon-collection-tag"></i></button>
         <button class="sidebar-btn" title="设置" @click="$router.push('/settings')"><i class="el-icon-setting"></i></button>
       </nav>
       <button class="sidebar-user" title="退出登录" @click="logout"><i class="el-icon-switch-button"></i></button>
@@ -68,7 +69,10 @@
             </template>
           </div>
           <div class="item-content">
-            <div class="item-title">{{ conv.title || '未命名会话' }}</div>
+            <div class="item-title-row">
+              <div class="item-title">{{ conv.title || '未命名会话' }}</div>
+              <i v-if="conv.is_favorite" class="el-icon-star-on item-favorite"></i>
+            </div>
             <div class="item-preview">
               <span v-if="conv.last_message">{{ conv.last_message.content }}</span>
               <span v-else class="no-messages">暂无消息</span>
@@ -90,12 +94,19 @@
           <span>{{ currentConversation ? participantCount(currentConversation) + ' 个参与者' : '请选择或创建一个会话' }}</span>
         </div>
         <div class="header-actions">
-          <button disabled><i class="el-icon-search"></i></button>
+          <button :disabled="!currentConversation" title="搜索消息" @click="toggleSearchPanel"><i class="el-icon-search"></i></button>
           <button :disabled="!currentConversation" title="工作目录" @click="handleOpenWorkspace()"><i class="el-icon-folder-opened"></i></button>
           <button disabled><i class="el-icon-monitor"></i></button>
           <button :disabled="!currentConversation" title="上传文件" @click="handleOpenAttachments()"><i class="el-icon-upload2"></i></button>
-          <button disabled><i class="el-icon-star-off"></i></button>
-          <button disabled><i class="el-icon-time"></i></button>
+          <button
+            :disabled="!currentConversation"
+            :class="{ 'favorite-active': currentConversation && currentConversation.is_favorite }"
+            title="收藏"
+            @click="toggleFavorite"
+          >
+            <i :class="currentConversation && currentConversation.is_favorite ? 'el-icon-star-on' : 'el-icon-star-off'"></i>
+          </button>
+          <button :disabled="!currentConversation" title="历史" @click="toggleHistoryPanel"><i class="el-icon-time"></i></button>
           <div class="more-menu-wrap">
             <button :disabled="!currentConversation" @click="showMoreMenu = !showMoreMenu"><i class="el-icon-more"></i></button>
             <div v-if="showMoreMenu && currentConversation" class="more-menu">
@@ -107,6 +118,56 @@
           </div>
         </div>
       </header>
+
+      <div v-if="detailPanelVisible" class="desktop-detail-panel">
+        <div class="desktop-detail-head">
+          <div>
+            <i :class="detailPanelMode === 'search' ? 'el-icon-search' : 'el-icon-time'"></i>
+            <span>{{ detailPanelMode === 'search' ? '搜索消息' : '对话历史' }}</span>
+          </div>
+          <button type="button" @click="closeDetailPanel"><i class="el-icon-close"></i></button>
+        </div>
+        <div v-if="detailPanelMode === 'search'" class="desktop-detail-body">
+          <div class="desktop-panel-search">
+            <i class="el-icon-search"></i>
+            <input
+              ref="messageSearchInput"
+              v-model.trim="messageSearchQuery"
+              placeholder="输入关键词搜索消息"
+              @keydown.enter.prevent="jumpToFirstSearchResult"
+            />
+          </div>
+          <div class="desktop-panel-meta">{{ messageSearchResults.length }} 条结果</div>
+          <div v-if="messageSearchResults.length" class="desktop-panel-list">
+            <button
+              v-for="item in messageSearchResults"
+              :key="item.message.id"
+              type="button"
+              class="desktop-panel-item"
+              @click="jumpToMessage(item.message.id)"
+            >
+              <strong>{{ item.title }}</strong>
+              <span>{{ item.snippet }}</span>
+            </button>
+          </div>
+          <div v-else class="desktop-panel-empty">没有匹配的消息</div>
+        </div>
+        <div v-else class="desktop-detail-body">
+          <div v-if="historyItems.length" class="desktop-panel-list">
+            <button
+              v-for="item in historyItems"
+              :key="item.message.id"
+              type="button"
+              class="desktop-panel-item"
+              @click="jumpToMessage(item.message.id)"
+            >
+              <strong>{{ item.title }}</strong>
+              <span>{{ item.snippet }}</span>
+            </button>
+          </div>
+          <div v-else class="desktop-panel-empty">暂无用户问题</div>
+        </div>
+      </div>
 
       <div ref="messagesContainer" class="messages-container live-messages">
         <div v-if="messagesLoading" class="empty-messages">
@@ -131,8 +192,9 @@
           <div
             v-for="message in currentMessages"
             :key="message.id"
+            :ref="'message-' + message.id"
             class="message-row desktop-message-row"
-            :class="{ own: isOwnMessage(message) }"
+            :class="{ own: isOwnMessage(message), highlighted: highlightedMessageId === message.id }"
           >
             <div class="message-avatar" :style="messageAvatarStyle(message)">
               <img v-if="messageAvatar(message)" :src="messageAvatar(message)" class="message-avatar-img" />
@@ -374,6 +436,7 @@ import {
   getWorkspaceFileUrl,
   readAgentFile,
   sendMessage,
+  updateConversationFavorite,
   uploadConversationAttachment,
 } from '../services/api'
 import { backendUrl, getServerUrl } from '../services/config'
@@ -413,6 +476,11 @@ export default {
       mentionQuery: '',
       mentionIndex: 0,
       selectedMentions: [],
+      detailPanelVisible: false,
+      detailPanelMode: 'search',
+      messageSearchQuery: '',
+      highlightedMessageId: '',
+      highlightTimer: null,
       attachmentsVisible: false,
       attachmentsLoading: false,
       attachments: [],
@@ -448,6 +516,31 @@ export default {
     },
     currentMessages() {
       return this.messagesByConversation[this.currentId] || []
+    },
+    messageSearchResults() {
+      const query = this.messageSearchQuery.trim().toLowerCase()
+      if (!query) return []
+      return this.currentMessages
+        .map(message => {
+          const text = this.collectMessageText(message)
+          return { message, text }
+        })
+        .filter(item => item.text.toLowerCase().includes(query))
+        .map(item => ({
+          message: item.message,
+          title: this.buildMessageTitle(item.message),
+          snippet: this.buildSearchSnippet(item.text, query),
+        }))
+        .slice(0, 50)
+    },
+    historyItems() {
+      return this.currentMessages
+        .filter(message => message.sender_type === 'user')
+        .map(message => ({
+          message,
+          title: this.buildMessageTitle(message),
+          snippet: this.buildSearchSnippet(this.collectMessageText(message), ''),
+        }))
     },
     currentSessionAgents() {
       const participants = (this.currentConversation && this.currentConversation.participants_info) || []
@@ -496,6 +589,9 @@ export default {
         .map(agent => agent.name)
       this.newConversation.title = [this.profile.username || '我', ...names].join('、')
     },
+    '$route.query.conversation_id': function handleConversationQueryChange() {
+      this.selectConversationFromRoute()
+    },
   },
   async created() {
     this.serverUrl = await getServerUrl()
@@ -505,6 +601,7 @@ export default {
   },
   beforeDestroy() {
     if (this.currentId) socketClient.leaveConversation(this.currentId)
+    window.clearTimeout(this.highlightTimer)
     this.unregisterSocketHandlers()
   },
   methods: {
@@ -533,6 +630,7 @@ export default {
       try {
         const response = await getConversations()
         this.conversations = Array.isArray(response.data) ? response.data : []
+        if (await this.selectConversationFromRoute()) return
         if (!this.currentId && this.conversations.length) {
           await this.selectConversation(this.conversations[0])
         }
@@ -607,9 +705,135 @@ export default {
       this.currentId = conversation.id
       this.activeTab = 'chat'
       this.showMoreMenu = false
+      this.closeDetailPanel()
       this.resetMentionState()
       socketClient.joinConversation(conversation.id)
       await this.loadMessages(conversation.id)
+    },
+    async selectConversationFromRoute() {
+      const id = this.$route && this.$route.query && this.$route.query.conversation_id
+      if (!id) return false
+      const target = this.conversations.find(item => String(item.id) === String(id))
+      if (!target) return false
+      if (String(this.currentId) !== String(target.id)) {
+        await this.selectConversation(target)
+      }
+      return true
+    },
+    updateLocalConversation(conversation) {
+      if (!conversation || !conversation.id) return
+      const index = this.conversations.findIndex(item => String(item.id) === String(conversation.id))
+      if (index >= 0) {
+        this.$set(this.conversations, index, { ...this.conversations[index], ...conversation })
+      }
+    },
+    async toggleFavorite() {
+      if (!this.currentConversation) return
+      const previous = Boolean(this.currentConversation.is_favorite)
+      const nextValue = !previous
+      const optimistic = { ...this.currentConversation, is_favorite: nextValue }
+      this.updateLocalConversation(optimistic)
+      this.error = ''
+      try {
+        const response = await updateConversationFavorite(this.currentConversation.id, nextValue)
+        const payload = response && response.data && (response.data.conversation || response.data)
+        const saved = payload && payload.id ? payload : optimistic
+        if (saved.is_favorite === undefined) saved.is_favorite = nextValue
+        this.updateLocalConversation(saved)
+      } catch (error) {
+        this.updateLocalConversation({ ...optimistic, is_favorite: previous })
+        this.handleRequestError(error, nextValue ? '收藏会话失败' : '取消收藏失败')
+      }
+    },
+    toggleSearchPanel() {
+      if (!this.currentConversation) return
+      if (this.detailPanelVisible && this.detailPanelMode === 'search') {
+        this.closeDetailPanel()
+        return
+      }
+      this.detailPanelMode = 'search'
+      this.detailPanelVisible = true
+      this.$nextTick(() => {
+        if (this.$refs.messageSearchInput) this.$refs.messageSearchInput.focus()
+      })
+    },
+    toggleHistoryPanel() {
+      if (!this.currentConversation) return
+      if (this.detailPanelVisible && this.detailPanelMode === 'history') {
+        this.closeDetailPanel()
+        return
+      }
+      this.detailPanelMode = 'history'
+      this.detailPanelVisible = true
+    },
+    closeDetailPanel() {
+      this.detailPanelVisible = false
+      this.highlightedMessageId = ''
+    },
+    jumpToFirstSearchResult() {
+      if (this.messageSearchResults.length) {
+        this.jumpToMessage(this.messageSearchResults[0].message.id)
+      }
+    },
+    jumpToMessage(messageId) {
+      if (!messageId) return
+      this.$nextTick(() => {
+        const ref = this.$refs[`message-${messageId}`]
+        const element = Array.isArray(ref) ? ref[0] : ref
+        if (!element) return
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        this.highlightedMessageId = messageId
+        window.clearTimeout(this.highlightTimer)
+        this.highlightTimer = window.setTimeout(() => {
+          if (this.highlightedMessageId === messageId) this.highlightedMessageId = ''
+        }, 1800)
+      })
+    },
+    collectMessageText(message) {
+      if (!message) return ''
+      const chunks = [
+        message.content,
+        message.raw_output,
+        message.sender_name,
+        message.status,
+      ]
+      const visit = value => {
+        if (value === null || value === undefined) return
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+          chunks.push(String(value))
+          return
+        }
+        if (Array.isArray(value)) {
+          value.forEach(visit)
+          return
+        }
+        if (typeof value === 'object') {
+          ;['title', 'name', 'filename', 'path', 'url', 'content', 'text', 'summary', 'status'].forEach(key => {
+            if (value[key] !== undefined) visit(value[key])
+          })
+          if (value.data) visit(value.data)
+          if (value.detail) visit(value.detail)
+        }
+      }
+      visit(message.elements)
+      visit(message.meta && message.meta.events)
+      return chunks.filter(Boolean).join('\n')
+    },
+    buildMessageTitle(message) {
+      const prefix = this.isOwnMessage(message) ? '我' : this.senderName(message)
+      const text = this.collectMessageText(message).replace(/\s+/g, ' ').trim()
+      return `${prefix}: ${text ? text.slice(0, 32) : '空消息'}${text.length > 32 ? '...' : ''}`
+    },
+    buildSearchSnippet(text, query) {
+      const value = String(text || '').replace(/\s+/g, ' ').trim()
+      if (!value) return '暂无可预览内容'
+      if (!query) return `${value.slice(0, 80)}${value.length > 80 ? '...' : ''}`
+      const lower = value.toLowerCase()
+      const index = lower.indexOf(String(query || '').toLowerCase())
+      if (index < 0) return `${value.slice(0, 80)}${value.length > 80 ? '...' : ''}`
+      const start = Math.max(0, index - 24)
+      const end = Math.min(value.length, index + String(query).length + 56)
+      return `${start > 0 ? '...' : ''}${value.slice(start, end)}${end < value.length ? '...' : ''}`
     },
     async loadMessages(conversationId) {
       if (!conversationId) return

@@ -16,6 +16,12 @@ export function deleteConversation(id) {
   return service.delete(`/conversations/${id}`)
 }
 
+export function updateConversationFavorite(id, isFavorite) {
+  return service.post(`/conversations/${id}/favorite`, {
+    is_favorite: isFavorite,
+  })
+}
+
 export function addParticipant(conversationId, data) {
   return service.post(`/conversations/${conversationId}/participants`, data)
 }

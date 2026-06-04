@@ -102,6 +102,13 @@ export default {
   overflow-x: auto;
   font-size: 13px;
   line-height: 1.5;
+  text-align: left;
+  white-space: pre;
+}
+
+.artifact-content pre code {
+  text-align: left;
+  white-space: pre;
 }
 
 .preview-iframe {

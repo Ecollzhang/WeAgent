@@ -60,6 +60,24 @@ def get_conversation(conversation_id):
     return success_response(result)
 
 
+@conversation_bp.route('/<conversation_id>/favorite', methods=['POST', 'PATCH'])
+@jwt_required()
+def update_conversation_favorite(conversation_id):
+    """Update conversation favorite state."""
+    user_id = get_jwt_identity()
+    data = request.json or {}
+    result, error = conversation_service.set_conversation_favorite(
+        conversation_id,
+        user_id,
+        data.get('is_favorite', True),
+    )
+
+    if error:
+        return error_response(error, code=400)
+
+    return success_response(result, message='Conversation updated')
+
+
 @conversation_bp.route('/<conversation_id>', methods=['DELETE'])
 @jwt_required()
 def delete_conversation(conversation_id):

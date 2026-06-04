@@ -478,6 +478,7 @@ export default {
       this.$store.dispatch('conversation/fetchConversations'),
       this.$store.dispatch('agent/fetchAgents'),
     ])
+    this.selectConversationFromRoute()
   },
     beforeDestroy() {
       if (this.currentConversation?.id) {
@@ -510,8 +511,20 @@ export default {
       // Update type
       this.newConversation.type = ids.length > 1 ? 'group' : 'single'
     },
+    '$route.query.conversation_id'() {
+      this.selectConversationFromRoute()
+    },
   },
   methods: {
+    selectConversationFromRoute() {
+      const conversationId = this.$route.query.conversation_id
+      if (!conversationId) return
+      const conversation = this.conversations.find(item => item.id === conversationId)
+      if (!conversation) return
+      if (this.currentConversation?.id === conversationId) return
+      this.handleSelectConversation(conversation)
+    },
+
     handleSelectConversation(conversation) {
       const oldId = this.currentConversation?.id
       if (oldId && oldId !== conversation.id) {
@@ -760,7 +773,20 @@ export default {
     },
 
     handleToggleStar() {
-      this.$message.info('收藏功能即将上线')
+      if (!this.currentConversation) return
+      const nextValue = !this.currentConversation.is_favorite
+      this.$store.dispatch('conversation/toggleConversationFavorite', {
+        conversationId: this.currentConversation.id,
+        isFavorite: nextValue,
+      }).then(response => {
+        if (response.code === 200) {
+          this.$message.success(nextValue ? '已收藏' : '已取消收藏')
+        } else {
+          this.$message.error(response.message || '收藏操作失败')
+        }
+      }).catch(() => {
+        this.$message.error('收藏操作失败')
+      })
     },
 
     handleOpenHistory() {

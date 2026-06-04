@@ -49,7 +49,10 @@
           </template>
         </div>
         <div class="item-content">
-          <div class="item-title">{{ conv.title }}</div>
+          <div class="item-title-row">
+            <div class="item-title">{{ conv.title }}</div>
+            <i v-if="conv.is_favorite" class="el-icon-star-on item-favorite"></i>
+          </div>
           <div class="item-preview" v-if="conv.last_message">
             {{ conv.last_message.content }}
           </div>
@@ -260,6 +263,13 @@ export default {
   min-width: 0;
 }
 
+.item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .item-title {
   font-size: 12px;
   font-weight: 500;
@@ -267,6 +277,11 @@ export default {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.item-favorite {
+  color: #e6a23c;
+  flex-shrink: 0;
 }
 
 .item-preview {

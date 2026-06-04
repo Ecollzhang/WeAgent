@@ -1204,6 +1204,7 @@ export default {
   border-radius: 8px;
   background: #f8fbff;
   max-width: 100%;
+  width: 100%;
 }
 
 .el-error {
@@ -1244,6 +1245,7 @@ export default {
   line-height: 1.68;
   color: #1e293b;
   max-width: 100%;
+  width: 100%;
 }
 
 .result-content :deep(p) {
@@ -1519,6 +1521,8 @@ export default {
   color: #e5e7eb;
   font-size: 12px;
   line-height: 1.5;
+  text-align: left;
+  white-space: pre;
   overflow-x: auto;
   max-height: 360px;
   overflow-y: auto;
@@ -1526,6 +1530,7 @@ export default {
 
 .code-body code {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  text-align: left;
   white-space: pre;
 }
 
@@ -2098,7 +2103,8 @@ export default {
   border-radius: 6px;
   font-size: 12px;
   line-height: 1.5;
-  white-space: pre-wrap;
+  text-align: left;
+  white-space: pre;
 }
 
 .streaming-line {
@@ -2258,5 +2264,15 @@ export default {
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.message-bubble :deep(pre),
+.message-bubble :deep(pre code),
+.message-bubble .code-body,
+.message-bubble .code-body code,
+.message-bubble .raw-output,
+.service-log-section pre {
+  text-align: left;
+  white-space: pre;
 }
 </style>

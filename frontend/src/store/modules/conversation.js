@@ -1,4 +1,5 @@
-import { getConversations, createConversation, deleteConversation } from '../../api/conversation'
+import Vue from 'vue'
+import { getConversations, createConversation, deleteConversation, updateConversationFavorite } from '../../api/conversation'
 
 const state = {
   conversations: [],
@@ -21,6 +22,16 @@ const mutations = {
   },
   ADD_CONVERSATION(state, conversation) {
     state.conversations.unshift(conversation)
+  },
+  UPDATE_CONVERSATION(state, conversation) {
+    const idx = state.conversations.findIndex(c => c.id === conversation.id)
+    if (idx !== -1) {
+      const next = { ...state.conversations[idx], ...conversation }
+      Vue.set(state.conversations, idx, next)
+    }
+    if (state.currentConversation && state.currentConversation.id === conversation.id) {
+      state.currentConversation = { ...state.currentConversation, ...conversation }
+    }
   },
   REMOVE_CONVERSATION(state, conversationId) {
     state.conversations = state.conversations.filter(c => c.id !== conversationId)
@@ -58,6 +69,14 @@ const actions = {
     const response = await deleteConversation(conversationId)
     if (response.code === 200) {
       commit('REMOVE_CONVERSATION', conversationId)
+    }
+    return response
+  },
+
+  async toggleConversationFavorite({ commit }, { conversationId, isFavorite }) {
+    const response = await updateConversationFavorite(conversationId, isFavorite)
+    if (response.code === 200) {
+      commit('UPDATE_CONVERSATION', response.data)
     }
     return response
   },

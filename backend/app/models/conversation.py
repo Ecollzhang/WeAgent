@@ -9,6 +9,7 @@ class Conversation(BaseModel):
     type = db.Column(db.Enum('single', 'group', name='conversation_type'),
                      nullable=False, default='single')
     owner_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    is_favorite = db.Column(db.Boolean, nullable=False, default=False)
     sandbox_session_id = db.Column(db.String(100), nullable=True, index=True)
     sandbox_container_id = db.Column(db.String(128), nullable=True)
     sandbox_host_port = db.Column(db.Integer, nullable=True)

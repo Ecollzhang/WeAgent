@@ -11,6 +11,7 @@ const routes = [
   { path: '/register', name: 'Register', component: () => import('../views/Register.vue') },
   { path: '/conversations', name: 'Conversations', component: () => import('../views/Conversations.vue') },
   { path: '/agents', name: 'Agents', component: () => import('../views/Agents.vue') },
+  { path: '/favorites', name: 'Favorites', component: () => import('../views/Favorites.vue') },
   { path: '/settings', name: 'Settings', component: () => import('../views/Settings.vue') },
 ]
 

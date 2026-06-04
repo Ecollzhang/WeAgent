@@ -8,12 +8,19 @@
         </span>
       </div>
       <div class="header-actions">
-        <el-button size="mini" icon="el-icon-search" type="text" @click="$emit('search-messages')" title="搜索"></el-button>
+        <el-button size="mini" icon="el-icon-search" type="text" @click="toggleSearchPanel" title="搜索"></el-button>
         <el-button size="mini" icon="el-icon-folder-opened" type="text" @click="$emit('open-workspace', 'workspace')" title="工作目录"></el-button>
         <el-button size="mini" icon="el-icon-monitor" type="text" @click="$emit('open-services')" title="预览服务"></el-button>
         <el-button size="mini" icon="el-icon-upload2" type="text" @click="$emit('open-attachments')" title="上传文件"></el-button>
-        <el-button size="mini" icon="el-icon-star-off" type="text" @click="$emit('toggle-star')" title="收藏"></el-button>
-        <el-button size="mini" icon="el-icon-time" type="text" @click="$emit('open-history')" title="历史"></el-button>
+        <el-button
+          size="mini"
+          :icon="favoriteActive ? 'el-icon-star-on' : 'el-icon-star-off'"
+          type="text"
+          :class="{ 'favorite-active': favoriteActive }"
+          @click="$emit('toggle-star')"
+          title="收藏"
+        ></el-button>
+        <el-button size="mini" icon="el-icon-time" type="text" @click="toggleHistoryPanel" title="历史"></el-button>
         <el-dropdown trigger="click" @command="handleMoreCommand">
           <el-button size="mini" icon="el-icon-more" type="text" title="更多"></el-button>
           <el-dropdown-menu slot="dropdown">
@@ -39,9 +46,67 @@
       </div>
     </div>
 
+    <div class="detail-panel" v-if="panelVisible">
+      <div class="detail-panel__head">
+        <div class="detail-panel__title">
+          <i :class="panelMode === 'search' ? 'el-icon-search' : 'el-icon-time'"></i>
+          <span>{{ panelMode === 'search' ? '搜索消息' : '对话历史' }}</span>
+        </div>
+        <el-button type="text" icon="el-icon-close" class="panel-close" @click="closePanel"></el-button>
+      </div>
+      <div class="detail-panel__body" v-if="panelMode === 'search'">
+        <el-input
+          ref="panelInput"
+          v-model="searchQuery"
+          size="small"
+          clearable
+          placeholder="输入关键词搜索消息"
+          @input="handleSearchInput"
+          @keydown.enter.native.prevent="jumpToFirstSearchResult"
+        />
+        <div class="panel-meta">
+          {{ searchResults.length }} 条结果
+        </div>
+        <div class="panel-list" v-if="searchResults.length">
+          <button
+            v-for="item in searchResults"
+            :key="item.message.id"
+            type="button"
+            class="panel-item"
+            @click="jumpToMessage(item.message.id)"
+          >
+            <div class="panel-item__title">{{ item.title }}</div>
+            <div class="panel-item__snippet">{{ item.snippet }}</div>
+          </button>
+        </div>
+        <div v-else class="panel-empty">没有匹配的消息</div>
+      </div>
+      <div class="detail-panel__body" v-else>
+        <div class="panel-list" v-if="historyItems.length">
+          <button
+            v-for="item in historyItems"
+            :key="item.message.id"
+            type="button"
+            class="panel-item"
+            @click="jumpToMessage(item.message.id)"
+          >
+            <div class="panel-item__title">{{ item.title }}</div>
+            <div class="panel-item__snippet">{{ item.snippet }}</div>
+          </button>
+        </div>
+        <div v-else class="panel-empty">暂无用户问题</div>
+      </div>
+    </div>
+
     <div class="messages-container" ref="messagesContainer">
       <template v-if="messages && messages.length > 0">
-        <div v-for="msg in messages" :key="msg.id" class="message-wrapper">
+        <div
+          v-for="msg in messages"
+          :key="msg.id"
+          :ref="'message-' + msg.id"
+          class="message-wrapper"
+          :class="{ highlighted: highlightedMessageId === msg.id }"
+        >
           <MessageBubble
             :message="msg"
             :isOwn="msg.sender_type === 'user' && msg.sender_id === userId"
@@ -143,6 +208,10 @@ export default {
       selectedMentions: [],
       activeTab: 'chat',
       stickToBottom: true,
+      panelVisible: false,
+      panelMode: 'search',
+      searchQuery: '',
+      highlightedMessageId: '',
       tabs: [
         { key: 'chat', label: '对话' },
         { key: 'agent_config', label: '智能体配置' },
@@ -152,6 +221,9 @@ export default {
     }
   },
   computed: {
+    favoriteActive() {
+      return !!this.conversation?.is_favorite
+    },
     participantCount() {
       if (!this.conversation || !this.conversation.participant_ids) return 0
       return this.conversation.participant_ids.length
@@ -171,6 +243,31 @@ export default {
         : agents
       return filtered.slice(0, 8)
     },
+    searchResults() {
+      const query = this.searchQuery.trim().toLowerCase()
+      if (!query) return []
+      return (this.messages || [])
+        .map(message => {
+          const text = this.collectMessageText(message)
+          return { message, text }
+        })
+        .filter(item => item.text.toLowerCase().includes(query))
+        .map(item => ({
+          message: item.message,
+          title: this.buildMessageTitle(item.message),
+          snippet: this.buildSearchSnippet(item.text, query),
+        }))
+        .slice(0, 50)
+    },
+    historyItems() {
+      return (this.messages || [])
+        .filter(message => message.sender_type === 'user')
+        .map(message => ({
+          message,
+          title: this.buildMessageTitle(message),
+          snippet: this.buildSearchSnippet(this.collectMessageText(message), ''),
+        }))
+    },
   },
   watch: {
     messages() {
@@ -178,6 +275,7 @@ export default {
       this.$nextTick(() => this.scrollToBottom(shouldScroll))
     },
     conversation() {
+      this.closePanel()
       this.$nextTick(() => this.scrollToBottom(true))
     },
   },
@@ -283,6 +381,102 @@ export default {
     handleMessagesScroll() {
       this.stickToBottom = this.isNearBottom()
     },
+    toggleSearchPanel() {
+      if (this.panelVisible && this.panelMode === 'search') {
+        this.closePanel()
+        return
+      }
+      this.panelMode = 'search'
+      this.panelVisible = true
+      this.$nextTick(() => {
+        const input = this.$refs.panelInput
+        if (input && input.focus) input.focus()
+      })
+    },
+    toggleHistoryPanel() {
+      if (this.panelVisible && this.panelMode === 'history') {
+        this.closePanel()
+        return
+      }
+      this.panelMode = 'history'
+      this.panelVisible = true
+    },
+    closePanel() {
+      this.panelVisible = false
+      this.searchQuery = ''
+    },
+    handleSearchInput() {
+      if (this.searchResults.length) {
+        this.highlightedMessageId = this.searchResults[0].message.id
+      }
+    },
+    jumpToFirstSearchResult() {
+      if (this.searchResults.length) {
+        this.jumpToMessage(this.searchResults[0].message.id)
+      }
+    },
+    jumpToMessage(messageId) {
+      const ref = this.$refs[`message-${messageId}`]
+      const target = Array.isArray(ref) ? ref[0] : ref
+      if (target && target.scrollIntoView) {
+        this.highlightedMessageId = messageId
+        this.panelVisible = false
+        this.$nextTick(() => {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          setTimeout(() => {
+            if (this.highlightedMessageId === messageId) {
+              this.highlightedMessageId = ''
+            }
+          }, 2500)
+        })
+      }
+    },
+    buildMessageTitle(message) {
+      const raw = String(message?.content || message?.raw_output || '').trim()
+      if (!raw) {
+        return message?.sender_name || '消息'
+      }
+      const firstLine = raw.split(/\r?\n/).find(line => line.trim()) || raw
+      return firstLine
+        .replace(/^#{1,6}\s*/, '')
+        .replace(/^[-*+]\s*/, '')
+        .replace(/^>\s*/, '')
+        .trim()
+    },
+    buildSearchSnippet(text, query) {
+      const plain = String(text || '').replace(/\s+/g, ' ').trim()
+      if (!plain) return '无可预览内容'
+      if (!query) return plain.slice(0, 96)
+      const index = plain.toLowerCase().indexOf(query)
+      if (index === -1) return plain.slice(0, 96)
+      const start = Math.max(0, index - 22)
+      const end = Math.min(plain.length, index + query.length + 42)
+      return `${start > 0 ? '...' : ''}${plain.slice(start, end)}${end < plain.length ? '...' : ''}`
+    },
+    collectMessageText(message) {
+      const parts = []
+      const push = value => {
+        if (value === undefined || value === null) return
+        const text = typeof value === 'string' ? value : JSON.stringify(value)
+        if (text) parts.push(text)
+      }
+      push(message?.content)
+      push(message?.raw_output)
+      const elements = Array.isArray(message?.elements) ? message.elements : []
+      elements.forEach(element => {
+        if (!element) return
+        push(element.title)
+        push(element.content)
+        push(element.text)
+        push(element.name)
+        push(element.path)
+        push(element.url)
+        push(element.message)
+        push(element.data)
+        push(element.detail)
+      })
+      return parts.join(' ')
+    },
     isNearBottom() {
       const container = this.$refs.messagesContainer
       if (!container) return true
@@ -319,6 +513,7 @@ export default {
   display: flex;
   flex-direction: column;
   height: 100%;
+  position: relative;
 }
 
 .chat-header {
@@ -364,6 +559,120 @@ export default {
   color: #4080ff;
 }
 
+.header-actions .favorite-active {
+  color: #e6a23c;
+}
+
+.detail-panel {
+  position: absolute;
+  top: 60px;
+  right: 20px;
+  width: 340px;
+  max-height: calc(100% - 80px);
+  background: #ffffff;
+  border: 1px solid #e8edf5;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+  z-index: 20;
+  overflow: hidden;
+}
+
+.detail-panel__head {
+  height: 48px;
+  padding: 0 12px 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #eef2f7;
+  background: #fbfdff;
+}
+
+.detail-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.panel-close {
+  padding: 4px;
+}
+
+.detail-panel__body {
+  padding: 12px;
+}
+
+.panel-meta {
+  margin: 10px 0 8px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.panel-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel-list::-webkit-scrollbar,
+.messages-container::-webkit-scrollbar {
+  width: 4px;
+}
+
+.panel-list::-webkit-scrollbar-thumb,
+.messages-container::-webkit-scrollbar-thumb {
+  background: #d8e0ea;
+  border-radius: 999px;
+}
+
+.panel-item {
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  background: #ffffff;
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.panel-item:hover {
+  border-color: #bfd3ff;
+  background: #f8fbff;
+}
+
+.panel-item__title {
+  font-size: 13px;
+  line-height: 1.4;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel-item__snippet {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel-empty {
+  padding: 24px 0 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
 .messages-container {
   flex: 1;
   overflow-y: auto;
@@ -382,6 +691,11 @@ export default {
 
 .message-wrapper {
   margin-bottom: 12px;
+}
+
+.message-wrapper.highlighted {
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px rgba(64, 128, 255, 0.14);
 }
 
 .empty-messages {

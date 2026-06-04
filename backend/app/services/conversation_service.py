@@ -298,6 +298,25 @@ class ConversationService:
             return None, 'Conversation not found'
         return self._conv_to_dict(conversation), None
 
+    def set_conversation_favorite(self, conversation_id, user_id, is_favorite):
+        """Update conversation favorite state."""
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation:
+            return None, 'Conversation not found'
+        if conversation.owner_id != user_id:
+            return None, 'Permission denied'
+
+        if isinstance(is_favorite, str):
+            favorite_value = is_favorite.strip().lower() in ('1', 'true', 'yes', 'on')
+        else:
+            favorite_value = bool(is_favorite)
+
+        updated = conversation_repo.update(
+            conversation,
+            is_favorite=favorite_value,
+        )
+        return self._conv_to_dict(updated), None
+
     def delete_conversation(self, conversation_id, user_id):
         """Delete a conversation (owner only)."""
         conversation = conversation_repo.get_by_id(conversation_id)

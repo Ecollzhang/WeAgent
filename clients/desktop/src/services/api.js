@@ -48,6 +48,14 @@ export function deleteConversation(id) {
   return request({ method: 'delete', url: `/conversations/${id}` })
 }
 
+export function updateConversationFavorite(id, isFavorite) {
+  return request({
+    method: 'post',
+    url: `/conversations/${id}/favorite`,
+    data: { is_favorite: isFavorite },
+  })
+}
+
 export function getConversationAttachments(conversationId, agentId = '') {
   return request({
     method: 'get',
