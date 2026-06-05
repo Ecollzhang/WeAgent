@@ -11,14 +11,16 @@ All files stay inside the container — no host volume mounts.
 
 import io
 import json
+import mimetypes
 import os
 import posixpath
 import socket
 import tarfile
 import threading
 import time
+import zipfile
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .client import OrchestratorClient
 
@@ -296,6 +298,9 @@ class DockerContainerManager:
             pass
 
     def get_session(self, session_id: str) -> Optional[SessionContainer]:
+        session = self._sessions.get(session_id)
+        if session is not None:
+            return session
         self.recover_sessions()
         return self._sessions.get(session_id)
 
@@ -525,7 +530,9 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.read_raw_file(agent_id, path)
+        workspace_name = self._workspace_name_for_agent(session, agent_id)
+        normalized_path = self._normalize_agent_workspace_path(agent_id, path, workspace_name)
+        return self._read_workspace_file_from_container(session, normalized_path)
 
     def upload_agent_file(self, session_id: str, agent_id: str, path: str,
                           filename: str, content: bytes,
@@ -583,26 +590,237 @@ class DockerContainerManager:
             return {"status": "error", "error": str(e)}
         return {"status": "ok", "path": normalized_path}
 
-    def get_file_tree(self, session_id: str, root: str = "/workspace") -> dict:
+    def get_file_tree(self, session_id: str, root: str = "/workspace",
+                      include_hidden: bool = False, max_depth: int = 8) -> dict:
         """Return the session workspace file tree."""
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.list_file_tree(root=root)
+        try:
+            return self._build_workspace_tree_in_container(
+                session,
+                root=root,
+                include_hidden=include_hidden,
+                max_depth=max_depth,
+            )
+        except Exception:
+            return session.client.list_file_tree(
+                root=root,
+                include_hidden=include_hidden,
+                max_depth=max_depth,
+            )
 
     def get_raw_file(self, session_id: str, path: str) -> tuple[bytes, str]:
         """Read a raw workspace file without requiring an agent id."""
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.read_session_raw_file(path)
+        normalized_path = "/" + str(path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        return self._read_workspace_file_from_container(session, normalized_path)
 
     def download_file(self, session_id: str, path: str) -> tuple[bytes, str, str]:
         """Read a workspace file for download."""
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.download_file(path)
+        normalized_path = "/" + str(path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if not normalized_path.startswith("/workspace/"):
+            raise FileNotFoundError(path)
+
+        try:
+            content_bytes, mime_type = self._read_workspace_file_from_container(session, normalized_path)
+            filename = posixpath.basename(normalized_path) or "download"
+            encoded_name = quote(filename)
+            disposition = f"attachment; filename=\"download\"; filename*=UTF-8''{encoded_name}"
+            return content_bytes, mime_type, disposition
+        except Exception:
+            pass
+
+        return session.client.download_file(normalized_path)
+
+    def export_zip(self, session_id: str, path: str = "/workspace",
+                   mode: str = "directory") -> tuple[bytes, str, str]:
+        """Export a workspace directory as a ZIP archive."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        normalized_path = "/" + str(path or "/workspace").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if normalized_path == "/workspace":
+            export_path = normalized_path
+        elif normalized_path.startswith("/workspace/"):
+            export_path = normalized_path
+        else:
+            raise ValueError("Export path must be under /workspace/")
+
+        try:
+            container = self.docker.containers.get(session.container_id)
+            stream, stat = container.get_archive(export_path)
+            tar_bytes = b"".join(chunk for chunk in stream)
+        except Exception as e:
+            raise FileNotFoundError(export_path) from e
+
+        tar_buffer = io.BytesIO(tar_bytes)
+        zip_buffer = io.BytesIO()
+        top_name = posixpath.basename(export_path.rstrip("/")) or "workspace"
+        is_dir = bool(stat.get("mode", 0) & 0o040000) if isinstance(stat, dict) else False
+
+        with tarfile.open(fileobj=tar_buffer, mode="r:*") as tar, zipfile.ZipFile(
+            zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zip_file:
+            for member in tar.getmembers():
+                if member.isdir() or member.issym() or member.islnk():
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                member_name = member.name.lstrip("./")
+                relative_name = member_name if is_dir else posixpath.basename(member_name)
+                path_parts = [part for part in relative_name.split("/") if part]
+                if not path_parts:
+                    continue
+                if any(part.startswith(".") for part in path_parts):
+                    continue
+                if any(part == "CLAUDE.md" for part in path_parts):
+                    continue
+                archive_name = posixpath.join(top_name, relative_name) if is_dir else relative_name
+                zip_file.writestr(archive_name, extracted.read())
+
+        zip_bytes = zip_buffer.getvalue()
+        zip_name = f"{top_name}.zip"
+        encoded_name = quote(zip_name)
+        disposition = f"attachment; filename=\"export.zip\"; filename*=UTF-8''{encoded_name}"
+        return zip_bytes, "application/zip", disposition
+
+    def write_workspace_file(self, session_id: str, file_path: str,
+                             content_bytes: bytes) -> dict:
+        """Write a file to any path under /workspace/ in the container."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        normalized_path = "/" + str(file_path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if not normalized_path.startswith("/workspace/"):
+            return {"status": "error", "error": "File path must be under /workspace/"}
+
+        directory = posixpath.dirname(normalized_path)
+        target_name = posixpath.basename(normalized_path)
+
+        try:
+            container = self.docker.containers.get(session.container_id)
+            mkdir_result = container.exec_run(["mkdir", "-p", directory])
+            if getattr(mkdir_result, "exit_code", 1) != 0:
+                output = self._decode_exec_output(getattr(mkdir_result, "output", b""))
+                return {"status": "error", "error": output or "Failed to create directory"}
+
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+                info = tarfile.TarInfo(name=target_name)
+                info.size = len(content_bytes)
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(content_bytes))
+            tar_stream.seek(0)
+
+            if not container.put_archive(directory, tar_stream.getvalue()):
+                return {"status": "error", "error": "Failed to write file into container"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+        return {"status": "ok", "path": normalized_path, "size": len(content_bytes)}
+
+    def _read_workspace_file_from_container(self, session: SessionContainer,
+                                            normalized_path: str) -> tuple[bytes, str]:
+        normalized_path = "/" + str(normalized_path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if not normalized_path.startswith("/workspace/"):
+            raise FileNotFoundError(normalized_path)
+
+        container = self.docker.containers.get(session.container_id)
+        stream, _ = container.get_archive(normalized_path)
+        tar_bytes = b"".join(chunk for chunk in stream)
+        tar_buffer = io.BytesIO(tar_bytes)
+        with tarfile.open(fileobj=tar_buffer, mode="r:*") as tar:
+            for member in tar.getmembers():
+                if member.isdir() or member.issym() or member.islnk():
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                content_bytes = extracted.read()
+                filename = posixpath.basename(normalized_path) or posixpath.basename(member.name)
+                mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                return content_bytes, mime_type
+        raise FileNotFoundError(normalized_path)
+
+    def _build_workspace_tree_in_container(self, session: SessionContainer, root: str = "/workspace",
+                                           include_hidden: bool = False,
+                                           max_depth: int = 8) -> dict:
+        container = self.docker.containers.get(session.container_id)
+        script = r"""
+import json, mimetypes, os, sys
+
+root = sys.argv[1] if len(sys.argv) > 1 else "/workspace"
+include_hidden = (sys.argv[2].lower() == "true") if len(sys.argv) > 2 else False
+max_depth = int(sys.argv[3]) if len(sys.argv) > 3 else 8
+
+workspace_root = os.path.realpath("/workspace")
+if root.startswith("/workspace"):
+    full_path = root
+else:
+    full_path = os.path.join("/workspace", root.lstrip("/"))
+real_root = os.path.realpath(full_path)
+if real_root != workspace_root and not real_root.startswith(workspace_root + os.sep):
+    print(json.dumps({"error": "Access denied: path outside workspace"}))
+    raise SystemExit(0)
+if not os.path.exists(real_root):
+    print(json.dumps({"error": f"Path not found: {root}"}))
+    raise SystemExit(0)
+
+def build_node(path, depth):
+    rel_path = os.path.relpath(path, workspace_root)
+    node_path = "/workspace" if rel_path == "." else f"/workspace/{rel_path.replace(os.sep, '/')}"
+    name = os.path.basename(path) or "workspace"
+    if os.path.isdir(path):
+        node = {"name": name, "path": node_path, "type": "directory", "children": []}
+        if depth >= max_depth:
+            node["truncated"] = True
+            return node
+        try:
+            entries = sorted(os.listdir(path), key=lambda x: (not os.path.isdir(os.path.join(path, x)), x.lower()))
+        except OSError:
+            return node
+        for entry in entries:
+            if not include_hidden and entry.startswith("."):
+                continue
+            node["children"].append(build_node(os.path.join(path, entry), depth + 1))
+        return node
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    return {
+        "name": name,
+        "path": node_path,
+        "type": "file",
+        "size": size,
+        "mime_type": mimetypes.guess_type(path)[0] or "application/octet-stream",
+        "extension": os.path.splitext(path)[1].lstrip("."),
+    }
+
+print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=False))
+"""
+        result = container.exec_run(
+            ["python", "-c", script, root, "true" if include_hidden else "false", str(max_depth)]
+        )
+        if getattr(result, "exit_code", 1) != 0:
+            output = self._decode_exec_output(getattr(result, "output", b""))
+            raise RuntimeError(output or "Failed to build workspace tree")
+        output = self._decode_exec_output(getattr(result, "output", b""))
+        return json.loads(output or "{}")
 
     # ---- Agent control ----
 
@@ -751,6 +969,17 @@ class DockerContainerManager:
                 return True
         except OSError:
             return False
+
+    @staticmethod
+    def _normalize_agent_workspace_path(agent_id: str, path: str,
+                                        workspace_name: str = "") -> str:
+        workspace_name = workspace_name or agent_id
+        root = posixpath.normpath(f"/workspace/agents/{workspace_name}")
+        normalized = "/" + str(path or "").replace("\\", "/").lstrip("/")
+        normalized = posixpath.normpath(normalized)
+        if normalized == root or normalized.startswith(root + "/"):
+            return normalized
+        raise ValueError("Path must stay inside the agent workspace directory")
 
     @staticmethod
     def _normalize_agent_user_input_path(agent_id: str, path: str,

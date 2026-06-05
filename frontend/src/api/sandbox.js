@@ -112,6 +112,7 @@ export function getWorkspaceFileUrl(sessionId, filepath) {
 export function getFileTree(sessionId, root = '/workspace') {
   return request.get(`/sandbox/sessions/${sessionId}/files/tree`, {
     params: { root },
+    returnFullResponse: true,
   })
 }
 
@@ -121,6 +122,10 @@ export function getSessionRawFileUrl(sessionId, path) {
 
 export function getSessionDownloadUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`
+}
+
+export function getSessionZipExportUrl(sessionId, path, mode = 'auto') {
+  return `/api/sandbox/sessions/${sessionId}/files/export-zip?path=${encodeURIComponent(path)}&mode=${encodeURIComponent(mode)}`
 }
 
 // ===== Custom tools =====
@@ -151,6 +156,11 @@ export function stopService(sessionId, port) {
 
 export function getServiceLogs(sessionId, port) {
   return request.get(`/sandbox/sessions/${sessionId}/services/${port}/logs`)
+}
+
+// ===== File write-back =====
+export function writeFile(sessionId, path, content) {
+  return request.put(`/sandbox/sessions/${sessionId}/files/write`, { path, content })
 }
 
 // ===== Agent control =====

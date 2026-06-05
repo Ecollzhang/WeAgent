@@ -38,6 +38,12 @@
       />
     </div>
 
+    <ArtifactWorkbench
+      :visible.sync="artifactWorkbenchVisible"
+      :artifact="currentWorkbenchArtifact"
+      :session-id="currentSessionId"
+    />
+
     <el-dialog
       :title="previewTitle"
       :visible.sync="previewVisible"
@@ -300,6 +306,7 @@
 
 <script>
 import AppSidebar from '../components/Sidebar/index.vue'
+import ArtifactWorkbench from '../components/ArtifactWorkbench/index.vue'
 import ConversationList from '../components/ConversationList/index.vue'
 import ChatWindow from '../components/ChatWindow/index.vue'
 import { getCategories, getAgents } from '../api/agent'
@@ -332,7 +339,7 @@ function getAgentMeta(agentId) {
 
 export default {
   name: 'Dashboard',
-  components: { AppSidebar, ConversationList, ChatWindow },
+  components: { AppSidebar, ArtifactWorkbench, ConversationList, ChatWindow },
   data() {
     return {
       showCreateDialog: false,
@@ -354,6 +361,8 @@ export default {
       previewType: 'text',
       previewUrl: '',
       selectedFilePath: '',
+      artifactWorkbenchVisible: false,
+      currentWorkbenchArtifact: null,
       fileTreeData: [],
       fileTreeRoot: '/workspace',
       fileScope: 'workspace',
@@ -698,17 +707,31 @@ export default {
 
     async handleOpenWorkspace(scope = 'workspace') {
       if (!this.currentConversation) return
-      this.previewVisible = true
-      await this.switchFileScope(scope)
+      let root = '/workspace'
+      if (scope && scope.startsWith('agent:')) {
+        const agentId = scope.split(':')[1]
+        const agent = this.currentSessionAgents.find(item => item.agent_id === agentId)
+        root = `/workspace/agents/${agent?.workspace_name || this.safeWorkspaceName(agent?.role || agentId)}`
+      } else if (scope === 'shared') {
+        root = '/workspace/shared'
+      }
+      this.currentWorkbenchArtifact = {
+        path: '',
+        root,
+        type: 'workspace',
+        name: '工作台',
+      }
+      this.artifactWorkbenchVisible = true
     },
 
     async handleOpenFile(file) {
       if (!this.currentConversation || !file?.path) return
-      this.previewVisible = true
       const path = this.normalizeWorkspacePath(file.path)
-      this.fileTreeRoot = '/workspace'
-      await this.loadFileTree('/workspace')
-      this.previewFile(path)
+      this.currentWorkbenchArtifact = this.buildWorkbenchArtifact({
+        ...file,
+        path,
+      })
+      this.artifactWorkbenchVisible = true
     },
 
     handleSearchMessages() {
@@ -966,6 +989,32 @@ export default {
     openWorkspaceFile(filePath) {
       if (!this.currentSessionId) return
       window.open(getWorkspaceFileUrl(this.currentSessionId, filePath), '_blank')
+    },
+
+    buildWorkbenchArtifact(file) {
+      const path = this.normalizeWorkspacePath(file?.path || '')
+      return {
+        path,
+        name: file?.name || path.split('/').pop() || '',
+        type: file?.type || this.inferArtifactType(path),
+        diffElement: file?.diffElement || null,
+        imageUrl: file?.imageUrl || '',
+        codeContent: file?.codeContent || '',
+        tableHeaders: Array.isArray(file?.tableHeaders) ? file.tableHeaders : [],
+        tableRows: Array.isArray(file?.tableRows) ? file.tableRows : [],
+      }
+    },
+
+    inferArtifactType(path) {
+      const ext = this.getExt(path)
+      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) return 'image'
+      if (ext === 'csv') return 'table'
+      if (['html', 'htm'].includes(ext)) return 'webpage'
+      if (['txt', 'log'].includes(ext)) return 'text'
+      if (['md', 'json', 'js', 'css', 'vue', 'py', 'yml', 'yaml', 'xml', 'sql', 'ts', 'tsx', 'jsx', 'java', 'go', 'rs', 'php', 'rb', 'sh', 'bat', 'ps1', 'kt', 'swift', 'dart', 'c', 'h', 'cpp', 'cc', 'cxx', 'hpp', 'cs', 'toml', 'scss', 'less'].includes(ext)) {
+        return 'code'
+      }
+      return 'file'
     },
 
     downloadFile(path) {

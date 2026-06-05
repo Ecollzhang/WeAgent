@@ -8,6 +8,7 @@ These endpoints call DockerContainerManager which talks to containers.
 
 import os
 import re
+import time
 from urllib.parse import quote
 
 from flask import Blueprint, request, jsonify, Response
@@ -24,6 +25,13 @@ def _mgr():
         from ..host.manager import DockerContainerManager
         _manager = DockerContainerManager()
     return _manager
+
+
+def _with_timing_headers(response, route_name: str, started_at: float):
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    response.headers["X-WeAgent-Route"] = route_name
+    response.headers["X-WeAgent-Elapsed-Ms"] = str(elapsed_ms)
+    return response
 
 
 # ============================
@@ -329,35 +337,39 @@ def read_agent_raw_file(session_id: str, agent_id: str):
 @sandbox_bp.route("/sessions/<session_id>/files/tree", methods=["GET"])
 def file_tree(session_id: str):
     """Return the session workspace file tree."""
+    started_at = time.perf_counter()
     root = request.args.get("root", "/workspace")
+    include_hidden = request.args.get("include_hidden", "false").lower() == "true"
+    max_depth = request.args.get("max_depth", 8, type=int)
     try:
         mgr = _mgr()
-        result = mgr.get_file_tree(session_id, root=root)
+        result = mgr.get_file_tree(session_id, root=root, include_hidden=include_hidden, max_depth=max_depth)
         if "error" in result:
-            return jsonify({"code": 400, "data": result, "message": result["error"]}), 400
-        return jsonify({"code": 200, "data": result})
+            return _with_timing_headers(jsonify({"code": 400, "data": result, "message": result["error"]}), "files/tree", started_at), 400
+        return _with_timing_headers(jsonify({"code": 200, "data": result}), "files/tree", started_at)
     except KeyError as e:
-        return jsonify({"code": 404, "message": str(e)}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": str(e)}), "files/tree", started_at), 404
     except Exception as e:
-        return jsonify({"code": 400, "message": str(e)}), 400
+        return _with_timing_headers(jsonify({"code": 400, "message": str(e)}), "files/tree", started_at), 400
 
 
 @sandbox_bp.route("/sessions/<session_id>/files/raw", methods=["GET"])
 def read_session_raw_file(session_id: str):
     """Serve raw workspace file content with proper MIME type."""
+    started_at = time.perf_counter()
     path = request.args.get("path", "")
     if not path:
-        return jsonify({"code": 400, "message": "path query parameter required"}), 400
+        return _with_timing_headers(jsonify({"code": 400, "message": "path query parameter required"}), "files/raw", started_at), 400
     try:
         mgr = _mgr()
         content_bytes, mime_type = mgr.get_raw_file(session_id, path)
-        return Response(content_bytes, mimetype=mime_type)
+        return _with_timing_headers(Response(content_bytes, mimetype=mime_type), "files/raw", started_at)
     except FileNotFoundError:
-        return jsonify({"code": 404, "message": "File not found"}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": "File not found"}), "files/raw", started_at), 404
     except KeyError as e:
-        return jsonify({"code": 404, "message": str(e)}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": str(e)}), "files/raw", started_at), 404
     except Exception as e:
-        return jsonify({"code": 400, "message": str(e)}), 400
+        return _with_timing_headers(jsonify({"code": 400, "message": str(e)}), "files/raw", started_at), 400
 
 
 @sandbox_bp.route("/sessions/<session_id>/files/download", methods=["GET"])
@@ -381,6 +393,28 @@ def download_session_file(session_id: str):
         return jsonify({"code": 400, "message": str(e)}), 400
 
 
+@sandbox_bp.route("/sessions/<session_id>/files/export-zip", methods=["GET"])
+def export_session_zip(session_id: str):
+    """Export a workspace directory as ZIP."""
+    path = request.args.get("path", "/workspace")
+    mode = request.args.get("mode", "directory")
+    try:
+        mgr = _mgr()
+        content_bytes, mime_type, disposition = mgr.export_zip(session_id, path, mode=mode)
+        response = Response(content_bytes, mimetype=mime_type)
+        if disposition:
+            response.headers["Content-Disposition"] = disposition
+        return response
+    except FileNotFoundError:
+        return jsonify({"code": 404, "message": "File or directory not found"}), 404
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+
+
 @sandbox_bp.route("/sessions/<session_id>/workspace/<path:filepath>", methods=["GET"])
 def serve_workspace_file(session_id: str, filepath: str):
     """Serve a file from the container's /workspace/ with proper MIME type.
@@ -392,15 +426,16 @@ def serve_workspace_file(session_id: str, filepath: str):
       GET /api/sandbox/sessions/{sid}/workspace/index.html
       GET /api/sandbox/sessions/{sid}/workspace/css/style.css
     """
+    started_at = time.perf_counter()
     mgr = _mgr()
     session = mgr.get_session(session_id)
     if not session:
-        return jsonify({"code": 404, "message": "Session not found"}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": "Session not found"}), "workspace/file", started_at), 404
 
     # Pick the first agent (orchestrator read_file doesn't restrict by agent)
     agent_id = session.agents_config[0]["agent_id"] if session.agents_config else ""
     if not agent_id:
-        return jsonify({"code": 400, "message": "No agents in session"}), 400
+        return _with_timing_headers(jsonify({"code": 400, "message": "No agents in session"}), "workspace/file", started_at), 400
 
     try:
         workspace_path = f"/workspace/{filepath}"
@@ -408,9 +443,40 @@ def serve_workspace_file(session_id: str, filepath: str):
         normalized_mime = (mime_type or "").split(";", 1)[0].strip().lower()
         if normalized_mime in {"text/html", "application/xhtml+xml"}:
             content_bytes = _inject_html_base(content_bytes, session_id, workspace_path)
-        return Response(content_bytes, mimetype=mime_type)
+        return _with_timing_headers(Response(content_bytes, mimetype=mime_type), "workspace/file", started_at)
     except FileNotFoundError:
-        return jsonify({"code": 404, "message": "File not found"}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": "File not found"}), "workspace/file", started_at), 404
+    except Exception as e:
+        return _with_timing_headers(jsonify({"code": 400, "message": str(e)}), "workspace/file", started_at), 400
+
+
+@sandbox_bp.route("/sessions/<session_id>/files/write", methods=["PUT"])
+def write_workspace_file(session_id: str):
+    """Write a file back to the container workspace."""
+    data = request.get_json(silent=True) or {}
+    path = (data.get("path") or "").strip()
+    content = data.get("content")
+    if not path or content is None:
+        return jsonify({"code": 400, "message": "path and content are required"}), 400
+
+    if isinstance(content, str) and content.startswith("data:"):
+        import base64
+        _, encoded = content.split(",", 1)
+        content_bytes = base64.b64decode(encoded)
+    elif isinstance(content, str):
+        content_bytes = content.encode("utf-8")
+    elif isinstance(content, list):
+        content_bytes = bytes(content)
+    else:
+        return jsonify({"code": 400, "message": "content must be a string or data URL"}), 400
+
+    try:
+        result = _mgr().write_workspace_file(session_id, path, content_bytes)
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
     except Exception as e:
         return jsonify({"code": 400, "message": str(e)}), 400
 
