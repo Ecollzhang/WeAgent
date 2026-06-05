@@ -115,12 +115,44 @@ export default {
         }
         oldLine += 1
         newLine += 1
-        result.push({ type: 'ctx', oldNum: oldLine, newNum: newLine, content: raw.startsWith(' ') ? raw.slice(1) : raw })
+        result.push({
+          type: 'ctx',
+          oldNum: oldLine,
+          newNum: newLine,
+          content: raw.startsWith(' ') ? raw.slice(1) : raw,
+        })
       })
       return result
     },
   },
+  watch: {
+    element: {
+      immediate: true,
+      deep: true,
+      handler() {
+        this.logDiffCardDebug('element-change')
+      },
+    },
+  },
+  mounted() {
+    this.logDiffCardDebug('mounted')
+  },
+  updated() {
+    this.logDiffCardDebug('updated')
+  },
   methods: {
+    logDiffCardDebug(stage) {
+      const stamp = typeof performance !== 'undefined' && performance.now ? performance.now().toFixed(1) : Date.now()
+      console.log(`[AWB DEBUG][DiffViewCard][${stamp}] ${stage}`, {
+        fileName: this.fileName,
+        path: this.data.path || '',
+        diffLength: (this.data.diff_text || this.element?.content || '').length,
+        parsedLines: this.parsedDiff.length,
+        canApply: this.canApply,
+        isApplied: this.isApplied,
+        viewMode: this.viewMode,
+      })
+    },
     async copyText(text) {
       try {
         await navigator.clipboard.writeText(text || '')
@@ -258,15 +290,13 @@ export default {
   overflow: auto;
   padding: 12px;
   background: #f8fbff;
-  color: #22324d;
-  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
+  color: #1f2937;
 }
 
 .empty-state {
-  padding: 16px 12px;
-  color: #7f8da3;
+  padding: 18px 12px;
+  text-align: center;
   font-size: 12px;
+  color: #8da0b8;
 }
 </style>

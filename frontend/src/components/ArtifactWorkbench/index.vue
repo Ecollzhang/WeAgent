@@ -188,6 +188,16 @@
             <pre v-else class="awb-code"><code>{{ textContent }}</code></pre>
           </div>
 
+          <div v-else-if="currentKind === 'diff'" class="awb-diff-wrap">
+            <DiffViewCard
+              v-if="currentDiffElement"
+              :element="currentDiffElement"
+              :session-id="sessionId"
+              @applied="handleDiffApplied"
+            />
+            <div v-else class="awb-empty">暂无变更内容</div>
+          </div>
+
           <div v-else-if="currentKind === 'binary'" class="awb-generic">
             <div class="awb-empty">当前文件暂不支持直接预览，可下载到本地查看。</div>
           </div>
@@ -197,7 +207,7 @@
           </div>
         </div>
 
-        <aside class="awb-side" v-if="currentDiffElement">
+        <aside class="awb-side" v-if="currentDiffElement && currentKind !== 'diff'">
           <div class="awb-side-title">变更详情</div>
           <DiffViewCard
             :element="currentDiffElement"
@@ -270,6 +280,7 @@ export default {
       if (this.currentKind === 'table') return '表格'
       if (this.currentKind === 'code') return '代码'
       if (this.currentKind === 'text') return '文本'
+      if (this.currentKind === 'diff') return 'Diff'
       if (this.currentKind === 'binary') return '文件'
       return '产物'
     },
@@ -453,6 +464,12 @@ export default {
       this.tableHeaders = []
       this.tableRows = []
       this.tableEditRows = []
+      const seed = this.getArtifactSeed(path)
+      if (seed?.type === 'diff' && seed.diffElement) {
+        this.currentKind = 'diff'
+        this.currentMeta = 'DIFF'
+        return
+      }
       const ext = this.getExt(path)
       if (IMAGE_FILE_RE.test(`.${ext}`)) {
         this.currentKind = 'image'
@@ -497,11 +514,13 @@ export default {
     getArtifactSeed(path) {
       if (!this.artifact || this.artifact.path !== path) return null
       return {
+        type: this.artifact.type || '',
         codeContent: this.artifact.codeContent,
         tableHeaders: Array.isArray(this.artifact.tableHeaders) ? this.artifact.tableHeaders : [],
         tableRows: Array.isArray(this.artifact.tableRows) ? this.artifact.tableRows : [],
         imageUrl: this.artifact.imageUrl || '',
         previewUrl: this.artifact.previewUrl || '',
+        diffElement: this.artifact.diffElement || null,
       }
     },
     hydrateFromCacheOrArtifact(path) {
@@ -751,6 +770,9 @@ export default {
         this.setPathCache(this.currentPath, { imageUrl: previousImageUrl })
         this.$message.error(`保存失败: ${error.message || ''}`)
       }
+    },
+    handleDiffApplied(payload) {
+      this.$emit('diff-applied', payload)
     },
     addTableRow() {
       const row = {}

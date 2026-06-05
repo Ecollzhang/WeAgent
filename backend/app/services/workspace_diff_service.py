@@ -29,6 +29,7 @@ class DiffArtifact:
 
     def to_element(self):
         filename = posixpath.basename(self.path) or self.path
+        before_preview = self.before[:AFTER_PREVIEW_CHAR_LIMIT]
         after_preview = self.after[:AFTER_PREVIEW_CHAR_LIMIT]
         diff_preview = _trim_diff_preview(self.diff_text)
         return {
@@ -40,6 +41,8 @@ class DiffArtifact:
                 'filename': filename,
                 'path': self.path,
                 'language': _language_for_path(self.path),
+                'before': self.before,
+                'before_preview': before_preview,
                 'after': self.after,
                 'after_preview': after_preview,
                 'diff_text': diff_preview,
