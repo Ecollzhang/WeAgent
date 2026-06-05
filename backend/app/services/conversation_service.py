@@ -8,8 +8,6 @@ from app.repositories.conversation_repo import conversation_repo
 from app.repositories.agent_repo import agent_repo
 from app.repositories.message_repo import message_repo
 from app.services.settings_service import settings_service
-from werkzeug.utils import secure_filename
-
 MODERATOR_AGENT_ID = 'moderator'
 
 
@@ -18,6 +16,20 @@ def _safe_workspace_name(name):
     clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(name or '').strip())
     clean = re.sub(r'\s+', '_', clean).strip('._ ')
     return clean[:80] or 'agent'
+
+
+def _safe_upload_filename(filename):
+    import os
+    import re
+    raw = str(filename or '').replace('\\', '/').split('/')[-1].strip()
+    stem, ext = os.path.splitext(raw)
+    stem = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', stem)
+    stem = re.sub(r'\s+', '_', stem).strip('._ ')
+    ext = re.sub(r'[^A-Za-z0-9]', '', ext.lstrip('.'))[:16]
+    if not stem:
+        stem = 'upload'
+    stem = stem[:80]
+    return f'{stem}.{ext}' if ext else stem
 
 
 def _participant_display_info(participant_type, participant_id):
@@ -179,6 +191,14 @@ class ConversationService:
             if pid.startswith('agent_'):
                 agent_ids.append(pid.replace('agent_', ''))
         if len([aid for aid in agent_ids if aid != MODERATOR_AGENT_ID]) >= 2:
+            if not Agent.query.get(MODERATOR_AGENT_ID):
+                try:
+                    from app.services.agent_service import agent_service
+                    agent_service.seed_default_data()
+                except Exception:
+                    pass
+            if not Agent.query.get(MODERATOR_AGENT_ID):
+                return participant_ids
             moderator_pid = f'agent_{MODERATOR_AGENT_ID}'
             participant_ids = [pid for pid in participant_ids if pid != moderator_pid]
             participant_ids.append(moderator_pid)
@@ -278,6 +298,25 @@ class ConversationService:
             return None, 'Conversation not found'
         return self._conv_to_dict(conversation), None
 
+    def set_conversation_favorite(self, conversation_id, user_id, is_favorite):
+        """Update conversation favorite state."""
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation:
+            return None, 'Conversation not found'
+        if conversation.owner_id != user_id:
+            return None, 'Permission denied'
+
+        if isinstance(is_favorite, str):
+            favorite_value = is_favorite.strip().lower() in ('1', 'true', 'yes', 'on')
+        else:
+            favorite_value = bool(is_favorite)
+
+        updated = conversation_repo.update(
+            conversation,
+            is_favorite=favorite_value,
+        )
+        return self._conv_to_dict(updated), None
+
     def delete_conversation(self, conversation_id, user_id):
         """Delete a conversation (owner only)."""
         conversation = conversation_repo.get_by_id(conversation_id)
@@ -324,13 +363,13 @@ class ConversationService:
             return next((p for p in agents if p.participant_id == agent_id), None)
         return agents[0] if len(agents) == 1 else None
 
-    def list_attachments(self, conversation_id, user_id):
+    def list_attachments(self, conversation_id, user_id, agent_id=None):
         conversation = conversation_repo.get_by_id(conversation_id)
         if not conversation:
             return None, 'Conversation not found'
         if conversation.owner_id != user_id:
             return None, 'Permission denied'
-        agent = self._get_conversation_agent(conversation)
+        agent = self._get_conversation_agent(conversation, agent_id)
         if not agent:
             return None, '阶段 1 仅支持单 Agent 会话附件'
         if not conversation.sandbox_session_id:
@@ -386,7 +425,7 @@ class ConversationService:
         if not conversation.sandbox_session_id:
             return None, 'Conversation has no sandbox session'
 
-        filename = secure_filename(file.filename) or 'upload.bin'
+        filename = _safe_upload_filename(file.filename) or 'upload.bin'
         workspace_name = _safe_workspace_name(agent.participant_name or agent.participant_id)
         path = f'/workspace/agents/{workspace_name}/userInput/{filename}'
         content = file.read()

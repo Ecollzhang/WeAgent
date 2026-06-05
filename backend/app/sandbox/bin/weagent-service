@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Manage preview services from inside a WeAgent sandbox container."""
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def api_url(path: str) -> str:
+    port = os.environ.get("ORCHESTRATOR_PORT", "8080")
+    return f"http://127.0.0.1:{port}{path}"
+
+
+def request_json(method: str, path: str, payload: dict | None = None) -> dict:
+    data = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(
+        api_url(path),
+        data=data,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = {"error": body or str(exc)}
+        parsed.setdefault("status", "error")
+        parsed.setdefault("error", str(exc))
+        return parsed
+    except (urllib.error.URLError, OSError) as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+def report_service(service: dict, title: str, content: str) -> dict:
+    agent_id = os.environ.get("WEAGENT_AGENT_ID", "")
+    if not agent_id:
+        return {"status": "skipped", "error": "WEAGENT_AGENT_ID is not set"}
+    service_id = service.get("id") or service.get("service_id") or ""
+    session_id = os.environ.get("SESSION_ID", "")
+    proxy_url = f"/api/sandbox/sessions/{session_id}/services/{service_id}/proxy/" if session_id and service_id else ""
+    report = {
+        "agent_id": agent_id,
+        "report": {
+            "type": "service",
+            "title": title or service.get("name") or "预览服务",
+            "content": content or "服务已启动",
+            "status": service.get("status") or "running",
+            "data": {
+                **service,
+                "service_id": service_id,
+                "url": proxy_url,
+                "proxy_url": proxy_url,
+            },
+        },
+    }
+    return request_json("POST", "/api/report", report)
+
+
+def wait_for_service(service_id: str, timeout: int) -> dict:
+    deadline = time.time() + max(0, timeout)
+    last = {}
+    while time.time() <= deadline:
+        result = request_json("GET", f"/api/services/{urllib.parse.quote(service_id, safe='')}")
+        service = result.get("service") or {}
+        if service:
+            last = service
+        if service.get("status") in {"running", "failed", "stopped", "exited"}:
+            return service
+        time.sleep(0.5)
+    return last
+
+
+def cmd_start(args) -> int:
+    payload = {
+        "agent_id": os.environ.get("WEAGENT_AGENT_ID", ""),
+        "name": args.name,
+        "cwd": args.cwd,
+        "command": args.command,
+        "port": args.port,
+        "type": args.type,
+    }
+    result = request_json("POST", "/api/services/start", payload)
+    service = result.get("service") or {}
+    service_id = service.get("id") or ""
+    if service_id and args.wait > 0:
+        service = wait_for_service(service_id, args.wait) or service
+        result["service"] = service
+    if service and not args.no_report:
+        result["report"] = report_service(service, args.title or args.name, args.content)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("status") != "error" and not result.get("error") else 1
+
+
+def cmd_list(args) -> int:
+    print(json.dumps(request_json("GET", "/api/services"), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_stop(args) -> int:
+    service_id = urllib.parse.quote(args.service_id, safe="")
+    result = request_json("POST", f"/api/services/{service_id}/stop")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if not result.get("error") else 1
+
+
+def cmd_restart(args) -> int:
+    service_id = urllib.parse.quote(args.service_id, safe="")
+    result = request_json("POST", f"/api/services/{service_id}/restart")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if not result.get("error") else 1
+
+
+def cmd_logs(args) -> int:
+    service_id = urllib.parse.quote(args.service_id, safe="")
+    result = request_json("GET", f"/api/services/{service_id}/logs?tail_bytes={int(args.tail_bytes)}")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if not result.get("error") else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Start and manage WeAgent preview services.")
+    sub = parser.add_subparsers(dest="command_name", required=True)
+
+    start = sub.add_parser("start", help="Start a preview service and report a service card.")
+    start.add_argument("--name", required=True)
+    start.add_argument("--cwd", required=True)
+    start.add_argument("--command", required=True)
+    start.add_argument("--port", type=int, required=True)
+    start.add_argument("--type", default="custom")
+    start.add_argument("--title", default="")
+    start.add_argument("--content", default="")
+    start.add_argument("--wait", type=int, default=20)
+    start.add_argument("--no-report", action="store_true")
+    start.set_defaults(func=cmd_start)
+
+    list_cmd = sub.add_parser("list", help="List preview services.")
+    list_cmd.set_defaults(func=cmd_list)
+
+    stop = sub.add_parser("stop", help="Stop a preview service.")
+    stop.add_argument("service_id")
+    stop.set_defaults(func=cmd_stop)
+
+    restart = sub.add_parser("restart", help="Restart a preview service.")
+    restart.add_argument("service_id")
+    restart.set_defaults(func=cmd_restart)
+
+    logs = sub.add_parser("logs", help="Read service logs.")
+    logs.add_argument("service_id")
+    logs.add_argument("--tail-bytes", type=int, default=65536)
+    logs.set_defaults(func=cmd_logs)
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

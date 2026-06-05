@@ -69,6 +69,42 @@ function mergeElements(existing = [], incoming = []) {
   return merged
 }
 
+function eventKey(event) {
+  if (!event) return ''
+  return event.seq != null
+    ? `seq:${event.seq}`
+    : [event.type || '', event.title || '', event.created_at || ''].join('|')
+}
+
+function mergeEvents(existing = [], incoming = []) {
+  const merged = []
+  ;(Array.isArray(existing) ? existing : []).forEach(event => {
+    const key = eventKey(event)
+    if (!key || !merged.some(item => eventKey(item) === key)) {
+      merged.push(event)
+    }
+  })
+  ;(Array.isArray(incoming) ? incoming : []).forEach(event => {
+    const key = eventKey(event)
+    const index = key ? merged.findIndex(item => eventKey(item) === key) : -1
+    if (index !== -1) {
+      Vue.set(merged, index, event)
+    } else {
+      merged.push(event)
+    }
+  })
+  return merged
+}
+
+function mergeMeta(existing, incoming) {
+  const oldMeta = existing && typeof existing === 'object' ? existing : {}
+  const newMeta = incoming && typeof incoming === 'object' ? incoming : {}
+  const next = { ...oldMeta, ...newMeta }
+  const events = mergeEvents(oldMeta.events, newMeta.events)
+  if (events.length) next.events = events
+  return Object.keys(next).length ? next : incoming
+}
+
 const state = {
   messages: {},
   pinnedMessages: [],
@@ -96,6 +132,7 @@ const mutations = {
       const next = { ...old, ...message }
       if (!message.content && old.content) next.content = old.content
       if (!message.raw_output && old.raw_output) next.raw_output = old.raw_output
+      next.meta = mergeMeta(old.meta, message.meta)
       if (Array.isArray(old.elements) && old.elements.length) {
         next.elements = Array.isArray(message.elements) && message.elements.length
           ? mergeElements(old.elements, message.elements)
@@ -126,6 +163,7 @@ const mutations = {
       const next = { ...msgs[idx], ...message }
       if (!message.content && msgs[idx].content) next.content = msgs[idx].content
       if (!message.raw_output && msgs[idx].raw_output) next.raw_output = msgs[idx].raw_output
+      next.meta = mergeMeta(msgs[idx].meta, message.meta)
       if (Array.isArray(msgs[idx].elements) && msgs[idx].elements.length) {
         next.elements = Array.isArray(message.elements) && message.elements.length
           ? mergeElements(msgs[idx].elements, message.elements)
@@ -151,6 +189,7 @@ const mutations = {
         }
       }
       const next = { ...msgs[idx], ...cleanedPatch }
+      next.meta = mergeMeta(msgs[idx].meta, cleanedPatch.meta)
       Vue.set(msgs, idx, next)
     }
   },

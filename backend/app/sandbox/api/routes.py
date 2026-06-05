@@ -9,11 +9,32 @@ These endpoints call DockerContainerManager which talks to containers.
 import os
 import re
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from flask import Blueprint, request, jsonify, Response
+import simple_websocket
+
+try:
+    from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+except Exception:  # pragma: no cover - optional in isolated sandbox tests
+    get_jwt_identity = None
+    verify_jwt_in_request = None
 
 sandbox_bp = Blueprint("sandbox", __name__)
+
+_PROXY_BLOCKED_RESPONSE_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-encoding",
+}
+_PREVIEW_TOKEN_COOKIE = "weagent_preview_token"
 
 # Singleton manager
 _manager = None
@@ -32,6 +53,205 @@ def _with_timing_headers(response, route_name: str, started_at: float):
     response.headers["X-WeAgent-Route"] = route_name
     response.headers["X-WeAgent-Elapsed-Ms"] = str(elapsed_ms)
     return response
+
+
+def _service_proxy_prefix(session_id: str, service_id: str) -> str:
+    return f"/api/sandbox/sessions/{session_id}/services/{service_id}/proxy"
+
+
+def _rewrite_proxy_location(location: str, session_id: str, service_id: str) -> str:
+    if not location:
+        return location
+    host_prefix = _service_proxy_prefix(session_id, service_id)
+    container_prefix = f"/api/services/{service_id}/proxy"
+    if location.startswith(container_prefix):
+        return host_prefix + location[len(container_prefix):]
+    parsed = urlsplit(location)
+    if parsed.path.startswith(container_prefix):
+        suffix = parsed.path[len(container_prefix):] or "/"
+        return host_prefix + urlunsplit(("", "", suffix, parsed.query, parsed.fragment))
+    return location
+
+
+def _proxy_prefix_with_slash(session_id: str, service_id: str) -> str:
+    return _service_proxy_prefix(session_id, service_id).rstrip("/") + "/"
+
+
+def _rewrite_root_path(value: str, prefix: str) -> str:
+    if not value.startswith("/") or value.startswith("//"):
+        return value
+    if value.startswith(prefix):
+        return value
+    return prefix + value.lstrip("/")
+
+
+def _rewrite_proxy_body(body: bytes, content_type: str, session_id: str, service_id: str) -> bytes:
+    lower_type = (content_type or "").lower()
+    if not any(token in lower_type for token in ("text/html", "text/css", "javascript", "application/x-javascript")):
+        return body
+
+    charset = "utf-8"
+    match = re.search(r"charset=([\w.-]+)", content_type or "", re.I)
+    if match:
+        charset = match.group(1)
+    try:
+        text = body.decode(charset, errors="replace")
+    except LookupError:
+        charset = "utf-8"
+        text = body.decode(charset, errors="replace")
+
+    prefix = _proxy_prefix_with_slash(session_id, service_id)
+
+    def attr_repl(match):
+        return f'{match.group(1)}={match.group(2)}{_rewrite_root_path(match.group(3), prefix)}{match.group(2)}'
+
+    text = re.sub(
+        r'\b(src|href|action)=([\'"])(/(?!/)[^\'"]*)\2',
+        attr_repl,
+        text,
+        flags=re.I,
+    )
+
+    def css_url_repl(match):
+        quote_char = match.group(1) or ""
+        return f"url({quote_char}{_rewrite_root_path(match.group(2), prefix)}{quote_char})"
+
+    text = re.sub(
+        r'url\(\s*([\'"]?)(/(?!/)[^\'")]+)\1',
+        css_url_repl,
+        text,
+        flags=re.I,
+    )
+
+    def css_import_repl(match):
+        quote_char = match.group(1)
+        return f"@import {quote_char}{_rewrite_root_path(match.group(2), prefix)}{quote_char}"
+
+    text = re.sub(
+        r'@import\s+([\'"])(/(?!/)[^\'"]+)\1',
+        css_import_repl,
+        text,
+        flags=re.I,
+    )
+
+    def js_string_repl(match):
+        quote_char = match.group(1)
+        path = match.group(2)
+        return f"{quote_char}{_rewrite_root_path(path, prefix)}{quote_char}"
+
+    text = re.sub(
+        r'([\'"`])(/(?!/)(?:@vite|src|assets|static|_next|node_modules|favicon|manifest|robots|api/)[^\'"`\s]*)\1',
+        js_string_repl,
+        text,
+    )
+
+    return text.encode(charset, errors="replace")
+
+
+def _proxy_response(result: dict, session_id: str, service_id: str) -> Response:
+    headers = result.get("headers", []) or []
+    content_type = ""
+    for key, value in headers:
+        if str(key).lower() == "content-type":
+            content_type = str(value)
+            break
+    body = _rewrite_proxy_body(result.get("body", b""), content_type, session_id, service_id)
+    response = Response(
+        body,
+        status=int(result.get("status_code") or 502),
+        content_type=content_type or "application/octet-stream",
+    )
+    for key, value in headers:
+        header = str(key)
+        if header.lower() in _PROXY_BLOCKED_RESPONSE_HEADERS:
+            continue
+        if header.lower() == "content-type":
+            continue
+        if header.lower() == "location":
+            value = _rewrite_proxy_location(str(value), session_id, service_id)
+        response.headers.add(header, value)
+    return response
+
+
+def _is_websocket_request() -> bool:
+    return request.headers.get("Upgrade", "").lower() == "websocket"
+
+
+def _current_user_id_optional() -> str | None:
+    if not verify_jwt_in_request or not get_jwt_identity:
+        return None
+    try:
+        verify_jwt_in_request(optional=True)
+        return get_jwt_identity()
+    except Exception:
+        return None
+
+
+def _session_access_allowed(session_id: str, user_id: str | None) -> bool:
+    if not user_id:
+        return False
+    try:
+        from app.models.conversation import Conversation
+
+        conversation = Conversation.query.filter_by(sandbox_session_id=session_id).first()
+        if conversation:
+            return conversation.owner_id == user_id
+        # Standalone sandbox sessions created outside a Conversation still require
+        # a valid login, but do not have owner metadata to compare against.
+        return True
+    except Exception:
+        return True
+
+
+def _preview_token_from_request() -> tuple[str, str]:
+    token = request.args.get("token", "")
+    if token:
+        return token, "query"
+    token = request.headers.get("X-Preview-Token", "")
+    if token:
+        return token, "header"
+    token = request.cookies.get(_PREVIEW_TOKEN_COOKIE, "")
+    if token:
+        return token, "cookie"
+    return "", ""
+
+
+def _proxy_query_string_without_preview_token() -> str:
+    items = [
+        (key, value)
+        for key, value in request.args.items(multi=True)
+        if key != "token"
+    ]
+    return urlencode(items, doseq=True)
+
+
+def _authorize_service_proxy(session_id: str, service_id: str) -> tuple[bool, str, str]:
+    token, source = _preview_token_from_request()
+    if token and _mgr().validate_service_token(session_id, service_id, token):
+        return True, token, source
+    user_id = _current_user_id_optional()
+    if _session_access_allowed(session_id, user_id):
+        return True, "", "login"
+    return False, "", ""
+
+
+def _set_preview_cookie(response: Response, session_id: str, service_id: str, token: str) -> None:
+    response.set_cookie(
+        _PREVIEW_TOKEN_COOKIE,
+        token,
+        max_age=24 * 60 * 60,
+        httponly=True,
+        samesite="Lax",
+        path=_service_proxy_prefix(session_id, service_id),
+    )
+
+
+def _host_callback_url_from_request() -> str:
+    host = request.host.split(":", 1)[0] or "host.docker.internal"
+    port = request.environ.get("SERVER_PORT") or os.getenv("PORT", "5002")
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        host = "host.docker.internal"
+    return f"{request.scheme}://{host}:{port}"
 
 
 # ============================
@@ -88,7 +308,8 @@ def create_session():
     data = request.get_json(force=True)
     session_id = data.get("session_id", f"session-{hash(str(data)) % 100000}")
     agents = data.get("agents", [])
-    env_vars = data.get("env_vars")
+    env_vars = dict(data.get("env_vars") or {})
+    env_vars.setdefault("HOST_CALLBACK_URL", _host_callback_url_from_request())
 
     if not agents:
         return jsonify({"code": 400, "message": "At least one agent required"}), 400
@@ -443,6 +664,8 @@ def serve_workspace_file(session_id: str, filepath: str):
         normalized_mime = (mime_type or "").split(";", 1)[0].strip().lower()
         if normalized_mime in {"text/html", "application/xhtml+xml"}:
             content_bytes = _inject_html_base(content_bytes, session_id, workspace_path)
+        elif normalized_mime == "text/css":
+            content_bytes = _rewrite_workspace_css(content_bytes, session_id, workspace_path)
         return _with_timing_headers(Response(content_bytes, mimetype=mime_type), "workspace/file", started_at)
     except FileNotFoundError:
         return _with_timing_headers(jsonify({"code": 404, "message": "File not found"}), "workspace/file", started_at), 404
@@ -488,7 +711,73 @@ def _inject_html_base(content: bytes, session_id: str, workspace_path: str) -> b
     except UnicodeDecodeError:
         return content
 
-    if re.search(r"<base\s", html, flags=re.IGNORECASE):
+    rel_dir = os.path.dirname(workspace_path.replace("\\", "/"))
+    if rel_dir.startswith("/workspace"):
+        rel_dir = rel_dir[len("/workspace"):].lstrip("/")
+
+    encoded_session = quote(session_id, safe="")
+    encoded_dir = "/".join(quote(part, safe="") for part in rel_dir.split("/") if part)
+    if encoded_dir:
+        base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/{encoded_dir}/"
+    else:
+        base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/"
+
+    html = re.sub(r"<base\s[^>]*>", "", html, flags=re.IGNORECASE)
+    html = _rewrite_workspace_root_paths(html, base_href)
+    base_tag = f'<base href="{base_href}">'
+    if re.search(r"<head[^>]*>", html, flags=re.IGNORECASE):
+        html = re.sub(r"(<head[^>]*>)", r"\1" + base_tag, html, count=1, flags=re.IGNORECASE)
+    else:
+        html = base_tag + html
+    return html.encode("utf-8")
+
+
+def _rewrite_workspace_root_paths(html: str, base_href: str) -> str:
+    """Treat root-relative assets in preview HTML as relative to the file directory."""
+    def rewrite(value: str) -> str:
+        if not value.startswith("/") or value.startswith("//"):
+            return value
+        if value.startswith("/api/"):
+            return value
+        return base_href + value.lstrip("/")
+
+    def attr_repl(match):
+        return f'{match.group(1)}={match.group(2)}{rewrite(match.group(3))}{match.group(2)}'
+
+    html = re.sub(
+        r'\b(src|href|action)=([\'"])(/(?!/)[^\'"]*)\2',
+        attr_repl,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    def css_url_repl(match):
+        quote_char = match.group(1) or ""
+        return f"url({quote_char}{rewrite(match.group(2))}{quote_char})"
+
+    html = re.sub(
+        r'url\(\s*([\'"]?)(/(?!/)[^\'")]+)\1',
+        css_url_repl,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    def css_import_repl(match):
+        quote_char = match.group(1)
+        return f"@import {quote_char}{rewrite(match.group(2))}{quote_char}"
+
+    return re.sub(
+        r'@import\s+([\'"])(/(?!/)[^\'"]+)\1',
+        css_import_repl,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+
+def _rewrite_workspace_css(content: bytes, session_id: str, workspace_path: str) -> bytes:
+    try:
+        css = content.decode("utf-8")
+    except UnicodeDecodeError:
         return content
 
     rel_dir = os.path.dirname(workspace_path.replace("\\", "/"))
@@ -501,13 +790,7 @@ def _inject_html_base(content: bytes, session_id: str, workspace_path: str) -> b
         base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/{encoded_dir}/"
     else:
         base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/"
-
-    base_tag = f'<base href="{base_href}">'
-    if re.search(r"<head[^>]*>", html, flags=re.IGNORECASE):
-        html = re.sub(r"(<head[^>]*>)", r"\1" + base_tag, html, count=1, flags=re.IGNORECASE)
-    else:
-        html = base_tag + html
-    return html.encode("utf-8")
+    return _rewrite_workspace_root_paths(css, base_href).encode("utf-8")
 
 
 @sandbox_bp.route("/sessions/<session_id>/agents/<agent_id>/stop", methods=["POST"])
@@ -577,7 +860,18 @@ def remove_custom_tool(session_id: str, tool_name: str):
 @sandbox_bp.route("/sessions/<session_id>/services", methods=["GET"])
 def list_services(session_id: str):
     try:
-        result = _mgr().list_services(session_id)
+        result = _mgr().list_services(session_id, user_id=_current_user_id_optional())
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route("/sessions/<session_id>/services/<service_id>", methods=["GET"])
+def get_service(session_id: str, service_id: str):
+    try:
+        result = _mgr().get_service(session_id, service_id, user_id=_current_user_id_optional())
+        if result.get("error"):
+            return jsonify({"code": 404, "data": result, "message": result.get("error")}), 404
         return jsonify({"code": 200, "data": result})
     except KeyError as e:
         return jsonify({"code": 404, "message": str(e)}), 404
@@ -586,8 +880,12 @@ def list_services(session_id: str):
 @sandbox_bp.route("/sessions/<session_id>/services/start", methods=["POST"])
 def start_service(session_id: str):
     try:
-        result = _mgr().start_service(session_id, request.get_json(force=True))
-        if result.get("status") == "error":
+        result = _mgr().start_service(
+            session_id,
+            request.get_json(force=True),
+            user_id=_current_user_id_optional(),
+        )
+        if result.get("status") == "error" or result.get("error"):
             return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
         return jsonify({"code": 200, "data": result})
     except KeyError as e:
@@ -596,10 +894,10 @@ def start_service(session_id: str):
         return jsonify({"code": 400, "message": str(e)}), 400
 
 
-@sandbox_bp.route("/sessions/<session_id>/services/<int:port>/stop", methods=["POST"])
-def stop_service(session_id: str, port: int):
+@sandbox_bp.route("/sessions/<session_id>/services/<service_id>/stop", methods=["POST"])
+def stop_service(session_id: str, service_id: str):
     try:
-        result = _mgr().stop_service(session_id, port)
+        result = _mgr().stop_service(session_id, service_id)
         if result.get("status") == "error":
             return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
         return jsonify({"code": 200, "data": result})
@@ -607,11 +905,86 @@ def stop_service(session_id: str, port: int):
         return jsonify({"code": 404, "message": str(e)}), 404
 
 
-@sandbox_bp.route("/sessions/<session_id>/services/<int:port>/logs", methods=["GET"])
-def service_logs(session_id: str, port: int):
+@sandbox_bp.route("/sessions/<session_id>/services/<service_id>/restart", methods=["POST"])
+def restart_service(session_id: str, service_id: str):
     try:
-        result = _mgr().service_logs(session_id, port)
+        result = _mgr().restart_service(session_id, service_id, user_id=_current_user_id_optional())
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
         return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route("/sessions/<session_id>/services/<service_id>/logs", methods=["GET"])
+def service_logs(session_id: str, service_id: str):
+    try:
+        tail_bytes = request.args.get("tail_bytes", 65536, type=int)
+        result = _mgr().service_logs(session_id, service_id, tail_bytes=tail_bytes)
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route("/sessions/<session_id>/services/<service_id>/token", methods=["POST"])
+def refresh_service_token(session_id: str, service_id: str):
+    user_id = _current_user_id_optional()
+    if not _session_access_allowed(session_id, user_id):
+        return jsonify({"code": 401, "message": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    ttl_seconds = data.get("ttl_seconds") or request.args.get("ttl_seconds", type=int)
+    try:
+        result = _mgr().refresh_service_token(
+            session_id,
+            service_id,
+            user_id=user_id,
+            ttl_seconds=ttl_seconds,
+        )
+        if result.get("error"):
+            return jsonify({"code": 404, "data": result, "message": result.get("error")}), 404
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+
+
+@sandbox_bp.route(
+    "/sessions/<session_id>/services/<service_id>/proxy/",
+    defaults={"proxy_path": ""},
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+@sandbox_bp.route(
+    "/sessions/<session_id>/services/<service_id>/proxy/<path:proxy_path>",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+def proxy_service(session_id: str, service_id: str, proxy_path: str):
+    try:
+        allowed, token, token_source = _authorize_service_proxy(session_id, service_id)
+        if not allowed:
+            return jsonify({"code": 401, "message": "Valid preview token or login required"}), 401
+        if _is_websocket_request():
+            ws = simple_websocket.Server.accept(request.environ)
+            _mgr().proxy_service_websocket(
+                session_id=session_id,
+                service_id=service_id,
+                path=proxy_path,
+                client_ws=ws,
+                headers=dict(request.headers),
+                query_string=_proxy_query_string_without_preview_token(),
+            )
+            return ""
+        result = _mgr().proxy_service(
+            session_id=session_id,
+            service_id=service_id,
+            path=proxy_path,
+            method=request.method,
+            headers=dict(request.headers),
+            body=request.get_data(),
+            query_string=_proxy_query_string_without_preview_token(),
+        )
+        response = _proxy_response(result, session_id, service_id)
+        if token and token_source in {"query", "header"}:
+            _set_preview_cookie(response, session_id, service_id, token)
+        return response
     except KeyError as e:
         return jsonify({"code": 404, "message": str(e)}), 404
 

@@ -33,12 +33,13 @@ RUN apt-get update && apt-get install -y \
     && opencode --version
 
 # ---- 安装 Orchestrator Python 依赖 ----
-RUN pip install --no-cache-dir flask requests
+RUN pip install --no-cache-dir flask requests simple-websocket
 
 # ---- 复制容器端代码 (保持 container/ 包结构) ----
 COPY container/ /app/container/
 COPY bin/weagent-report /usr/local/bin/weagent-report
-RUN chmod +x /usr/local/bin/weagent-report
+COPY bin/weagent-service /usr/local/bin/weagent-service
+RUN chmod +x /usr/local/bin/weagent-report /usr/local/bin/weagent-service
 
 # ---- 工作目录 (volume mount 点) ----
 WORKDIR /workspace

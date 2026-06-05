@@ -16,13 +16,13 @@
         <i class="el-icon-s-tools"></i>
         <span>工具集</span>
       </router-link>
+      <router-link to="/favorites" class="nav-item" :class="{ active: $route.path === '/favorites' }">
+        <i class="el-icon-collection-tag"></i>
+        <span>我的收藏</span>
+      </router-link>
       <router-link to="/settings" class="nav-item" :class="{ active: $route.path === '/settings' }">
         <i class="el-icon-setting"></i>
         <span>设置</span>
-      </router-link>
-      <router-link to="/sandbox" class="nav-item" :class="{ active: $route.path === '/sandbox' }">
-        <i class="el-icon-s-data"></i>
-        <span>沙箱测试</span>
       </router-link>
     </div>
     <div class="sidebar-footer" @click="handleLogout">

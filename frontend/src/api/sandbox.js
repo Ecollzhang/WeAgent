@@ -6,6 +6,17 @@ const request = axios.create({
   timeout: 7500000, // 125 minutes
 })
 
+request.interceptors.request.use(
+  config => {
+    const token = localStorage.getItem('access_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  error => Promise.reject(error)
+)
+
 // Response interceptor - unwrap response.data
 request.interceptors.response.use(
   response => response.data,
@@ -150,12 +161,26 @@ export function startService(sessionId, data) {
   return request.post(`/sandbox/sessions/${sessionId}/services/start`, data)
 }
 
-export function stopService(sessionId, port) {
-  return request.post(`/sandbox/sessions/${sessionId}/services/${port}/stop`)
+export function getService(sessionId, serviceId) {
+  return request.get(`/sandbox/sessions/${sessionId}/services/${serviceId}`)
 }
 
-export function getServiceLogs(sessionId, port) {
-  return request.get(`/sandbox/sessions/${sessionId}/services/${port}/logs`)
+export function stopService(sessionId, serviceId) {
+  return request.post(`/sandbox/sessions/${sessionId}/services/${serviceId}/stop`)
+}
+
+export function restartService(sessionId, serviceId) {
+  return request.post(`/sandbox/sessions/${sessionId}/services/${serviceId}/restart`)
+}
+
+export function refreshServiceToken(sessionId, serviceId, data = {}) {
+  return request.post(`/sandbox/sessions/${sessionId}/services/${serviceId}/token`, data)
+}
+
+export function getServiceLogs(sessionId, serviceId, tailBytes = 65536) {
+  return request.get(`/sandbox/sessions/${sessionId}/services/${serviceId}/logs`, {
+    params: { tail_bytes: tailBytes },
+  })
 }
 
 // ===== File write-back =====

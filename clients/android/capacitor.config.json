@@ -1,0 +1,8 @@
+{
+  "appId": "com.weagent.android",
+  "appName": "WeAgent",
+  "webDir": "dist",
+  "server": {
+    "cleartext": true
+  }
+}

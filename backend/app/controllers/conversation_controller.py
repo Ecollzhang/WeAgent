@@ -31,6 +31,7 @@ def create_conversation():
         schema = CreateConversationSchema()
         data = schema.load(request.json)
     except ValidationError as e:
+        print(f'[WeAgent] Create conversation validation failed: {e.messages}; payload={request.get_json(silent=True)}')
         return error_response(str(e.messages), code=400)
 
     result, error = conversation_service.create_conversation(
@@ -41,6 +42,7 @@ def create_conversation():
     )
 
     if error:
+        print(f'[WeAgent] Create conversation failed: {error}; payload={data}')
         return error_response(error, code=400)
 
     return success_response(result, message='Conversation created', code=201)
@@ -56,6 +58,24 @@ def get_conversation(conversation_id):
         return error_response(error, code=404)
 
     return success_response(result)
+
+
+@conversation_bp.route('/<conversation_id>/favorite', methods=['POST', 'PATCH'])
+@jwt_required()
+def update_conversation_favorite(conversation_id):
+    """Update conversation favorite state."""
+    user_id = get_jwt_identity()
+    data = request.json or {}
+    result, error = conversation_service.set_conversation_favorite(
+        conversation_id,
+        user_id,
+        data.get('is_favorite', True),
+    )
+
+    if error:
+        return error_response(error, code=400)
+
+    return success_response(result, message='Conversation updated')
 
 
 @conversation_bp.route('/<conversation_id>', methods=['DELETE'])
@@ -126,7 +146,8 @@ def stop_agent(conversation_id, agent_id):
 @jwt_required()
 def list_attachments(conversation_id):
     user_id = get_jwt_identity()
-    result, error = conversation_service.list_attachments(conversation_id, user_id)
+    agent_id = request.args.get('agent_id')
+    result, error = conversation_service.list_attachments(conversation_id, user_id, agent_id=agent_id)
 
     if error:
         return error_response(error, code=400)

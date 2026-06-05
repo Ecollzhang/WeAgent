@@ -78,9 +78,18 @@ class AgentRuntime:
 weagent-report 只接受一个 JSON 字符串参数：
 weagent-report '{{"type":"progress","title":"分析需求","content":"正在确认任务范围","status":"running","step_id":"step-1"}}'
 
-上报类型：progress、result、summary、text、table、image、code、file、error。
+服务预览工具：
+- 当用户要求运行、部署、预览或暴露生成的项目时，必须使用 weagent-service。
+- weagent-service 会在沙箱内启动进程、登记端口，并自动向前端上报 service 卡片。
+- 严禁直接在 Bash 中前台执行 npm run dev / npm run serve / vue-cli-service serve / next dev / flask run / uvicorn 等长时间运行命令。
+- 如果需要启动这类长运行服务，只能通过 weagent-service start 启动，让服务在后台运行，然后继续上报 summary 并结束本轮回复。
+- 示例：
+  weagent-service start --name "前端预览" --cwd "/workspace/agents/{self.workspace_name}" --command "npm run dev -- --host 0.0.0.0 --port 5173" --port 5173 --type vite
+
+上报类型：progress、result、summary、text、table、image、code、file、error、service。
 table 固定格式：{{"type":"table","title":"标题","data":{{"headers":["列1"],"rows":[["值1"]]}}}}。
 image/file 只允许上报容器内 /workspace/... 路径。
+service 产物优先使用 weagent-service start 自动上报；手动上报时必须包含 data.service_id。
 大段代码可以用 code 块上报；如果用户要求生成项目或可运行产物，必须把代码写入文件，再上报 file/image。
 
 文件创建方式：优先使用 Claude Code 的 Write/Edit/Bash 工具直接创建文件。所有正式产物优先写入你的私有工作目录。
@@ -171,6 +180,14 @@ weagent-report '{{"type":"progress","title":"分析需求","content":"正在确�
 weagent-report '{{"type":"result","title":"分析完成","content":"已确认实现范围","status":"done","step_id":"step-1"}}'
 weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/agents/{self.workspace_name}/index.html","data":{{"path":"/workspace/agents/{self.workspace_name}/index.html"}}}}'
 weagent-report '{{"type":"summary","title":"完成摘要","content":"已完成用户请求，生成的文件位于 /workspace/agents/{self.workspace_name}/index.html","status":"done"}}'
+
+服务预览命令：
+- 如果需要运行或部署生成的 Vue/Vite/React/Next/Flask/FastAPI 项目，使用 weagent-service。
+- 服务必须绑定到 0.0.0.0，并使用你上报的同一个端口。
+- 不要直接运行会常驻前台的 dev server 命令；直接运行会导致本轮任务无法结束、前端一直转圈。
+- 启动服务后必须继续调用 weagent-report 上报 summary，说明文件位置和预览服务。
+- 示例：
+weagent-service start --name "前端预览" --cwd "/workspace/agents/{self.workspace_name}" --command "npm run dev -- --host 0.0.0.0 --port 5173" --port 5173 --type vite
 
 {moderator_rule}
 下面才是用户任务。先上报 progress，再开始处理。

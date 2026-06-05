@@ -36,7 +36,11 @@ class AuthService:
 
     def login(self, username, password):
         """Authenticate user and return tokens."""
+        print(f"Attempting login for username/email: {username}")
         user = user_repo.get_by_username(username)
+        print(f"User found by username: {user}")
+        if not user and '@' in str(username or ''):
+            user = user_repo.get_by_email(username)
         if not user:
             return None, 'Invalid username or password'
 

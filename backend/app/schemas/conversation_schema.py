@@ -14,6 +14,7 @@ class ConversationResponseSchema(Schema):
     title = fields.String()
     type = fields.String()
     owner_id = fields.String()
+    is_favorite = fields.Boolean()
     created_at = fields.DateTime()
     updated_at = fields.DateTime()
     participants = fields.List(fields.Nested(lambda: ParticipantSchema()))

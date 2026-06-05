@@ -139,6 +139,63 @@ class SandboxStage0BaselineTest(unittest.TestCase):
         events = (message.meta or {}).get("events") or []
         self.assertEqual(["agent_report_element", "file_write"], [event["type"] for event in events])
 
+    def test_dependency_file_write_events_do_not_hide_progress_history(self):
+        from app.models.message import Message
+        from app.services.sandbox_event_bridge import sandbox_event_bridge
+
+        self._create_active_run()
+
+        with patch("app.services.sandbox_event_bridge.socketio.emit"):
+            sandbox_event_bridge.handle_event({
+                "session_id": "sandbox-1",
+                "agent_id": "agent-1",
+                "type": "agent_task_started",
+                "seq": 1,
+                "data": {"message": "start task"},
+            })
+            for seq in range(2, 160):
+                sandbox_event_bridge.handle_event({
+                    "session_id": "sandbox-1",
+                    "agent_id": "agent-1",
+                    "type": "file_write",
+                    "seq": seq,
+                    "data": {
+                        "file": f"/workspace/agents/frontend/node_modules/pkg/file-{seq}.js",
+                        "size": 12,
+                    },
+                })
+            sandbox_event_bridge.handle_event({
+                "session_id": "sandbox-1",
+                "agent_id": "agent-1",
+                "type": "file_write",
+                "seq": 200,
+                "data": {
+                    "file": "/workspace/agents/frontend/src/App.vue",
+                    "size": 128,
+                },
+            })
+
+        self.db.session.expire_all()
+        message = Message.query.get("message-1")
+        events = (message.meta or {}).get("events") or []
+        event_types = [event["type"] for event in events]
+
+        self.assertIn("agent_task_started", event_types)
+        self.assertEqual(0, sum(
+            1 for event in events
+            if event["type"] == "file_write"
+            and "node_modules" in event.get("data", {}).get("file", "")
+        ))
+        self.assertFalse(any(
+            element.get("data", {}).get("path", "").find("node_modules") >= 0
+            for element in message.elements
+        ))
+        self.assertTrue(any(
+            element.get("type") == "file"
+            and element.get("data", {}).get("path") == "/workspace/agents/frontend/src/App.vue"
+            for element in message.elements
+        ))
+
     def test_provider_events_persist_provider_and_remain_claude_compatible(self):
         from app.models.message import Message
         from app.services.sandbox_event_bridge import sandbox_event_bridge

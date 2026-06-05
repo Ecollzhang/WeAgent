@@ -24,6 +24,22 @@ ERROR_DELTA_EVENTS = {"provider_error_delta", "claude_error_delta"}
 OUTPUT_EVENTS = {"provider_output", "claude_output"}
 ERROR_OUTPUT_EVENTS = {"provider_error", "claude_error"}
 STOPPED_EVENTS = {"provider_stopped", "claude_stopped"}
+MAX_STORED_EVENTS = 100
+LOW_VALUE_FILE_PARTS = {
+    ".git",
+    ".next",
+    ".nuxt",
+    ".output",
+    ".parcel-cache",
+    ".turbo",
+    ".vite",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "target",
+    "vendor",
+}
 
 
 class SandboxEventBridge:
@@ -154,13 +170,15 @@ class SandboxEventBridge:
         if event_type == "agent_report_element":
             element = report_event_element(session_id, event_data)
             if not element:
-                element = progress_element("Invalid progress payload", "error", event_data)
+                element = progress_element("无效进度上报", "error", event_data)
+            elif element.get("type") == "service":
+                element = self._enrich_service_element(session_id, conversation, element)
             self._append_event(message, event_type, event_data, seq)
             if element.get("type") == "summary":
                 self._set_report_summary(message, element)
             else:
                 self._attach_agent_metadata(element, conversation, session_id)
-                self._append_element(message, element)
+                self._append_element(message, element, unique_key=self._element_unique_key(element))
                 self._enrich_file_element(
                     message, element, session_id, conversation.id, run, agent_id
                 )
@@ -176,6 +194,10 @@ class SandboxEventBridge:
             return
 
         if event_type == "file_write":
+            if self._is_low_value_file_event(event_data):
+                run.last_seq = max(run.last_seq or 0, int(seq or 0))
+                db.session.commit()
+                return
             element = file_event_element(session_id, event_data)
             if element:
                 self._attach_agent_metadata(element, conversation, session_id)
@@ -329,7 +351,7 @@ class SandboxEventBridge:
         elements = list(message.elements or [])
         if unique_key:
             exists = any(
-                (item.get("data", {}).get("url") or item.get("data", {}).get("name")) == unique_key
+                self._element_unique_key(item) == unique_key
                 for item in elements
             )
             if exists:
@@ -400,8 +422,59 @@ class SandboxEventBridge:
             return
         text = "\n".join(part for part in (message.raw_output, message.content) if part)
         for element in mentioned_file_elements(session_id, text):
-            key = element.get("data", {}).get("url") or element.get("data", {}).get("name")
+            key = self._element_unique_key(element)
             self._append_element(message, element, unique_key=key)
+
+    def _enrich_service_element(self, session_id, conversation, element):
+        data = dict(element.get("data") or {})
+        nested = data.get("service") if isinstance(data.get("service"), dict) else {}
+        service_id = str(
+            data.get("service_id")
+            or data.get("id")
+            or nested.get("service_id")
+            or nested.get("id")
+            or ""
+        ).strip()
+        if not session_id or not service_id:
+            return element
+
+        service = {}
+        try:
+            from app.sandbox import get_manager
+
+            result = get_manager().get_service(
+                session_id,
+                service_id,
+                user_id=getattr(conversation, "owner_id", None),
+            )
+            service = result.get("service") if isinstance(result, dict) else {}
+        except Exception:
+            service = {}
+
+        merged = {**nested, **data}
+        if isinstance(service, dict):
+            merged.update(service)
+        merged["service_id"] = service_id
+        merged["id"] = merged.get("id") or service_id
+        fallback_url = f"/api/sandbox/sessions/{session_id}/services/{service_id}/proxy/"
+        proxy_url = merged.get("proxy_url") or merged.get("url") or fallback_url
+        merged["proxy_url"] = proxy_url
+        merged["url"] = proxy_url
+        if merged.get("name") and not element.get("content"):
+            element["content"] = merged["name"]
+        element["data"] = merged
+        return element
+
+    @staticmethod
+    def _element_unique_key(element):
+        if not isinstance(element, dict):
+            return None
+        data = element.get("data") or {}
+        if element.get("type") == "service":
+            nested = data.get("service") if isinstance(data.get("service"), dict) else {}
+            service_id = data.get("service_id") or data.get("id") or nested.get("service_id") or nested.get("id")
+            return f"service:{service_id}" if service_id else None
+        return data.get("url") or data.get("name")
 
     def _append_event(self, message, event_type, event_data, seq=None):
         meta = dict(message.meta or {})
@@ -420,9 +493,81 @@ class SandboxEventBridge:
         )
         if provider:
             meta["provider"] = provider
-        meta["events"] = events[-100:]
+        meta["events"] = self._compact_events(events)
         message.meta = meta
         flag_modified(message, "meta")
+
+    @staticmethod
+    def _compact_events(events):
+        important = []
+        tail = []
+        seen_important = set()
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_type = event.get("type")
+            seq = event.get("seq")
+            if event_type in {
+                "agent_task_started",
+                "provider_started",
+                "claude_started",
+                "agent_report_element",
+                "provider_output",
+                "claude_output",
+                "provider_error",
+                "claude_error",
+                "provider_stopped",
+                "claude_stopped",
+                "agent_task_completed",
+                "error",
+            }:
+                key = (event_type, seq, event.get("title"))
+                if key not in seen_important:
+                    important.append(event)
+                    seen_important.add(key)
+            tail.append(event)
+
+        merged = []
+        seen = set()
+        important_tail = important[-MAX_STORED_EVENTS:]
+        for event in important_tail:
+            key = (event.get("type"), event.get("seq"), event.get("created_at"))
+            if key in seen:
+                continue
+            merged.append(event)
+            seen.add(key)
+
+        remaining = max(MAX_STORED_EVENTS - len(merged), 0)
+        if remaining:
+            extra = []
+            for event in reversed(tail):
+                key = (event.get("type"), event.get("seq"), event.get("created_at"))
+                if key in seen:
+                    continue
+                extra.append(event)
+                seen.add(key)
+                if len(extra) >= remaining:
+                    break
+            merged.extend(reversed(extra))
+
+        return sorted(
+            merged[-MAX_STORED_EVENTS:],
+            key=lambda event: (
+                event.get("seq") if event.get("seq") is not None else 0,
+                event.get("created_at") or "",
+            ),
+        )
+
+    @staticmethod
+    def _is_low_value_file_event(event_data):
+        raw_path = ""
+        if isinstance(event_data, dict):
+            raw_path = event_data.get("file") or event_data.get("path") or ""
+        path = str(raw_path).replace("\\", "/").strip("/")
+        if path.startswith("workspace/"):
+            path = path[len("workspace/"):]
+        parts = {part for part in path.split("/") if part}
+        return bool(parts & LOW_VALUE_FILE_PARTS)
 
     def _emit_step(self, conversation_id, message, run, agent_id, event_type, event_data, seq):
         socketio.emit(

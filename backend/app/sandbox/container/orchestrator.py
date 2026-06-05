@@ -22,6 +22,7 @@ from . import session as session_store
 from .events import push_event
 from .logging_utils import log_agent, log_event, shorten
 from .providers import ProviderRunnerFactory
+from .service_manager import ServiceManager
 
 
 class Orchestrator:
@@ -36,6 +37,7 @@ class Orchestrator:
         self.tools = ToolRegistry()
         self.custom_tools_path = "/workspace/.session/tools.json"
         self.services: dict[int, dict] = {}
+        self.service_manager = ServiceManager()
         os.makedirs("/workspace/shared", exist_ok=True)
         os.makedirs("/workspace/agents", exist_ok=True)
         os.environ.update(claude_env())
@@ -51,7 +53,10 @@ class Orchestrator:
         if not os.path.exists(base):
             return snapshot
         for root, dirs, files in os.walk(base):
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith(".") and d not in self.LOW_VALUE_FILE_PARTS
+            ]
             for f in files:
                 full = os.path.join(root, f)
                 try:
@@ -682,6 +687,21 @@ class Orchestrator:
     )
     FRONTEND_FILE_EXTS = {".html", ".htm", ".css", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svg"}
     DOC_FILE_EXTS = {".md", ".txt"}
+    LOW_VALUE_FILE_PARTS = {
+        ".git",
+        ".next",
+        ".nuxt",
+        ".output",
+        ".parcel-cache",
+        ".turbo",
+        ".vite",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "target",
+        "vendor",
+    }
 
     @staticmethod
     def _agent_kind(agent_id: str, role: str = "") -> str:
@@ -780,6 +800,13 @@ class Orchestrator:
         if clean.startswith("shared/"):
             return clean, None
         return f"{agent_root}/{clean}", "rewritten to agent workspace"
+
+    def _is_low_value_file_path(self, relpath: str) -> bool:
+        path = str(relpath or "").replace("\\", "/").strip("/")
+        if path.startswith("workspace/"):
+            path = path[len("workspace/"):]
+        parts = {part for part in path.split("/") if part}
+        return bool(parts & self.LOW_VALUE_FILE_PARTS)
 
     def _should_collect_agent_files(self, agent_id: str) -> bool:
         agent = self.agents.get(agent_id)
@@ -923,6 +950,8 @@ class Orchestrator:
             current = self._snapshot_workspace()
             changed_files = []
             for relpath, meta in current.items():
+                if self._is_low_value_file_path(relpath):
+                    continue
                 old = baseline.get(relpath)
                 if not old:
                     changed_files.append((relpath, "created"))
@@ -1181,6 +1210,42 @@ class Orchestrator:
         except IOError as e:
             return {"error": f"Failed to read file: {e}"}
 
+    def start_service(self, payload: dict) -> dict:
+        """Start a preview service inside the sandbox container."""
+        try:
+            result = self.service_manager.start_service(
+                agent_id=payload.get("agent_id", ""),
+                name=payload.get("name", ""),
+                cwd=payload.get("cwd", ""),
+                command=payload.get("command", ""),
+                port=int(payload.get("port") or 0),
+                service_type=payload.get("type") or payload.get("service_type") or "custom",
+                env=payload.get("env") or {},
+            )
+            log_event("service_start_requested", result_status=result.get("status"))
+            return result
+        except Exception as exc:
+            log_event("service_start_exception", level="error", error=str(exc))
+            return {"error": str(exc)}
+
+    def stop_service(self, service_id: str) -> dict:
+        return self.service_manager.stop_service(service_id)
+
+    def restart_service(self, service_id: str) -> dict:
+        return self.service_manager.restart_service(service_id)
+
+    def list_services(self) -> dict:
+        return {"services": self.service_manager.list_services()}
+
+    def get_service(self, service_id: str) -> dict:
+        service = self.service_manager.get_service(service_id)
+        if not service:
+            return {"error": "service not found"}
+        return {"service": service}
+
+    def get_service_logs(self, service_id: str, tail_bytes: int = 65536) -> dict:
+        return self.service_manager.get_logs(service_id, tail_bytes=tail_bytes)
+
     def read_raw_file(self, path: str) -> tuple[bytes, str, str]:
         """Read raw bytes from a workspace file with MIME type."""
         real_path, error = self._resolve_workspace_path(path)
@@ -1196,8 +1261,8 @@ class Orchestrator:
         filename = os.path.basename(real_path)
         return content, mime_type, filename
 
-    REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error"}
-    REPORT_STATUSES = {"running", "done", "error", "stopped"}
+    REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service"}
+    REPORT_STATUSES = {"running", "done", "error", "stopped", "starting", "stopping", "failed", "exited"}
     REPORT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
     def report_element(self, agent_id: str, report: dict) -> dict:
@@ -1323,6 +1388,21 @@ class Orchestrator:
         if element_type == "code":
             normalized["data"]["language"] = str(data.get("language") or report.get("language") or "text")
 
+        if element_type == "service":
+            service_data = data.get("service") if isinstance(data.get("service"), dict) else data
+            service_id = str(service_data.get("service_id") or service_data.get("id") or "").strip()
+            if not service_id:
+                return {}, self._report_usage_error("service requires data.service_id as a non-empty string")
+            normalized["data"].update(service_data)
+            normalized["data"]["service_id"] = service_id
+            normalized["data"]["id"] = service_data.get("id") or service_id
+            if service_data.get("port") is not None:
+                try:
+                    normalized["data"]["port"] = int(service_data.get("port"))
+                except (TypeError, ValueError):
+                    return {}, self._report_usage_error("service data.port must be a positive integer")
+            normalized["content"] = content or title
+
         if element_type in {"progress", "result", "summary", "text", "error"}:
             normalized["content"] = content or title
 
@@ -1334,10 +1414,11 @@ class Orchestrator:
             f"WEAGENT_REPORT_VALIDATION_ERROR: {message}\n"
             "weagent-report 只接受一个 JSON 对象字符串。\n"
             "必填字段：type、title；除 table 外还必须有非空 content。\n"
-            "type 只能是 progress/result/text/table/image/code/file/error。\n"
-            "status 可选，只能是 running/done/error/stopped。\n"
+            "type 只能是 progress/result/summary/text/table/image/code/file/error/service。\n"
+            "status 可选，只能是 running/done/error/stopped/starting/stopping/failed/exited。\n"
             "table 格式：{\"type\":\"table\",\"title\":\"任务分派计划\",\"data\":{\"headers\":[\"Agent\",\"任务\",\"产出\"],\"rows\":[[\"frontend\",\"实现登录页\",\"index.html\"]]}}\n"
             "file 格式：{\"type\":\"file\",\"title\":\"前端页面\",\"content\":\"/workspace/agents/frontend/index.html\",\"data\":{\"path\":\"/workspace/agents/frontend/index.html\"}}\n"
+            "service 格式：{\"type\":\"service\",\"title\":\"前端预览\",\"content\":\"服务已启动\",\"status\":\"running\",\"data\":{\"service_id\":\"svc_xxx\",\"port\":5173}}\n"
             "progress 格式：{\"type\":\"progress\",\"title\":\"分析需求\",\"content\":\"正在确认任务范围\",\"status\":\"running\",\"step_id\":\"step-1\"}"
         )
 
@@ -1467,101 +1548,6 @@ class Orchestrator:
             include_hidden=include_hidden,
         )
         return {"root": root, "tree": tree}
-
-    # ---- Services ----
-
-    def list_services(self) -> dict:
-        services = []
-        for port, info in self.services.items():
-            proc = info.get("process")
-            running = proc.poll() is None if proc else False
-            services.append({
-                "port": port,
-                "agent_id": info.get("agent_id"),
-                "command": info.get("command"),
-                "cwd": info.get("cwd"),
-                "started_at": info.get("started_at"),
-                "running": running,
-                "log_path": info.get("log_path"),
-            })
-        return {"services": services}
-
-    def start_service(self, agent_id: str, command: str, cwd: str, port: int) -> dict:
-        real_cwd, error = self._resolve_workspace_path(cwd or "/workspace")
-        if error:
-            return {"status": "error", "error": error}
-        if not os.path.isdir(real_cwd):
-            return {"status": "error", "error": f"cwd not found: {cwd}"}
-        if port <= 0:
-            return {"status": "error", "error": "port required"}
-
-        existing = self.services.get(port)
-        if existing and existing.get("process") and existing["process"].poll() is None:
-            return {"status": "error", "error": f"Service on port {port} is already running"}
-
-        os.makedirs("/workspace/.session/services", exist_ok=True)
-        log_path = f"/workspace/.session/services/{port}.log"
-        log_file = open(log_path, "a", encoding="utf-8")
-
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            cwd=real_cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-        )
-
-        self.services[port] = {
-            "process": proc,
-            "agent_id": agent_id,
-            "command": command,
-            "cwd": real_cwd,
-            "started_at": time.time(),
-            "log_path": log_path,
-        }
-
-        def _stream_logs():
-            try:
-                for line in proc.stdout:
-                    log_file.write(line)
-                    log_file.flush()
-                    push_event(agent_id or "system", "service_log", {
-                        "agent_id": agent_id,
-                        "port": port,
-                        "line": line.rstrip("\n"),
-                    })
-            finally:
-                log_file.close()
-
-        threading.Thread(target=_stream_logs, daemon=True).start()
-        push_event(agent_id or "system", "service_started", {
-            "agent_id": agent_id,
-            "port": port,
-            "command": command,
-            "cwd": real_cwd,
-            "log_path": log_path,
-        })
-        return {"status": "ok", "port": port, "pid": proc.pid, "log_path": log_path}
-
-    def stop_service(self, port: int) -> dict:
-        info = self.services.get(port)
-        if not info:
-            return {"status": "error", "error": f"Service on port {port} not found"}
-        proc = info.get("process")
-        if proc and proc.poll() is None:
-            proc.terminate()
-        push_event(info.get("agent_id") or "system", "service_stopped", {"port": port})
-        return {"status": "ok", "port": port}
-
-    def service_logs(self, port: int) -> dict:
-        log_path = f"/workspace/.session/services/{port}.log"
-        if not os.path.exists(log_path):
-            return {"port": port, "logs": ""}
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            return {"port": port, "logs": f.read()}
 
     # ---- Stop agent ----
 

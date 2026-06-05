@@ -79,6 +79,8 @@ def _migrate_existing_tables():
     if 'conversations' in inspector.get_table_names():
         cols = [c['name'] for c in inspector.get_columns('conversations')]
         with db.engine.connect() as conn:
+            if 'is_favorite' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN is_favorite BOOLEAN NOT NULL DEFAULT 0'))
             if 'sandbox_session_id' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_session_id VARCHAR(100) DEFAULT NULL'))
             if 'sandbox_container_id' not in cols:

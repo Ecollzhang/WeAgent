@@ -6,9 +6,37 @@ Used by DockerContainerManager to communicate with running containers.
 
 import json
 import os
+import threading
+import urllib.parse
 import urllib.request
 import urllib.error
 from typing import Optional
+
+import simple_websocket
+
+
+_BLOCKED_PROXY_HEADERS = {
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "accept-encoding",
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-extensions",
+    "sec-websocket-protocol",
+}
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class OrchestratorClient:
@@ -250,11 +278,129 @@ class OrchestratorClient:
     def list_services(self) -> dict:
         return self._request("GET", "/api/services")
 
+    def get_service(self, service_id: str) -> dict:
+        return self._request("GET", f"/api/services/{service_id}")
+
     def start_service(self, data: dict) -> dict:
         return self._request("POST", "/api/services/start", data)
 
-    def stop_service(self, port: int) -> dict:
-        return self._request("POST", f"/api/services/{port}/stop")
+    def stop_service(self, service_id: str) -> dict:
+        return self._request("POST", f"/api/services/{service_id}/stop")
 
-    def service_logs(self, port: int) -> dict:
-        return self._request("GET", f"/api/services/{port}/logs")
+    def restart_service(self, service_id: str) -> dict:
+        return self._request("POST", f"/api/services/{service_id}/restart")
+
+    def service_logs(self, service_id: str, tail_bytes: int = 65536) -> dict:
+        return self._request("GET", f"/api/services/{service_id}/logs?tail_bytes={tail_bytes}")
+
+    def proxy_service(
+        self,
+        service_id: str,
+        path: str,
+        method: str,
+        headers: dict | None = None,
+        body: bytes | None = None,
+        query_string: str = "",
+        timeout: Optional[int] = None,
+    ) -> dict:
+        if timeout is None:
+            timeout = int(os.environ.get("SANDBOX_SERVICE_PROXY_TIMEOUT_SECONDS", "60"))
+        quoted_service_id = urllib.parse.quote(service_id, safe="")
+        quoted_path = urllib.parse.quote(path or "", safe="/:@!$&'()*+,;=-._~")
+        url = f"{self.base_url}/api/services/{quoted_service_id}/proxy/{quoted_path}"
+        if query_string:
+            url = f"{url}?{query_string}"
+
+        request_headers = {
+            str(key): str(value)
+            for key, value in (headers or {}).items()
+            if str(key).lower() not in _BLOCKED_PROXY_HEADERS
+        }
+        data = body if body else None
+        req = urllib.request.Request(url, data=data, headers=request_headers, method=method.upper())
+        opener = urllib.request.build_opener(_NoRedirectHandler)
+
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                return {
+                    "status_code": resp.status,
+                    "headers": list(resp.headers.items()),
+                    "body": resp.read(),
+                }
+        except urllib.error.HTTPError as exc:
+            return {
+                "status_code": exc.code,
+                "headers": list(exc.headers.items()),
+                "body": exc.read(),
+            }
+        except urllib.error.URLError as exc:
+            return {
+                "status_code": 502,
+                "headers": [("Content-Type", "text/plain; charset=utf-8")],
+                "body": f"Sandbox service proxy failed: {exc.reason}".encode("utf-8"),
+            }
+
+    def proxy_service_websocket(
+        self,
+        service_id: str,
+        path: str,
+        client_ws,
+        headers: dict | None = None,
+        query_string: str = "",
+    ) -> dict:
+        quoted_service_id = urllib.parse.quote(service_id, safe="")
+        quoted_path = urllib.parse.quote(path or "", safe="/:@!$&'()*+,;=-._~")
+        url = self._websocket_url(f"/api/services/{quoted_service_id}/proxy/{quoted_path}")
+        if query_string:
+            url = f"{url}?{query_string}"
+
+        request_headers = {
+            str(key): str(value)
+            for key, value in (headers or {}).items()
+            if str(key).lower() not in _BLOCKED_PROXY_HEADERS
+        }
+        upstream_ws = simple_websocket.Client.connect(url, headers=request_headers)
+        return _relay_websockets(client_ws, upstream_ws)
+
+    def _websocket_url(self, path: str) -> str:
+        parsed = urllib.parse.urlsplit(self.base_url)
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        return urllib.parse.urlunsplit((scheme, parsed.netloc, path, "", ""))
+
+
+def _relay_websockets(left, right) -> dict:
+    stop = threading.Event()
+
+    def close_both():
+        for ws in (left, right):
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def pump(source, target):
+        while not stop.is_set():
+            try:
+                message = source.receive()
+            except simple_websocket.ConnectionClosed:
+                break
+            except Exception:
+                break
+            if message is None:
+                break
+            try:
+                target.send(message)
+            except Exception:
+                break
+        stop.set()
+        close_both()
+
+    threads = [
+        threading.Thread(target=pump, args=(left, right), daemon=True),
+        threading.Thread(target=pump, args=(right, left), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return {"status": "closed"}

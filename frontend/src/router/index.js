@@ -46,10 +46,14 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/favorites',
+    name: 'Favorites',
+    component: () => import('../views/Favorites.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/sandbox',
-    name: 'SandboxTest',
-    component: () => import('../views/SandboxTest.vue'),
-    meta: { requiresAuth: false },
+    redirect: '/favorites',
   },
 ]
 
