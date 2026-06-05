@@ -153,6 +153,35 @@ export function getFileTree(sessionId, root = '/workspace') {
   })
 }
 
+export function listSandboxServices(sessionId) {
+  return request({
+    method: 'get',
+    url: `/sandbox/sessions/${sessionId}/services`,
+  })
+}
+
+export function getSandboxServiceLogs(sessionId, serviceId, tailBytes = 65536) {
+  return request({
+    method: 'get',
+    url: `/sandbox/sessions/${sessionId}/services/${serviceId}/logs`,
+    params: { tail_bytes: tailBytes },
+  })
+}
+
+export function restartSandboxService(sessionId, serviceId) {
+  return request({
+    method: 'post',
+    url: `/sandbox/sessions/${sessionId}/services/${serviceId}/restart`,
+  })
+}
+
+export function stopSandboxService(sessionId, serviceId) {
+  return request({
+    method: 'post',
+    url: `/sandbox/sessions/${sessionId}/services/${serviceId}/stop`,
+  })
+}
+
 export function readAgentFile(sessionId, agentId, path) {
   return request({
     method: 'get',

@@ -276,7 +276,7 @@ class MessageService:
 
     def send_message(self, conversation_id, sender_type, sender_id, content,
                      message_type='text', parent_message_id=None, artifact_id=None,
-                     target_agent_ids=None):
+                     target_agent_ids=None, agent_configs=None):
         """Send a message in a conversation."""
         conversation = conversation_repo.get_by_id(conversation_id)
         if not conversation:
@@ -293,6 +293,15 @@ class MessageService:
         )
         if sender_type == 'user' and target_agent_ids and len(target_participants) != len(target_agent_ids):
             return None, '指定的 Agent 不在当前会话中'
+        if sender_type == 'user' and target_participants:
+            disabled_ids = self._disabled_session_agent_ids(agent_configs)
+            disabled_targets = [
+                p.participant_name or p.participant_id
+                for p in target_participants
+                if str(p.participant_id) in disabled_ids
+            ]
+            if disabled_targets:
+                return None, '以下 Agent 已在当前会话中禁用，请先在智能体配置中启用后再 @：' + '、'.join(disabled_targets)
         message_meta = None
         if sender_type == 'user' and target_participants:
             message_meta = {
@@ -337,7 +346,7 @@ class MessageService:
                 app = current_app._get_current_object()
                 thread = threading.Thread(
                     target=self._dispatch_agent_sandbox,
-                    args=(app, conversation_id, content, message.id, target_agent_ids),
+                    args=(app, conversation_id, content, message.id, target_agent_ids, agent_configs),
                     daemon=True,
                 )
                 thread.start()
@@ -349,7 +358,7 @@ class MessageService:
         self._dispatch_agent_sandbox(app, conversation_id, user_content, user_message_id)
 
     def _dispatch_agent_sandbox(self, app, conversation_id, user_content,
-                                user_message_id=None, target_agent_ids=None):
+                                user_message_id=None, target_agent_ids=None, agent_configs=None):
         """Dispatch a user round to one agent or a backend-orchestrated group."""
         with app.app_context():
             conversation = conversation_repo.get_by_id(conversation_id)
@@ -362,6 +371,11 @@ class MessageService:
             ]
             if not agent_participants:
                 return
+            user_content = self._apply_session_agent_configs(
+                user_content,
+                agent_configs,
+                agent_participants,
+            )
             direct_targets = self._resolve_direct_target_participants(
                 conversation,
                 agent_participants,
@@ -381,7 +395,72 @@ class MessageService:
                                                   user_content, user_message_id)
             else:
                 self._dispatch_multi_agent_round(conversation, agent_participants,
-                                                 user_content, user_message_id)
+                                                 user_content, user_message_id, agent_configs)
+
+    @staticmethod
+    def _apply_session_agent_configs(user_content, agent_configs, agent_participants):
+        config_map = MessageService._normalize_session_agent_configs(agent_configs)
+        if not config_map:
+            return user_content
+
+        blocks = []
+        for participant in agent_participants:
+            cfg = config_map.get(str(participant.participant_id))
+            if not cfg:
+                continue
+            lines = [f"Agent: {cfg.get('role') or participant.participant_name or participant.participant_id}"]
+            lines.append(f"Agent ID: {participant.participant_id}")
+            if cfg.get('enabled') is False:
+                lines.append("状态: 当前会话中已禁用。不要把任务分配给它；如果用户任务必须依赖该 Agent，先回复用户说明需要启用后才能继续。")
+            if cfg.get('system_prompt'):
+                lines.append(f"会话级系统提示词: {cfg.get('system_prompt')}")
+            if cfg.get('skill'):
+                lines.append(f"会话级技能/工作方式: {cfg.get('skill')}")
+            lines.append("SESSION_AGENT_CONFIG_JSON: " + json.dumps({
+                'agent_id': participant.participant_id,
+                'role': cfg.get('role') or participant.participant_name or participant.participant_id,
+                'system_prompt': cfg.get('system_prompt') or '',
+                'skill': cfg.get('skill') or '',
+                'enabled': cfg.get('enabled', True),
+                'adapter_name': cfg.get('adapter_name') or '',
+            }, ensure_ascii=False))
+            if len(lines) > 1:
+                blocks.append("\n".join(lines))
+
+        if not blocks:
+            return user_content
+        config_text = "\n\n".join(blocks)
+        return (
+            f"{user_content}\n\n"
+            "【当前会话级 Agent 配置覆盖】\n"
+            "以下配置只对当前会话调度生效，不代表全局 Agent 配置变更。\n"
+            "SESSION_AGENT_CONFIG_CONTEXT:\n"
+            f"{config_text}"
+        )
+
+    @staticmethod
+    def _normalize_session_agent_configs(agent_configs):
+        if isinstance(agent_configs, list):
+            return {
+                str(item.get('agent_id')): item
+                for item in agent_configs
+                if isinstance(item, dict) and item.get('agent_id')
+            }
+        if isinstance(agent_configs, dict):
+            return {
+                str(key): value
+                for key, value in agent_configs.items()
+                if isinstance(value, dict)
+            }
+        return {}
+
+    @staticmethod
+    def _disabled_session_agent_ids(agent_configs):
+        return {
+            str(agent_id)
+            for agent_id, cfg in MessageService._normalize_session_agent_configs(agent_configs).items()
+            if cfg.get('enabled') is False
+        }
 
     @staticmethod
     def _normalize_target_agent_ids(target_agent_ids):
@@ -568,7 +647,7 @@ class MessageService:
             self._mark_agent_message_failed(agent_msg.id, run.id, str(e))
 
     def _dispatch_multi_agent_round(self, conversation, agent_participants,
-                                    user_content, user_message_id=None):
+                                    user_content, user_message_id=None, agent_configs=None):
         if not conversation.sandbox_session_id:
             self._emit_system_error(conversation.id, '该会话没有可用的沙箱容器。')
             return
@@ -578,6 +657,9 @@ class MessageService:
             None,
         )
         workers = [p for p in agent_participants if p.participant_id != MODERATOR_AGENT_ID]
+        disabled_worker_ids = self._disabled_session_agent_ids(agent_configs)
+        enabled_workers = [p for p in workers if str(p.participant_id) not in disabled_worker_ids]
+        disabled_workers = [p for p in workers if str(p.participant_id) in disabled_worker_ids]
         if not moderator:
             self._emit_system_error(conversation.id, '多 Agent 会话缺少主持 Agent，请重新创建会话。')
             return
@@ -601,7 +683,7 @@ class MessageService:
             moderator_msg, moderator_run = self._create_agent_message_and_run(
                 conversation, moderator, round_id, user_message_id, '主持 Agent 正在查看群成员...'
             )
-            plan = self._build_team_info_answer(workers)
+            plan = self._build_team_info_answer(workers, user_content, agent_configs)
             self._finish_moderator_message(moderator_msg.id, moderator_run.id, plan)
             return
 
@@ -611,7 +693,7 @@ class MessageService:
 
         try:
             from app.sandbox import get_manager
-            plan_prompt = self._build_moderator_plan_prompt(user_content, workers)
+            plan_prompt = self._build_moderator_plan_prompt(user_content, enabled_workers, disabled_workers)
             result = get_manager().send_message(
                 conversation.sandbox_session_id,
                 moderator.participant_id,
@@ -869,7 +951,8 @@ class MessageService:
         }, None
 
     @staticmethod
-    def _default_team_info(workers):
+    def _default_team_info(workers, agent_configs=None):
+        config_map = MessageService._normalize_session_agent_configs(agent_configs)
         team = [{
             'agent_id': MODERATOR_AGENT_ID,
             'name': '任务主持人',
@@ -887,24 +970,61 @@ class MessageService:
         msg = Message.query.get(message_id)
         if not msg:
             return
+        from app.models.agent_run import AgentRun
+        run = AgentRun.query.get(msg.run_id)
         if plan.get('type') == 'answer':
             content = self._format_team_answer(plan)
         else:
             content = self._format_plan_summary(plan)
         msg.content = content
-        msg.elements = [{'type': 'text', 'content': content}]
+        msg.elements = self._moderator_plan_elements(msg.elements, content, plan)
+        msg.raw_output = ''
+        msg.status = 'done'
+        if run:
+            run.status = 'done'
+            run.finished_at = beijing_now()
         db.session.commit()
         socketio.emit('conversation_message_status', {
             'conversation_id': msg.conversation_id,
             'message_id': msg.id,
             'run_id': msg.run_id,
             'agent_id': msg.sender_id,
-            'status': msg.status,
+            'status': 'done',
             'content': msg.content,
             'elements': msg.elements,
             'raw_output': msg.raw_output,
+            'clear_raw_output': True,
             'sender_name': self._sender_name_for_message(msg),
         }, room=msg.conversation_id)
+
+    @staticmethod
+    def _moderator_plan_elements(existing_elements, content, plan):
+        preserved_types = {'result', 'summary', 'error', 'code', 'table', 'image', 'file', 'service'}
+        elements = [{
+            'type': 'text',
+            'content': content,
+            'data': {'kind': 'moderator_plan_summary'},
+        }]
+        for element in existing_elements or []:
+            if not isinstance(element, dict):
+                continue
+            data = element.get('data') if isinstance(element.get('data'), dict) else {}
+            if data.get('kind') in {'moderator_plan_summary', 'moderator_plan_json'}:
+                continue
+            if element.get('type') in preserved_types:
+                elements.append(element)
+        if plan.get('type') == 'plan':
+            elements.append({
+                'type': 'code',
+                'content': json.dumps(plan, ensure_ascii=False, indent=2),
+                'data': {
+                    'kind': 'moderator_plan_json',
+                    'title': '主持人任务分派计划',
+                    'language': 'json',
+                    'filename': 'moderator-plan.json',
+                },
+            })
+        return elements
 
     @staticmethod
     def _format_team_answer(plan):
@@ -914,6 +1034,10 @@ class MessageService:
             lines.append(summary)
             lines.append('')
         lines.append('我看到当前群聊中有这些 Agent：')
+        if summary.startswith('下面是你询问') and len(lines) >= 3:
+            lines.pop()
+        if summary.startswith('下面是你询问') and len(lines) >= 3:
+            lines.pop()
         for item in plan.get('team') or []:
             name = item.get('name') or item.get('agent_id') or 'Agent'
             agent_id = item.get('agent_id') or ''
@@ -921,6 +1045,13 @@ class MessageService:
             capabilities = item.get('capabilities') or []
             for capability in capabilities[:5]:
                 lines.append(f'  - {capability}')
+            skill = str(item.get('skill') or '').strip()
+            if skill:
+                skill_label = '会话级 skill' if item.get('session_overridden') else 'skill'
+                lines.append(f'  - **{skill_label}**:')
+                for line in skill.splitlines():
+                    if line.strip():
+                        lines.append(f'    {line.strip()}')
         return '\n'.join(lines).strip()
 
     @staticmethod
@@ -953,7 +1084,7 @@ class MessageService:
                 lines.append(f'{index}. ' + '、'.join(f'`{item}`' for item in group))
         return '\n'.join(lines).strip() or '主持 Agent 已生成分工计划。'
 
-    def _build_moderator_plan_prompt(self, user_content, workers):
+    def _build_moderator_plan_prompt(self, user_content, workers, disabled_workers=None):
         worker_lines = []
         for p in workers:
             profile = self._worker_profile(p)
@@ -966,6 +1097,12 @@ class MessageService:
                 f"  capabilities: {capability_text}\n"
                 f"  skill: {skill}"
             )
+        disabled_lines = []
+        for p in disabled_workers or []:
+            profile = self._worker_profile(p)
+            disabled_lines.append(f"- agent_id: {profile['agent_id']}\n  name: {profile['name']}")
+        enabled_text = "\n".join(worker_lines) if worker_lines else "无"
+        disabled_text = "\n".join(disabled_lines) if disabled_lines else "无"
         return (
             "请基于下面用户任务生成严格 JSON。只输出 JSON，不要输出 Markdown，不要使用代码块。\n\n"
             "你必须先判断自己是否能回答：\n"
@@ -975,6 +1112,10 @@ class MessageService:
             "我知道群里有哪些 agent，但不清楚他们具体能干啥，我帮你问一下他们。"
             "然后给每个需要了解的 worker 生成一个自我介绍任务。\n"
             "3. 如果用户要求完成一个需要执行的任务，输出 type=plan，只安排必要的 worker，不需要所有 worker 都参与。\n\n"
+            "4. disabled_worker_agents 是当前会话中被用户禁用的 Agent。你不能把任务分配给这些 Agent，"
+            "也不能把它们写入 selected_agents 或 tasks.agent_id。"
+            "如果用户任务必须依赖某个被禁用 Agent，或当前启用的 worker 无法完成任务，输出 type=answer，"
+            "告诉用户需要先在“智能体配置”中启用对应 Agent 后再继续。\n\n"
             "type=answer 格式：\n"
             "{\n"
             '  "type": "answer",\n'
@@ -999,7 +1140,9 @@ class MessageService:
             "- type=answer 时 tasks 可以省略，也可以是空数组。\n"
             "- agent_id 必须来自 worker_agents，不要编造。\n\n"
             "可用 worker_agents:\n"
-            + "\n".join(worker_lines)
+            + enabled_text
+            + "\n\n禁用 disabled_worker_agents:\n"
+            + disabled_text
             + "\n\n用户任务:\n"
             + user_content
         )
@@ -1151,7 +1294,8 @@ class MessageService:
         }, None
 
     @staticmethod
-    def _default_team_info(workers):
+    def _default_team_info(workers, agent_configs=None):
+        config_map = MessageService._normalize_session_agent_configs(agent_configs)
         team = [{
             'agent_id': MODERATOR_AGENT_ID,
             'name': '任务主持人',
@@ -1159,9 +1303,13 @@ class MessageService:
         }]
         for worker in workers:
             profile = MessageService._worker_profile(worker)
+            session_cfg = config_map.get(str(worker.participant_id)) or {}
+            skill = session_cfg.get('skill') or profile.get('skill') or ''
             team.append({
                 'agent_id': worker.participant_id,
-                'name': profile['name'],
+                'name': session_cfg.get('role') or profile['name'],
+                'skill': skill,
+                'session_overridden': bool(session_cfg),
                 'capabilities': profile['capabilities'] or ['根据自身角色完成主持 Agent 分配的任务'],
             })
         return team
@@ -1181,6 +1329,13 @@ class MessageService:
             capabilities = item.get('capabilities') or []
             for capability in capabilities[:5]:
                 lines.append(f'  - {capability}')
+            skill = str(item.get('skill') or '').strip()
+            if skill:
+                skill_label = '会话级 skill' if item.get('session_overridden') else 'skill'
+                lines.append(f'  - **{skill_label}**:')
+                for line in skill.splitlines():
+                    if line.strip():
+                        lines.append(f'    {line.strip()}')
         return '\n'.join(lines).strip()
 
     @staticmethod
@@ -1215,13 +1370,62 @@ class MessageService:
 
     @staticmethod
     def _is_team_info_query(content):
-        text = (content or '').lower()
+        text = MessageService._strip_session_config_context(content).lower()
+        if ('skill' in text or '技能' in text or '介绍' in text) and not any(
+            word in text for word in ('群里', '团队', '成员', '所有agent', '所有 agent', '有哪些agent', '有哪些 agent')
+        ):
+            return False
+        if MessageService._is_skill_query(text):
+            return True
         team_words = ('群里', '团队', '成员', 'agent', 'agents', '智能体')
         info_words = ('都有谁', '有哪些', '能做什么', '能干啥', '能力', '职责', '介绍')
         return any(word in text for word in team_words) and any(word in text for word in info_words)
 
-    def _build_team_info_answer(self, workers):
-        team = self._default_team_info(workers)
+    @staticmethod
+    def _strip_session_config_context(content):
+        text = str(content or '')
+        marker = 'SESSION_AGENT_CONFIG_CONTEXT:'
+        if marker in text:
+            return text.split(marker, 1)[0].strip()
+        json_marker = 'SESSION_AGENT_CONFIG_JSON:'
+        if json_marker in text:
+            return text.split(json_marker, 1)[0].strip()
+        return text
+
+    @staticmethod
+    def _is_skill_query(text):
+        text = str(text or '').lower()
+        return ('skill' in text or '技能' in text) and any(
+            word in text for word in ('介绍', '说', '说明', '有哪些', '是什么', '查看', '再讲', '再次')
+        )
+
+    @staticmethod
+    def _team_item_matches_query(item, query_text):
+        query_text = str(query_text or '').lower()
+        if not query_text:
+            return False
+        candidates = [
+            item.get('agent_id'),
+            item.get('name'),
+            ' '.join(item.get('capabilities') or []),
+        ]
+        for value in candidates:
+            value_text = str(value or '').lower().strip()
+            if not value_text:
+                continue
+            if value_text in query_text or query_text in value_text:
+                return True
+            if any(value_text[index:index + 2] in query_text for index in range(max(len(value_text) - 1, 0))):
+                return True
+        return False
+
+    def _build_team_info_answer(self, workers, query='', agent_configs=None):
+        team = self._default_team_info(workers, agent_configs)
+        query_text = self._strip_session_config_context(query).lower()
+        worker_team = [item for item in team if item.get('agent_id') != MODERATOR_AGENT_ID]
+        matched = [item for item in worker_team if self._team_item_matches_query(item, query_text)]
+        if matched:
+            team = matched
         worker_names = [
             item.get('name') or item.get('agent_id')
             for item in team
@@ -1233,6 +1437,10 @@ class MessageService:
         )
         if worker_names:
             summary += " 当前 worker 包括：" + "、".join(worker_names) + "。"
+        if matched and self._is_skill_query(query_text):
+            summary = '下面是你询问的 Agent skill。'
+        elif matched:
+            summary = '下面是你询问的 Agent 信息。'
         return {
             'type': 'answer',
             'summary': summary,
@@ -1292,8 +1500,7 @@ class MessageService:
         msg.content = content
         msg.elements = [{'type': 'text', 'content': content}]
         msg.status = 'done'
-        if not msg.raw_output:
-            msg.raw_output = json.dumps(plan, ensure_ascii=False)
+        msg.raw_output = ''
         if run:
             run.status = 'done'
             run.finished_at = beijing_now()
@@ -1307,6 +1514,7 @@ class MessageService:
             'content': msg.content,
             'elements': msg.elements,
             'raw_output': msg.raw_output,
+            'replace_elements': True,
             'sender_name': self._sender_name_for_message(msg),
         }, room=msg.conversation_id)
 
@@ -1513,7 +1721,7 @@ class MessageService:
             self._mark_agent_message_failed(summary_msg.id, run.id, str(e))
 
     def _dispatch_multi_agent_round(self, conversation, agent_participants,
-                                    user_content, user_message_id=None):
+                                    user_content, user_message_id=None, agent_configs=None):
         if not conversation.sandbox_session_id:
             self._emit_system_error(conversation.id, '该会话没有可用的沙箱容器。')
             return
@@ -1523,6 +1731,9 @@ class MessageService:
             None,
         )
         workers = [p for p in agent_participants if p.participant_id != MODERATOR_AGENT_ID]
+        disabled_worker_ids = self._disabled_session_agent_ids(agent_configs)
+        enabled_workers = [p for p in workers if str(p.participant_id) not in disabled_worker_ids]
+        disabled_workers = [p for p in workers if str(p.participant_id) in disabled_worker_ids]
         if not moderator:
             self._emit_system_error(conversation.id, '多 Agent 会话缺少主持 Agent，请重新创建会话。')
             return
@@ -1531,21 +1742,17 @@ class MessageService:
             return
 
         round_id = str(uuid.uuid4())
-        if self._is_team_info_query(user_content):
-            moderator_msg, moderator_run = self._create_agent_message_and_run(
-                conversation, moderator, round_id, user_message_id, '主持 Agent 正在查看群成员...'
-            )
-            plan = self._build_team_info_answer(workers)
-            self._finish_moderator_message(moderator_msg.id, moderator_run.id, plan)
-            return
-
         moderator_msg, moderator_run = self._create_agent_message_and_run(
-            conversation, moderator, round_id, user_message_id, '主持 Agent 正在拆解任务...'
+            conversation, moderator, round_id, user_message_id, '主持 Agent 正在处理请求...'
         )
 
         try:
             from app.sandbox import get_manager
-            plan_prompt = self._build_moderator_plan_prompt(user_content, workers)
+            if not enabled_workers:
+                plan = self._disabled_workers_answer(disabled_workers)
+                self._replace_message_with_moderator_summary(moderator_msg.id, plan)
+                return
+            plan_prompt = self._build_moderator_plan_prompt(user_content, enabled_workers, disabled_workers)
             reply = ''
             plan = None
             for attempt in range(1, 4):
@@ -1579,12 +1786,6 @@ class MessageService:
                 )
                 return
 
-            self._mark_agent_message_done_if_active(
-                moderator_msg.id,
-                moderator_run.id,
-                moderator.participant_id,
-                reply,
-            )
             self._replace_message_with_moderator_summary(moderator_msg.id, plan)
             if plan.get('type') == 'answer':
                 return
@@ -1603,7 +1804,7 @@ class MessageService:
             )
 
     def _dispatch_multi_agent_round(self, conversation, agent_participants,
-                                    user_content, user_message_id=None):
+                                    user_content, user_message_id=None, agent_configs=None):
         if not conversation.sandbox_session_id:
             self._emit_system_error(conversation.id, '该会话没有可用的沙箱容器。')
             return
@@ -1613,6 +1814,9 @@ class MessageService:
             None,
         )
         workers = [p for p in agent_participants if p.participant_id != MODERATOR_AGENT_ID]
+        disabled_worker_ids = self._disabled_session_agent_ids(agent_configs)
+        enabled_workers = [p for p in workers if str(p.participant_id) not in disabled_worker_ids]
+        disabled_workers = [p for p in workers if str(p.participant_id) in disabled_worker_ids]
         if not moderator:
             self._emit_system_error(conversation.id, '多 Agent 会话缺少主持 Agent，请重新创建会话。')
             return
@@ -1621,32 +1825,33 @@ class MessageService:
             return
 
         round_id = str(uuid.uuid4())
-        if self._is_team_info_query(user_content):
-            moderator_msg, moderator_run = self._create_agent_message_and_run(
-                conversation, moderator, round_id, user_message_id, '主持 Agent 正在查看群成员...'
-            )
-            plan = self._build_team_info_answer(workers)
-            self._finish_moderator_message(moderator_msg.id, moderator_run.id, plan)
-            return
-
         moderator_msg, moderator_run = self._create_agent_message_and_run(
-            conversation, moderator, round_id, user_message_id, '主持 Agent 正在拆解任务...'
+            conversation, moderator, round_id, user_message_id, '主持 Agent 正在处理请求...'
         )
 
         try:
             from app.sandbox import get_manager
-            plan_prompt = self._build_moderator_plan_prompt(user_content, workers)
+            plan_prompt = self._build_moderator_plan_prompt(user_content, enabled_workers, disabled_workers)
             reply = ''
             plan = None
+            last_parse_error = ''
             for attempt in range(1, 4):
+                attempt_prompt = plan_prompt
+                if attempt > 1 and last_parse_error:
+                    attempt_prompt = (
+                        f"{plan_prompt}\n\n"
+                        f"上一次输出无法作为任务分派 JSON 解析：{last_parse_error}\n"
+                        "请重新输出一个严格合法的 JSON 对象。不要输出 Markdown、代码块或解释文字；"
+                        "字符串内部的双引号必须转义，或改用不含双引号的中文表述。"
+                    )
                 result = get_manager().send_message(
                     conversation.sandbox_session_id,
                     moderator.participant_id,
-                    plan_prompt,
+                    attempt_prompt,
                 )
                 if result.get('status') == 'error':
                     result = self._retry_agent_after_model_error(
-                        conversation, moderator.participant_id, plan_prompt, result
+                        conversation, moderator.participant_id, attempt_prompt, result
                     )
                 if result.get('status') == 'error':
                     error = result.get('error') or result.get('reply') or '主持分派失败'
@@ -1660,10 +1865,11 @@ class MessageService:
                     return
 
                 candidate_reply = result.get('reply', '')
-                plan, error = self._parse_moderator_plan(candidate_reply, workers)
+                plan, error = self._parse_moderator_plan(candidate_reply, enabled_workers)
                 if not error:
                     reply = candidate_reply
                     break
+                last_parse_error = error
                 if self._is_retryable_moderator_error(error) and attempt < 3:
                     continue
                 self._mark_agent_message_failed(
@@ -1673,19 +1879,13 @@ class MessageService:
                 )
                 return
 
-            self._mark_agent_message_done_if_active(
-                moderator_msg.id,
-                moderator_run.id,
-                moderator.participant_id,
-                reply,
-            )
             self._replace_message_with_moderator_summary(moderator_msg.id, plan)
             if plan.get('type') == 'answer':
                 return
 
             self._emit_run_plan(conversation.id, round_id, moderator_msg.id, plan)
             self._execute_worker_plan(conversation, round_id, user_message_id,
-                                      user_content, plan, workers)
+                                      user_content, plan, enabled_workers)
             if plan.get('summary_required') is True:
                 self._execute_moderator_summary(conversation, moderator, round_id,
                                                 user_message_id, user_content, plan)
@@ -1702,6 +1902,7 @@ class MessageService:
             return None, '主持 Agent 没有返回内容'
 
         text = raw_text
+        looks_like_plan = self._looks_like_moderator_plan(raw_text)
         match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.S)
         if match:
             text = match.group(1).strip()
@@ -1711,11 +1912,15 @@ class MessageService:
             if start >= 0 and end > start:
                 text = text[start:end + 1]
             else:
+                if looks_like_plan:
+                    return None, '计划 JSON 解析失败：未找到完整 JSON 对象'
                 return self._moderator_direct_answer(raw_text, workers), None
 
         try:
             plan = json.loads(text)
-        except Exception:
+        except Exception as e:
+            if looks_like_plan:
+                return None, f'计划 JSON 解析失败：{e}'
             return self._moderator_direct_answer(raw_text, workers), None
 
         if isinstance(plan.get('plan'), dict) and not isinstance(plan.get('tasks'), list):
@@ -1854,6 +2059,56 @@ class MessageService:
         }
 
     @staticmethod
+    def _disabled_workers_answer(disabled_workers):
+        names = [
+            p.participant_name or p.participant_id
+            for p in disabled_workers or []
+        ]
+        if names:
+            summary = (
+                '当前会话中可执行的 worker Agent 都已被禁用：'
+                + '、'.join(names)
+                + '。请先在“智能体配置”中启用需要的 Agent 后再继续。'
+            )
+        else:
+            summary = '当前会话没有可用的已启用 worker Agent。请先在“智能体配置”中启用需要的 Agent 后再继续。'
+        return {
+            'type': 'answer',
+            'summary': summary,
+            'team': [],
+            'tasks': [],
+            'parallel_groups': [],
+            'summary_required': False,
+        }
+
+    @staticmethod
+    def _looks_like_moderator_plan(text):
+        lowered = str(text or '').lower()
+        markers = (
+            '"type"',
+            "'type'",
+            'type:',
+            '"tasks"',
+            "'tasks'",
+            'tasks:',
+            '"parallel_groups"',
+            "'parallel_groups'",
+            'parallel_groups:',
+            '"selected_agents"',
+            "'selected_agents'",
+            'selected_agents:',
+            '"agent_id"',
+            "'agent_id'",
+            'agent_id:',
+            '"task_id"',
+            "'task_id'",
+            'task_id:',
+        )
+        if not any(marker in lowered for marker in markers):
+            return False
+        return any(marker in lowered for marker in ('"plan"', "'plan'", 'type=plan', 'type: plan', 'tasks'))
+
+    @staticmethod
     def _is_retryable_moderator_error(error):
         text = str(error or '').lower()
         retryable_markers = (
@@ -1882,6 +2137,31 @@ class MessageService:
         else:
             reason = text
         return f'主持分派失败，已重试 {attempts} 次：{reason}。原始错误：{text}'
+
+    @staticmethod
+    def _format_team_answer(plan):
+        lines = []
+        summary = (plan.get('summary') or '').strip()
+        if summary:
+            lines.append(summary)
+            lines.append('')
+        if not summary.startswith('下面是你询问'):
+            lines.append('我看到当前群聊中有这些 Agent：')
+        for item in plan.get('team') or []:
+            name = item.get('name') or item.get('agent_id') or 'Agent'
+            agent_id = item.get('agent_id') or ''
+            lines.append(f'- **{name}** (`{agent_id}`)')
+            capabilities = item.get('capabilities') or []
+            for capability in capabilities[:5]:
+                lines.append(f'  - {capability}')
+            skill = str(item.get('skill') or '').strip()
+            if skill:
+                skill_label = '会话级 skill' if item.get('session_overridden') else 'skill'
+                lines.append(f'  - **{skill_label}**:')
+                for line in skill.splitlines():
+                    if line.strip():
+                        lines.append(f'    {line.strip()}')
+        return '\n'.join(lines).strip()
 
     def _emit_system_error(self, conversation_id, content):
         msg = Message(

@@ -3,7 +3,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity, decode_token
 from app.utils.response import success_response, error_response
 from app.schemas.message_schema import SendMessageSchema
 from app.services.message_service import message_service
-from marshmallow import ValidationError
+from marshmallow import INCLUDE, ValidationError
 import json
 import queue
 
@@ -29,7 +29,7 @@ def send_message():
 
     try:
         schema = SendMessageSchema()
-        data = schema.load(request.json)
+        data = schema.load(request.get_json(silent=True) or {}, unknown=INCLUDE)
     except ValidationError as e:
         return error_response(str(e.messages), code=400)
 
@@ -42,6 +42,7 @@ def send_message():
         parent_message_id=data.get('parent_message_id'),
         artifact_id=data.get('artifact_id'),
         target_agent_ids=data.get('target_agent_ids') or [],
+        agent_configs=data.get('agent_configs') or {},
     )
 
     if error:

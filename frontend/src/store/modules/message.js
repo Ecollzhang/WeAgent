@@ -179,9 +179,14 @@ const mutations = {
     const idx = msgs.findIndex(m => m.id === messageId)
     if (idx !== -1) {
       const cleanedPatch = { ...patch }
+      const replaceElements = Boolean(cleanedPatch.replace_elements)
+      const clearRawOutput = Boolean(cleanedPatch.clear_raw_output)
+      delete cleanedPatch.replace_elements
+      delete cleanedPatch.clear_raw_output
+      if (clearRawOutput) cleanedPatch.raw_output = ''
       if (!cleanedPatch.content && msgs[idx].content) delete cleanedPatch.content
-      if (!cleanedPatch.raw_output && msgs[idx].raw_output) delete cleanedPatch.raw_output
-      if (Array.isArray(msgs[idx].elements) && msgs[idx].elements.length) {
+      if (!cleanedPatch.raw_output && msgs[idx].raw_output && !replaceElements && !clearRawOutput) delete cleanedPatch.raw_output
+      if (Array.isArray(msgs[idx].elements) && msgs[idx].elements.length && !replaceElements) {
         if (!Array.isArray(cleanedPatch.elements) || !cleanedPatch.elements.length) {
           delete cleanedPatch.elements
         } else {

@@ -141,6 +141,125 @@
       </div>
     </div>
 
+    <div v-if="conversation && sidePanelVisible" class="functional-side-backdrop" @click.self="closeFunctionalSidePanel">
+      <aside class="functional-side-panel">
+        <header class="functional-side-header">
+          <div>
+            <h3>{{ sidePanelTitle }}</h3>
+            <p>{{ sidePanelSubtitle }}</p>
+          </div>
+          <el-button type="text" icon="el-icon-close" @click="closeFunctionalSidePanel"></el-button>
+        </header>
+
+        <section v-if="sidePanelMode === 'agent_config'" class="functional-side-body">
+          <div v-if="currentAgentConfigs.length === 0" class="side-empty">
+            <i class="el-icon-user"></i>
+            <span>当前会话没有 Agent</span>
+          </div>
+          <article v-for="agent in currentAgentConfigs" v-else :key="agent.agent_id" class="session-agent-card">
+            <div class="session-agent-head">
+              <span class="session-agent-avatar" :style="{ background: agent.color || '#4080ff' }">
+                <img v-if="agent.avatar" :src="agent.avatar" />
+                <span v-else>{{ firstLetter(agent.name || agent.role || agent.agent_id) }}</span>
+              </span>
+              <div class="session-agent-title">
+                <strong>{{ agent.name || agent.role || agent.agent_id }}</strong>
+                <small>{{ agent.adapter_name || 'default' }}</small>
+              </div>
+              <el-switch v-model="agent.enabled" size="mini" :disabled="singleAgentConfigLocked"></el-switch>
+            </div>
+            <label class="session-config-field">
+              <span>会话角色名</span>
+              <el-input v-model.trim="agent.role" size="mini" placeholder="当前会话中的展示名称" />
+            </label>
+            <label class="session-config-field">
+              <span>系统提示词</span>
+              <el-input v-model="agent.system_prompt" type="textarea" :rows="4" placeholder="仅在当前会话中生效，不更新全局 Agent" />
+            </label>
+            <label class="session-config-field">
+              <span>技能 / 工作方式</span>
+              <el-input v-model="agent.skill" type="textarea" :rows="3" placeholder="填写该 Agent 在当前会话的工作方式" />
+            </label>
+            <div class="session-card-actions">
+              <el-button size="mini" @click="resetSessionAgentConfig(agent.agent_id)">重置</el-button>
+            </div>
+          </article>
+          <div v-if="currentAgentConfigs.length" class="side-actions">
+            <el-button size="mini" type="primary" @click="saveSessionAgentConfigs">保存会话配置</el-button>
+          </div>
+        </section>
+
+        <section v-else-if="sidePanelMode === 'artifacts'" class="functional-side-body">
+          <div v-if="conversationArtifacts.length === 0" class="side-empty">
+            <i class="el-icon-folder-opened"></i>
+            <span>当前会话暂无产物</span>
+          </div>
+          <template v-else>
+            <div v-for="group in artifactGroups" :key="group.key" class="artifact-group">
+              <div class="artifact-group-header">
+                <div>
+                  <strong>{{ group.label }}</strong>
+                  <span>{{ group.hint }}</span>
+                </div>
+                <em>{{ group.items.length }}</em>
+              </div>
+              <article
+                v-for="artifact in group.items"
+                :key="artifact.id"
+                class="side-artifact-item"
+                @click="viewArtifact(artifact)"
+              >
+                <span class="artifact-card-icon">
+                  <i :class="artifactIcon(artifact)"></i>
+                </span>
+                <div class="artifact-card-main">
+                  <div class="artifact-card-head">
+                    <strong>{{ artifactTitle(artifact) }}</strong>
+                    <em>{{ artifactTypeLabel(artifact) }}</em>
+                  </div>
+                  <span class="artifact-card-subtitle">{{ artifactSubtitle(artifact) }}</span>
+                  <p v-if="artifactPreviewText(artifact)" class="artifact-card-preview">{{ artifactPreviewText(artifact) }}</p>
+                  <div class="artifact-card-meta">
+                    <span>{{ artifact.message.sender_name || 'Agent' }}</span>
+                    <span>{{ formatArtifactTime(artifact.message.created_at) }}</span>
+                  </div>
+                  <div class="artifact-card-actions" @click.stop>
+                    <el-button size="mini" type="text" @click="viewArtifact(artifact)">查看</el-button>
+                    <el-button v-if="artifact.type === 'service'" size="mini" type="text" @click="runArtifactService(artifact)">运行</el-button>
+                    <el-button v-if="artifact.type === 'service'" size="mini" type="text" class="danger-action" @click="stopArtifactService(artifact)">停止</el-button>
+                    <el-button v-else size="mini" type="text" @click="copyArtifactReference(artifact)">复制</el-button>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </template>
+        </section>
+
+        <section v-else-if="sidePanelMode === 'logs'" class="functional-side-body">
+          <div class="side-log-toolbar">
+            <el-select v-model="selectedServiceId" size="mini" placeholder="选择 app 服务" @change="loadSelectedServiceLogs">
+              <el-option
+                v-for="service in sandboxServices"
+                :key="service.id"
+                :label="`${service.name || service.id} · ${service.status || 'unknown'}`"
+                :value="service.id"
+              />
+            </el-select>
+            <el-button size="mini" icon="el-icon-refresh" :loading="serviceLogsLoading" @click="loadSandboxServices"></el-button>
+          </div>
+          <div v-if="serviceLogsLoading" class="side-empty">
+            <i class="el-icon-loading"></i>
+            <span>正在读取容器日志...</span>
+          </div>
+          <div v-else-if="!sandboxServices.length" class="side-empty">
+            <i class="el-icon-monitor"></i>
+            <span>暂无运行中的 app 日志</span>
+          </div>
+          <pre v-else class="side-log-output">{{ formattedServiceLogs || '暂无日志输出' }}</pre>
+        </section>
+      </aside>
+    </div>
+
     <!-- 底部标签切换栏 -->
     <div class="chat-tabs" v-if="conversation">
       <span
@@ -179,15 +298,66 @@
           </button>
         </div>
         <el-button type="text" class="send-btn" @click="handleSend" :disabled="!inputText.trim()">
-          <i class="el-icon-promotion"></i>
+          <i class="el-icon-position"></i>
         </el-button>
       </div>
+    </div>
+
+    <div v-if="workflowVisible" class="workflow-overlay" @click.self="closeWorkflow">
+      <section class="workflow-dialog">
+        <header>
+          <div>
+            <h3>工作流</h3>
+            <p>这里后续用于展示和编排当前会话的工作流。</p>
+          </div>
+          <el-button type="text" icon="el-icon-close" @click="closeWorkflow"></el-button>
+        </header>
+        <div class="workflow-placeholder">
+          <i class="el-icon-share"></i>
+          <span>工作流内容暂未实现</span>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="artifactPreviewVisible" class="artifact-preview-overlay" @click.self="closeArtifactPreview">
+      <section class="artifact-preview-dialog">
+        <header>
+          <div>
+            <h3>{{ artifactTitle(artifactPreviewArtifact) }}</h3>
+            <p>{{ artifactTypeLabel(artifactPreviewArtifact) }} · {{ artifactSubtitle(artifactPreviewArtifact) }}</p>
+          </div>
+          <el-button type="text" icon="el-icon-close" @click="closeArtifactPreview"></el-button>
+        </header>
+        <div class="artifact-preview-body">
+          <div
+            v-if="artifactPreviewArtifact && artifactPreviewArtifact.type === 'table' && artifactTableHeaders(artifactPreviewArtifact).length"
+            class="artifact-preview-table-wrap"
+          >
+            <table class="artifact-preview-table">
+              <thead>
+                <tr>
+                  <th v-for="(header, index) in artifactTableHeaders(artifactPreviewArtifact)" :key="index">{{ header }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, rowIndex) in artifactTableRows(artifactPreviewArtifact)" :key="rowIndex">
+                  <td v-for="(header, colIndex) in artifactTableHeaders(artifactPreviewArtifact)" :key="colIndex">
+                    {{ row['col' + colIndex] }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <pre v-else class="artifact-preview-code">{{ artifactPreviewContent(artifactPreviewArtifact) }}</pre>
+        </div>
+      </section>
     </div>
   </div>
 </template>
 
 <script>
 import MessageBubble from '../MessageBubble/index.vue'
+import { listServices, getServiceLogs, restartService, stopService } from '../../api/sandbox'
 
 export default {
   name: 'ChatWindow',
@@ -198,6 +368,7 @@ export default {
     userId: String,
     agentResponding: { type: Boolean, default: false },
     sessionAgents: { type: Array, default: () => [] },
+    allAgents: { type: Array, default: () => [] },
   },
   data() {
     return {
@@ -207,6 +378,16 @@ export default {
       mentionIndex: 0,
       selectedMentions: [],
       activeTab: 'chat',
+      sidePanelVisible: false,
+      sidePanelMode: '',
+      sessionAgentConfigs: {},
+      workflowVisible: false,
+      artifactPreviewVisible: false,
+      artifactPreviewArtifact: null,
+      sandboxServices: [],
+      selectedServiceId: '',
+      serviceLogsData: null,
+      serviceLogsLoading: false,
       stickToBottom: true,
       panelVisible: false,
       panelMode: 'search',
@@ -215,8 +396,9 @@ export default {
       tabs: [
         { key: 'chat', label: '对话' },
         { key: 'agent_config', label: '智能体配置' },
-        { key: 'tool_calls', label: '工具调用' },
+        { key: 'artifacts', label: '产物' },
         { key: 'logs', label: '日志' },
+        { key: 'workflow', label: '工作流' },
       ],
     }
   },
@@ -233,7 +415,7 @@ export default {
     },
     mentionCandidates() {
       const query = String(this.mentionQuery || '').toLowerCase()
-      const agents = (this.sessionAgents || []).filter(agent => agent?.agent_id)
+      const agents = (this.sessionAgents || []).filter(agent => agent?.agent_id && this.isSessionAgentEnabled(agent.agent_id))
       const filtered = query
         ? agents.filter(agent => {
           const name = this.mentionName(agent).toLowerCase()
@@ -268,6 +450,75 @@ export default {
           snippet: this.buildSearchSnippet(this.collectMessageText(message), ''),
         }))
     },
+    currentAgentConfigs() {
+      if (!this.conversation?.id) return []
+      return this.sessionAgentConfigs[this.conversation.id] || []
+    },
+    singleAgentConfigLocked() {
+      return this.currentAgentConfigs.length <= 1
+    },
+    conversationArtifacts() {
+      const artifacts = []
+      const seen = new Set()
+      ;(this.messages || []).forEach(message => {
+        const elements = Array.isArray(message.elements) ? message.elements : []
+        elements.forEach(element => {
+          if (!element || !['code', 'table', 'image', 'file', 'service'].includes(element.type)) return
+          const data = this.elementData(element)
+          const content = this.elementContent(element)
+          const key = [
+            element.type,
+            data.path || data.file_path || data.url || data.name || data.filename || '',
+            data.title || content || '',
+          ].join('|')
+          if (seen.has(key)) return
+          seen.add(key)
+          artifacts.push({
+            id: key || `${message.id}_${artifacts.length}`,
+            message,
+            element,
+            type: element.type,
+            data,
+          })
+        })
+      })
+      return artifacts
+    },
+    artifactGroups() {
+      const groups = [
+        { key: 'service', label: 'App 服务', hint: '预览服务、运行中的页面或应用', types: ['service'] },
+        { key: 'file', label: '文件与图片', hint: '生成的文档、图片、HTML、资源文件', types: ['file', 'image'] },
+        { key: 'table', label: '表格', hint: '结构化表格和数据结果', types: ['table'] },
+        { key: 'code', label: '代码', hint: '代码片段和脚本产物', types: ['code'] },
+      ]
+      return groups
+        .map(group => ({
+          ...group,
+          items: this.conversationArtifacts.filter(artifact => group.types.includes(artifact.type)),
+        }))
+        .filter(group => group.items.length)
+    },
+    formattedServiceLogs() {
+      if (!this.serviceLogsData) return ''
+      const stdout = this.serviceLogsData.stdout_tail || ''
+      const stderr = this.serviceLogsData.stderr_tail || ''
+      return [
+        stdout ? `# stdout\n${stdout}` : '',
+        stderr ? `# stderr\n${stderr}` : '',
+      ].filter(Boolean).join('\n\n')
+    },
+    sidePanelTitle() {
+      if (this.sidePanelMode === 'agent_config') return '智能体配置'
+      if (this.sidePanelMode === 'artifacts') return '产物'
+      if (this.sidePanelMode === 'logs') return '日志'
+      return ''
+    },
+    sidePanelSubtitle() {
+      if (this.sidePanelMode === 'agent_config') return '只影响当前会话，不更新全局 Agent'
+      if (this.sidePanelMode === 'artifacts') return `当前会话 ${this.conversationArtifacts.length} 个产物`
+      if (this.sidePanelMode === 'logs') return '容器中 app 服务的 stdout / stderr'
+      return ''
+    },
   },
   watch: {
     messages() {
@@ -276,10 +527,16 @@ export default {
     },
     conversation() {
       this.closePanel()
+      this.closeFunctionalSidePanel()
+      this.sandboxServices = []
+      this.selectedServiceId = ''
+      this.serviceLogsData = null
+      this.ensureSessionAgentConfigs()
       this.$nextTick(() => this.scrollToBottom(true))
     },
   },
   mounted() {
+    this.ensureSessionAgentConfigs()
     const container = this.$refs.messagesContainer
     if (container) {
       container.addEventListener('scroll', this.handleMessagesScroll, { passive: true })
@@ -348,7 +605,7 @@ export default {
       if (this.mentionIndex >= this.mentionCandidates.length) this.mentionIndex = 0
     },
     selectMention(agent) {
-      if (!agent) return
+      if (!agent || !this.isSessionAgentEnabled(agent.agent_id)) return
       const name = this.mentionName(agent)
       this.inputText = this.inputText.replace(/@([^\s@，,：:；;]*)$/, `@${name} `)
       if (!this.selectedMentions.some(item => item.agent_id === agent.agent_id)) {
@@ -363,7 +620,7 @@ export default {
     },
     syncSelectedMentions() {
       this.selectedMentions = this.selectedMentions.filter(item => {
-        return this.inputText.includes(`@${item.name}`)
+        return this.inputText.includes(`@${item.name}`) && this.isSessionAgentEnabled(item.agent_id)
       })
     },
     buildMessagePayload() {
@@ -373,10 +630,30 @@ export default {
         content: this.inputText.trim(),
         target_agent_ids: targetIds,
         mentions: this.selectedMentions.slice(),
+        agent_configs: this.sessionAgentConfigPayload(),
       }
+    },
+    sessionAgentConfigPayload() {
+      return this.currentAgentConfigs.reduce((payload, agent) => {
+        if (!agent || !agent.agent_id) return payload
+        payload[agent.agent_id] = {
+          agent_id: agent.agent_id,
+          role: agent.role,
+          system_prompt: agent.system_prompt,
+          skill: agent.skill,
+          adapter_name: agent.adapter_name,
+          enabled: this.singleAgentConfigLocked ? true : agent.enabled !== false,
+        }
+        return payload
+      }, {})
     },
     mentionName(agent) {
       return agent?.role || agent?.name || agent?.agent_id || ''
+    },
+    isSessionAgentEnabled(agentId) {
+      if (this.singleAgentConfigLocked) return true
+      const config = this.currentAgentConfigs.find(item => String(item.agent_id) === String(agentId))
+      return !config || config.enabled !== false
     },
     handleMessagesScroll() {
       this.stickToBottom = this.isNearBottom()
@@ -496,12 +773,298 @@ export default {
     },
     handleTabSwitch(key) {
       this.activeTab = key
-      if (key === 'logs') {
-        this.$emit('open-workspace', 'workspace')
-      } else if (key !== 'chat') {
-        this.$message.info(key === 'agent_config' ? '智能体配置功能即将上线' :
-                          key === 'tool_calls' ? '工具调用记录功能即将上线' :
-                          '日志功能即将上线')
+      if (key === 'chat') {
+        this.closeFunctionalSidePanel()
+        return
+      }
+      if (key === 'workflow') {
+        this.sidePanelVisible = false
+        this.sidePanelMode = ''
+        this.workflowVisible = true
+        return
+      }
+      this.sidePanelMode = key
+      this.sidePanelVisible = true
+      if (key === 'agent_config') {
+        this.ensureSessionAgentConfigs()
+      } else if (key === 'logs') {
+        this.loadSandboxServices()
+      }
+    },
+    closeFunctionalSidePanel() {
+      this.sidePanelVisible = false
+      this.sidePanelMode = ''
+      if (this.activeTab !== 'workflow') this.activeTab = 'chat'
+    },
+    closeWorkflow() {
+      this.workflowVisible = false
+      this.activeTab = 'chat'
+    },
+    sessionConfigStorageKey() {
+      return `weagent.web.sessionAgentConfigs.${this.conversation?.id || ''}`
+    },
+    ensureSessionAgentConfigs() {
+      if (!this.conversation?.id) return
+      let saved = []
+      try {
+        saved = JSON.parse(localStorage.getItem(this.sessionConfigStorageKey()) || '[]')
+      } catch (e) {
+        saved = []
+      }
+      const savedMap = new Map((Array.isArray(saved) ? saved : []).map(item => [String(item.agent_id), item]))
+      const configs = (this.sessionAgents || []).map(agent => {
+        const globalAgent = (this.allAgents || []).find(item => String(item.id) === String(agent.agent_id)) || {}
+        const savedItem = savedMap.get(String(agent.agent_id)) || {}
+        return {
+          agent_id: agent.agent_id,
+          name: agent.name || globalAgent.name || agent.agent_id,
+          role: savedItem.role || agent.role || globalAgent.name || agent.agent_id,
+          avatar: agent.avatar || globalAgent.avatar_url || globalAgent.avatar || '',
+          color: agent.color || globalAgent.avatar_color || '#4080ff',
+          adapter_name: savedItem.adapter_name || globalAgent.adapter_name || globalAgent.agent_type || '',
+          system_prompt: savedItem.system_prompt || globalAgent.system_prompt || '',
+          skill: savedItem.skill || globalAgent.skill || '',
+          enabled: (this.sessionAgents || []).length <= 1 ? true : savedItem.enabled !== false,
+        }
+      })
+      this.$set(this.sessionAgentConfigs, this.conversation.id, configs)
+    },
+    saveSessionAgentConfigs() {
+      if (!this.conversation?.id) return
+      const configs = this.currentAgentConfigs.map(item => ({ ...item }))
+      localStorage.setItem(this.sessionConfigStorageKey(), JSON.stringify(configs))
+      this.$message.success('当前会话的智能体配置已保存')
+    },
+    resetSessionAgentConfig(agentId) {
+      if (!this.conversation?.id || !agentId) return
+      let saved = []
+      try {
+        saved = JSON.parse(localStorage.getItem(this.sessionConfigStorageKey()) || '[]')
+      } catch (e) {
+        saved = []
+      }
+      localStorage.setItem(
+        this.sessionConfigStorageKey(),
+        JSON.stringify((Array.isArray(saved) ? saved : []).filter(item => String(item.agent_id) !== String(agentId)))
+      )
+      this.ensureSessionAgentConfigs()
+    },
+    firstLetter(value) {
+      return String(value || '?').charAt(0).toUpperCase()
+    },
+    elementData(element) {
+      const data = element && element.data
+      return data && typeof data === 'object' && !Array.isArray(data) ? data : {}
+    },
+    elementContent(element) {
+      const data = this.elementData(element)
+      const value = (element && element.content) || data.content || data.text || data.message || ''
+      if (value && typeof value === 'object') {
+        try {
+          return JSON.stringify(value)
+        } catch (e) {
+          return String(value)
+        }
+      }
+      return String(value || '')
+    },
+    artifactIcon(artifact) {
+      const type = artifact?.type
+      if (type === 'table') return 'el-icon-s-grid'
+      if (type === 'image') return 'el-icon-picture-outline'
+      if (type === 'code') return 'el-icon-tickets'
+      if (type === 'service') return 'el-icon-monitor'
+      return 'el-icon-document'
+    },
+    artifactTypeLabel(artifact) {
+      const map = {
+        code: '代码',
+        table: '表格',
+        image: '图片',
+        file: '文件',
+        service: '服务',
+      }
+      return map[artifact?.type] || '产物'
+    },
+    artifactTitle(artifact) {
+      const data = artifact?.data || {}
+      return data.title || data.name || data.filename || data.path || this.elementContent(artifact?.element) || '产物'
+    },
+    artifactSubtitle(artifact) {
+      if (!artifact) return ''
+      const data = artifact.data || {}
+      if (artifact.type === 'table') {
+        const headers = Array.isArray(data.headers) ? data.headers.length : 0
+        const rows = Array.isArray(data.rows) ? data.rows.length : 0
+        return `${headers} 列 · ${rows} 行`
+      }
+      if (artifact.type === 'service') return data.url || data.proxy_url || data.port || 'app 服务'
+      return data.path || data.url || artifact.type
+    },
+    artifactPreviewText(artifact) {
+      return this.elementContent(artifact?.element).replace(/\s+/g, ' ').slice(0, 96)
+    },
+    artifactTablePayload(artifact) {
+      const element = artifact?.element || {}
+      const data = artifact?.data || this.elementData(element)
+      const candidates = [data, data?.data]
+      const content = this.elementContent(element)
+      if (content) {
+        try {
+          const parsed = JSON.parse(content)
+          candidates.push(parsed, parsed?.data)
+        } catch (e) {}
+      }
+      return candidates.find(item => {
+        if (!item || typeof item !== 'object') return false
+        return Array.isArray(item.headers) || Array.isArray(item.columns) || Array.isArray(item.rows) || Array.isArray(item.data)
+      }) || {}
+    },
+    artifactTableHeaders(artifact) {
+      const payload = this.artifactTablePayload(artifact)
+      const rows = Array.isArray(payload.rows) ? payload.rows : (Array.isArray(payload.data) ? payload.data : [])
+      const headers = Array.isArray(payload.headers) ? payload.headers : payload.columns
+      if (Array.isArray(headers) && headers.length) return headers.map(header => String(header || ''))
+      const first = rows[0]
+      if (first && typeof first === 'object' && !Array.isArray(first)) return Object.keys(first)
+      if (Array.isArray(first)) return first.map((_, index) => `列 ${index + 1}`)
+      return []
+    },
+    artifactTableRows(artifact) {
+      const payload = this.artifactTablePayload(artifact)
+      const headers = this.artifactTableHeaders(artifact)
+      const rows = Array.isArray(payload.rows) ? payload.rows : (Array.isArray(payload.data) ? payload.data : [])
+      if (!headers.length) return []
+      return rows.map(row => {
+        const cells = Array.isArray(row) ? row : headers.map(header => row?.[header])
+        const item = {}
+        headers.forEach((header, index) => {
+          const value = cells[index]
+          item['col' + index] = value === undefined || value === null ? '' : String(value)
+        })
+        return item
+      })
+    },
+    artifactPreviewContent(artifact) {
+      if (!artifact) return ''
+      const content = this.elementContent(artifact.element)
+      if (content) return content
+      const data = artifact.data || {}
+      try {
+        return JSON.stringify(data, null, 2)
+      } catch (e) {
+        return String(data || '')
+      }
+    },
+    openArtifactPreview(artifact) {
+      this.artifactPreviewArtifact = artifact
+      this.artifactPreviewVisible = true
+    },
+    closeArtifactPreview() {
+      this.artifactPreviewVisible = false
+      this.artifactPreviewArtifact = null
+    },
+    formatArtifactTime(value) {
+      if (!value) return ''
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return ''
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    },
+    artifactFilePayload(artifact) {
+      const data = artifact?.data || {}
+      const raw = data.path || data.file_path || data.filePath || data.file || data.url || data.src || this.elementContent(artifact?.element)
+      return {
+        path: raw,
+        raw,
+        name: data.name || data.filename || data.title || raw || '产物',
+        agent_id: data.agent_id || data.agentId || data.owner_agent_id || '',
+        type: artifact?.type || 'file',
+        data,
+      }
+    },
+    artifactReference(artifact) {
+      const data = artifact?.data || {}
+      return data.path || data.url || data.proxy_url || data.name || data.filename || this.elementContent(artifact?.element) || this.artifactTitle(artifact)
+    },
+    serviceInfoFromArtifact(artifact) {
+      const data = artifact?.data || {}
+      const nested = data.service && typeof data.service === 'object' ? data.service : {}
+      return {
+        id: data.service_id || data.id || nested.service_id || nested.id || '',
+        url: data.proxy_url || nested.proxy_url || data.url || nested.url || '',
+      }
+    },
+    viewArtifact(artifact) {
+      if (artifact?.type === 'service') {
+        const url = this.serviceInfoFromArtifact(artifact).url
+        if (url) window.open(url, '_blank', 'noopener')
+        return
+      }
+      if (artifact?.type === 'table' || (!this.artifactFilePayload(artifact).path && this.artifactPreviewContent(artifact))) {
+        this.openArtifactPreview(artifact)
+        return
+      }
+      this.$emit('open-file', this.artifactFilePayload(artifact))
+    },
+    async copyArtifactReference(artifact) {
+      const text = this.artifactReference(artifact)
+      if (!text || !navigator.clipboard) return
+      await navigator.clipboard.writeText(text)
+      this.$message.success('已复制产物引用')
+    },
+    async runArtifactService(artifact) {
+      const id = this.serviceInfoFromArtifact(artifact).id
+      if (!this.sessionId || !id) {
+        this.$message.warning('未找到服务 ID')
+        return
+      }
+      const res = await restartService(this.sessionId, id)
+      if (res.code === 200) {
+        this.$message.success('服务已运行')
+        await this.loadSandboxServices()
+      }
+    },
+    async stopArtifactService(artifact) {
+      const id = this.serviceInfoFromArtifact(artifact).id
+      if (!this.sessionId || !id) {
+        this.$message.warning('未找到服务 ID')
+        return
+      }
+      const res = await stopService(this.sessionId, id)
+      if (res.code === 200) {
+        this.$message.success('服务已停止')
+        await this.loadSandboxServices()
+      }
+    },
+    async loadSandboxServices() {
+      if (!this.sessionId) return
+      this.serviceLogsLoading = true
+      try {
+        const res = await listServices(this.sessionId)
+        this.sandboxServices = res.code === 200 ? (res.data?.services || []) : []
+        if (!this.selectedServiceId && this.sandboxServices.length) {
+          this.selectedServiceId = this.sandboxServices[0].id
+        }
+        if (this.selectedServiceId) await this.loadSelectedServiceLogs()
+      } catch (e) {
+        this.$message.error(e?.message || '加载容器服务失败')
+      } finally {
+        this.serviceLogsLoading = false
+      }
+    },
+    async loadSelectedServiceLogs() {
+      if (!this.sessionId || !this.selectedServiceId) {
+        this.serviceLogsData = null
+        return
+      }
+      this.serviceLogsLoading = true
+      try {
+        const res = await getServiceLogs(this.sessionId, this.selectedServiceId)
+        this.serviceLogsData = res.code === 200 ? (res.data || {}) : null
+      } catch (e) {
+        this.$message.error(e?.message || '读取容器日志失败')
+      } finally {
+        this.serviceLogsLoading = false
       }
     },
   },
@@ -896,5 +1459,503 @@ export default {
 .typing-text {
   font-size: 12px;
   color: #94a3b8;
+}
+
+.functional-side-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.24);
+  backdrop-filter: blur(2px);
+}
+
+.functional-side-panel {
+  width: min(480px, 92vw);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #e5ebf5;
+  background: #ffffff;
+  box-shadow: -14px 0 32px rgba(15, 23, 42, 0.12);
+}
+
+.functional-side-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.functional-side-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.functional-side-header p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.functional-side-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.side-empty {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.side-empty i {
+  font-size: 32px;
+}
+
+.session-agent-card {
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.session-agent-card + .session-agent-card {
+  margin-top: 10px;
+}
+
+.session-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.session-agent-avatar {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.session-agent-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.session-agent-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-agent-title strong,
+.session-agent-title small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-agent-title strong {
+  color: #1e293b;
+  font-size: 13px;
+}
+
+.session-agent-title small {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.session-config-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.session-config-field span {
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.side-actions {
+  position: sticky;
+  bottom: -15px;
+  z-index: 2;
+  margin: 12px -14px -14px;
+  padding: 12px 14px;
+  border-top: 1px solid #eef2f7;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, #ffffff 45%);
+  box-shadow: 0 -8px 18px rgba(15, 23, 42, 0.05);
+}
+
+.session-card-actions,
+.side-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.side-artifact-item {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  padding: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.side-artifact-item + .side-artifact-item {
+  margin-top: 8px;
+}
+
+.artifact-group + .artifact-group {
+  margin-top: 18px;
+}
+
+.artifact-group-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.artifact-group-header div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.artifact-group-header strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.artifact-group-header span {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-group-header em {
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #2563eb;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.side-artifact-item:hover {
+  border-color: #cfe0ff;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.09);
+  transform: translateY(-1px);
+}
+
+.artifact-card-icon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #eef5ff;
+  color: #2563eb;
+  font-size: 17px;
+}
+
+.artifact-card-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.artifact-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.artifact-card-head strong,
+.artifact-card-subtitle,
+.artifact-card-preview,
+.artifact-card-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-card-head strong {
+  flex: 1;
+  min-width: 0;
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.artifact-card-head em {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #eef5ff;
+  color: #2563eb;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.artifact-card-subtitle {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.artifact-card-preview {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.artifact-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.artifact-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.artifact-card-actions :deep(.el-button) {
+  padding: 0;
+  font-size: 11px;
+}
+
+.artifact-card-actions .danger-action {
+  color: #f56c6c;
+}
+
+.side-log-toolbar {
+  display: grid;
+  grid-template-columns: 1fr 34px;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.side-log-output {
+  min-height: 360px;
+  margin: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.workflow-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(4px);
+}
+
+.workflow-dialog {
+  width: min(1280px, calc(100vw - 28px));
+  height: min(820px, calc(100vh - 28px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.workflow-dialog header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.workflow-dialog h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.workflow-dialog p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.workflow-placeholder {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+.workflow-placeholder i {
+  font-size: 44px;
+}
+
+.artifact-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.36);
+  backdrop-filter: blur(4px);
+}
+
+.artifact-preview-dialog {
+  width: min(980px, calc(100vw - 36px));
+  max-height: min(760px, calc(100vh - 36px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.artifact-preview-dialog header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.artifact-preview-dialog h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.artifact-preview-dialog p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.artifact-preview-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  background: #f8fafc;
+}
+
+.artifact-preview-table-wrap {
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.artifact-preview-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  color: #1e293b;
+  font-size: 12px;
+  text-align: left;
+}
+
+.artifact-preview-table th,
+.artifact-preview-table td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 9px 11px;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+
+.artifact-preview-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 700;
+}
+
+.artifact-preview-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.artifact-preview-code {
+  margin: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px;
+  overflow: auto;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+  white-space: pre-wrap;
 }
 </style>

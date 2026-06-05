@@ -493,12 +493,14 @@ export default {
       if (!this.message || this.message.sender_type !== 'agent') return ''
       const raw = String(this.message.raw_output || '').trim()
       if (!raw) return ''
+      if (this.contentElements.length) return ''
       const content = String(this.message.content || '').trim()
       if (content && content === raw) return ''
       if (this.contentElements.some(el => this.normalizeDisplayText(this.elementContent(el)) === this.normalizeDisplayText(raw))) {
         return ''
       }
-      return this.artifactElements.some(el => el?.type === 'table') ? this.stripMarkdownTables(raw) : raw
+      const output = this.artifactElements.some(el => el?.type === 'table') ? this.stripMarkdownTables(raw) : raw
+      return this.formatRawOutputForDisplay(output)
     },
     showRawSource() {
       return false
@@ -527,6 +529,21 @@ export default {
   },
   methods: {
     formatTime,
+    formatRawOutputForDisplay(raw) {
+      const text = String(raw || '').trim()
+      if (!text) return ''
+      if (!this.isModeratorPlanRaw(text)) return text
+      return `主持人任务分派 JSON\n\n\`\`\`json\n${text.replace(/```/g, '`\\`\\`')}\n\`\`\``
+    },
+    isModeratorPlanRaw(text) {
+      const raw = String(text || '').trim()
+      const lowered = raw.toLowerCase()
+      if (!raw.startsWith('{') && !raw.startsWith('```')) return false
+      if (!/["']?tasks["']?\s*:/.test(lowered)) return false
+      return /["']?type["']?\s*:\s*["']?plan/.test(lowered) ||
+        /["']?parallel_groups["']?\s*:/.test(lowered) ||
+        /["']?selected_agents["']?\s*:/.test(lowered)
+    },
     isPlaceholderProgress(el) {
       const text = this.normalizeDisplayText(this.elementContent(el))
       return text === '正在处理' || text === '正在处理...'

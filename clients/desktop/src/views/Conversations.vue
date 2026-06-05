@@ -211,6 +211,128 @@
         </div>
       </div>
 
+      <div v-if="currentConversation && sidePanelVisible" class="conversation-side-backdrop" @click.self="closeSidePanel">
+        <aside class="conversation-inspector">
+          <header class="inspector-header">
+            <div>
+              <h3>{{ sidePanelTitle }}</h3>
+              <p>{{ sidePanelSubtitle }}</p>
+            </div>
+            <button type="button" @click="closeSidePanel"><i class="el-icon-close"></i></button>
+          </header>
+
+          <section v-if="sidePanelMode === 'agent_config'" class="inspector-body">
+            <div v-if="currentAgentConfigs.length === 0" class="inspector-empty">
+              <i class="el-icon-user"></i>
+              <span>当前会话没有 Agent</span>
+            </div>
+            <article v-for="agent in currentAgentConfigs" v-else :key="agent.agent_id" class="session-agent-card">
+              <div class="session-agent-head">
+                <span class="session-agent-avatar" :style="{ background: agent.color || '#4080ff' }">
+                  <img v-if="agent.avatar" :src="agent.avatar" />
+                  <span v-else>{{ firstLetter(agent.name || agent.role || agent.agent_id) }}</span>
+                </span>
+                <div>
+                  <strong>{{ agent.name || agent.role || agent.agent_id }}</strong>
+                  <small>{{ agent.adapter_name || 'default' }}</small>
+                </div>
+                <label class="session-agent-toggle">
+                  <input v-model="agent.enabled" type="checkbox" :disabled="singleAgentConfigLocked" />
+                  <span>启用</span>
+                </label>
+              </div>
+              <label class="session-config-field">
+                <span>会话角色名</span>
+                <input v-model.trim="agent.role" placeholder="当前会话中的展示名称" />
+              </label>
+              <label class="session-config-field">
+                <span>系统提示词</span>
+                <textarea v-model="agent.system_prompt" rows="4" placeholder="仅在当前会话中记录，不更新全局 Agent"></textarea>
+              </label>
+              <label class="session-config-field">
+                <span>技能 / 工作方式</span>
+                <textarea v-model="agent.skill" rows="3" placeholder="填写该 Agent 在当前会话的工作方式"></textarea>
+              </label>
+              <div class="session-card-actions">
+                <button type="button" @click="resetSessionAgentConfig(agent.agent_id)">重置</button>
+              </div>
+            </article>
+            <div v-if="currentAgentConfigs.length" class="inspector-actions">
+              <button type="button" class="workspace-primary" @click="saveSessionAgentConfigs">保存会话配置</button>
+            </div>
+          </section>
+
+          <section v-else-if="sidePanelMode === 'artifacts'" class="inspector-body">
+            <div v-if="conversationArtifacts.length === 0" class="inspector-empty">
+              <i class="el-icon-folder-opened"></i>
+              <span>当前会话暂无产物</span>
+            </div>
+            <template v-else>
+              <div v-for="group in artifactGroups" :key="group.key" class="artifact-group">
+                <div class="artifact-group-header">
+                  <div>
+                    <strong>{{ group.label }}</strong>
+                    <span>{{ group.hint }}</span>
+                  </div>
+                  <em>{{ group.items.length }}</em>
+                </div>
+                <article
+                  v-for="artifact in group.items"
+                  :key="artifact.id"
+                  class="artifact-list-item"
+                  @click="openConversationArtifact(artifact)"
+                >
+                  <span class="artifact-card-icon">
+                    <i :class="artifactIcon(artifact)"></i>
+                  </span>
+                  <div class="artifact-card-main">
+                    <div class="artifact-card-head">
+                      <strong>{{ artifactTitle(artifact) }}</strong>
+                      <em>{{ artifactTypeLabel(artifact) }}</em>
+                    </div>
+                    <span class="artifact-card-subtitle">{{ artifactSubtitle(artifact) }}</span>
+                    <p v-if="artifactPreviewText(artifact)" class="artifact-card-preview">{{ artifactPreviewText(artifact) }}</p>
+                    <div class="artifact-card-meta">
+                      <span>{{ artifact.message.sender_name || 'Agent' }}</span>
+                      <span>{{ formatTime(artifact.message.created_at) }}</span>
+                    </div>
+                    <div class="artifact-card-actions" @click.stop>
+                      <button type="button" @click="openConversationArtifact(artifact)">查看</button>
+                      <button v-if="artifact.type === 'service'" type="button" @click="runArtifactService(artifact)">运行</button>
+                      <button v-if="artifact.type === 'service'" type="button" class="danger-action" @click="stopArtifactService(artifact)">停止</button>
+                      <button v-else type="button" @click="copyArtifactReference(artifact)">复制</button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </template>
+          </section>
+
+          <section v-else-if="sidePanelMode === 'logs'" class="inspector-body logs-inspector">
+            <div class="logs-toolbar">
+              <select v-model="selectedServiceId" @change="loadSelectedServiceLogs">
+                <option value="">选择 app 服务</option>
+                <option v-for="service in sandboxServices" :key="service.id" :value="service.id">
+                  {{ service.name || service.id }} · {{ service.status || 'unknown' }}
+                </option>
+              </select>
+              <button type="button" :disabled="serviceLogsLoading" @click="loadSandboxServices">
+                <i :class="serviceLogsLoading ? 'el-icon-loading' : 'el-icon-refresh'"></i>
+              </button>
+            </div>
+            <div v-if="serviceLogsLoading" class="inspector-empty">
+              <i class="el-icon-loading"></i>
+              <span>正在读取容器日志...</span>
+            </div>
+            <div v-else-if="!sandboxServices.length" class="inspector-empty">
+              <i class="el-icon-monitor"></i>
+              <span>暂无运行中的 app 日志</span>
+            </div>
+            <pre v-else class="service-log-output">{{ formattedServiceLogs || '暂无日志输出' }}</pre>
+          </section>
+        </aside>
+      </div>
+
       <div v-if="currentConversation" class="chat-tabs">
         <span
           v-for="tab in tabs"
@@ -246,16 +368,66 @@
               <span class="mention-name">{{ mentionName(agent) }}</span>
             </button>
           </div>
-          <button :disabled="!currentConversation || sending || !draft.trim()" type="submit">
-            <i :class="sending ? 'el-icon-loading' : 'el-icon-s-promotion'"></i>
+          <button class="send-button" :disabled="!currentConversation || sending || !draft.trim()" type="submit">
+            <i :class="sending ? 'el-icon-loading' : 'el-icon-position'"></i>
           </button>
         </div>
       </form>
 
-      <div v-if="error" class="desktop-toast">
+      <div v-if="error" class="desktop-toast" :class="{ 'success-toast': isSuccessToast }">
         {{ error }}
       </div>
     </section>
+
+    <div v-if="workflowVisible" class="desktop-modal-backdrop workflow-backdrop" @click.self="closeWorkflow">
+      <section class="desktop-modal workflow-modal">
+        <header class="desktop-modal-header">
+          <div>
+            <h2>工作流</h2>
+            <p>这里后续用于展示和编排当前会话的工作流。</p>
+          </div>
+          <button class="icon-close" @click="closeWorkflow"><i class="el-icon-close"></i></button>
+        </header>
+        <div class="workflow-placeholder">
+          <i class="el-icon-share"></i>
+          <span>工作流内容暂未实现</span>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="artifactPreviewVisible" class="desktop-modal-backdrop artifact-preview-backdrop" @click.self="closeArtifactPreview">
+      <section class="desktop-modal artifact-preview-modal">
+        <header class="desktop-modal-header">
+          <div>
+            <h2>{{ artifactTitle(artifactPreviewArtifact) }}</h2>
+            <p>{{ artifactTypeLabel(artifactPreviewArtifact) }} · {{ artifactSubtitle(artifactPreviewArtifact) }}</p>
+          </div>
+          <button class="icon-close" @click="closeArtifactPreview"><i class="el-icon-close"></i></button>
+        </header>
+        <div class="artifact-preview-body">
+          <div
+            v-if="artifactPreviewArtifact && artifactPreviewArtifact.type === 'table' && artifactTableHeaders(artifactPreviewArtifact).length"
+            class="artifact-preview-table-wrap"
+          >
+            <table class="artifact-preview-table">
+              <thead>
+                <tr>
+                  <th v-for="(header, index) in artifactTableHeaders(artifactPreviewArtifact)" :key="index">{{ header }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, rowIndex) in artifactTableRows(artifactPreviewArtifact)" :key="rowIndex">
+                  <td v-for="(header, colIndex) in artifactTableHeaders(artifactPreviewArtifact)" :key="colIndex">
+                    {{ row['col' + colIndex] }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <pre v-else class="artifact-preview-code">{{ artifactPreviewContent(artifactPreviewArtifact) }}</pre>
+        </div>
+      </section>
+    </div>
 
     <div v-if="attachmentsVisible" class="desktop-modal-backdrop drawer-backdrop" @click.self="attachmentsVisible = false">
       <section class="desktop-drawer attachments-drawer">
@@ -431,11 +603,15 @@ import {
   getAgents,
   getConversations,
   getFileTree,
+  getSandboxServiceLogs,
   getMessages,
   getProfile,
   getWorkspaceFileUrl,
+  listSandboxServices,
   readAgentFile,
+  restartSandboxService,
   sendMessage,
+  stopSandboxService,
   updateConversationFavorite,
   uploadConversationAttachment,
 } from '../services/api'
@@ -472,6 +648,16 @@ export default {
       error: '',
       showMoreMenu: false,
       activeTab: 'chat',
+      sidePanelVisible: false,
+      sidePanelMode: '',
+      conversationAgentConfigs: {},
+      workflowVisible: false,
+      artifactPreviewVisible: false,
+      artifactPreviewArtifact: null,
+      sandboxServices: [],
+      selectedServiceId: '',
+      serviceLogs: null,
+      serviceLogsLoading: false,
       mentionVisible: false,
       mentionQuery: '',
       mentionIndex: 0,
@@ -499,8 +685,9 @@ export default {
       tabs: [
         { key: 'chat', label: '对话' },
         { key: 'agent_config', label: '智能体配置' },
-        { key: 'tool_calls', label: '工具调用' },
+        { key: 'artifacts', label: '产物' },
         { key: 'logs', label: '日志' },
+        { key: 'workflow', label: '工作流' },
       ],
       socketHandlers: [],
     }
@@ -555,9 +742,89 @@ export default {
           color: this.participantColor(p),
         }))
     },
+    currentAgentConfigs() {
+      if (!this.currentId) return []
+      return this.conversationAgentConfigs[this.currentId] || []
+    },
+    singleAgentConfigLocked() {
+      return this.currentAgentConfigs.length <= 1
+    },
+    conversationArtifacts() {
+      const artifacts = []
+      const seen = new Set()
+      this.currentMessages.forEach(message => {
+        const elements = Array.isArray(message.elements) ? message.elements : []
+        elements.forEach(element => {
+          if (!element || !['code', 'table', 'image', 'file', 'service'].includes(element.type)) return
+          const data = this.elementData(element)
+          const content = this.elementContent(element)
+          const key = [
+            element.type,
+            data.path || data.file_path || data.url || data.name || data.filename || '',
+            data.title || content || '',
+          ].join('|')
+          if (seen.has(key)) return
+          seen.add(key)
+          artifacts.push({
+            id: key || `${message.id}_${artifacts.length}`,
+            message,
+            element,
+            type: element.type,
+            data,
+          })
+        })
+      })
+      return artifacts
+    },
+    artifactGroups() {
+      const groups = [
+        { key: 'service', label: 'App 服务', hint: '预览服务、运行中的页面或应用', types: ['service'] },
+        { key: 'file', label: '文件与图片', hint: '生成的文档、图片、HTML、资源文件', types: ['file', 'image'] },
+        { key: 'table', label: '表格', hint: '结构化表格和数据结果', types: ['table'] },
+        { key: 'code', label: '代码', hint: '代码片段和脚本产物', types: ['code'] },
+      ]
+      return groups
+        .map(group => ({
+          ...group,
+          items: this.conversationArtifacts.filter(artifact => group.types.includes(artifact.type)),
+        }))
+        .filter(group => group.items.length)
+    },
+    selectedService() {
+      return this.sandboxServices.find(service => String(service.id) === String(this.selectedServiceId)) || null
+    },
+    formattedServiceLogs() {
+      if (!this.serviceLogs) return ''
+      const stdout = this.serviceLogs.stdout_tail || ''
+      const stderr = this.serviceLogs.stderr_tail || ''
+      return [
+        stdout ? `# stdout\n${stdout}` : '',
+        stderr ? `# stderr\n${stderr}` : '',
+      ].filter(Boolean).join('\n\n')
+    },
+    sidePanelTitle() {
+      if (this.sidePanelMode === 'agent_config') return '智能体配置'
+      if (this.sidePanelMode === 'artifacts') return '产物'
+      if (this.sidePanelMode === 'logs') return '日志'
+      return ''
+    },
+    sidePanelSubtitle() {
+      if (this.sidePanelMode === 'agent_config') return '只影响当前会话，不更新全局 Agent'
+      if (this.sidePanelMode === 'artifacts') return `当前会话 ${this.conversationArtifacts.length} 个产物`
+      if (this.sidePanelMode === 'logs') return '容器中 app 服务的 stdout / stderr'
+      return ''
+    },
+    isSuccessToast() {
+      return [
+        '当前会话的智能体配置已保存',
+        '已复制产物引用',
+        '服务已运行',
+        '服务已停止',
+      ].includes(this.error)
+    },
     mentionCandidates() {
       const query = String(this.mentionQuery || '').toLowerCase()
-      const agents = (this.currentSessionAgents || []).filter(agent => agent && agent.agent_id)
+      const agents = (this.currentSessionAgents || []).filter(agent => agent && agent.agent_id && this.isSessionAgentEnabled(agent.agent_id))
       const filtered = query
         ? agents.filter(agent => {
           const name = this.mentionName(agent).toLowerCase()
@@ -706,6 +973,11 @@ export default {
       this.activeTab = 'chat'
       this.showMoreMenu = false
       this.closeDetailPanel()
+      this.closeSidePanel()
+      this.sandboxServices = []
+      this.selectedServiceId = ''
+      this.serviceLogs = null
+      this.ensureConversationAgentConfigs(conversation)
       this.resetMentionState()
       socketClient.joinConversation(conversation.id)
       await this.loadMessages(conversation.id)
@@ -886,6 +1158,9 @@ export default {
         if (payload.target_agent_ids.length) {
           requestData.target_agent_ids = payload.target_agent_ids
         }
+        if (payload.agent_configs && Object.keys(payload.agent_configs).length) {
+          requestData.agent_configs = payload.agent_configs
+        }
         const response = await sendMessage(requestData)
         if (response.code === 201) {
           await this.loadMessages(this.currentConversation.id)
@@ -1010,7 +1285,7 @@ export default {
       if (this.mentionIndex >= this.mentionCandidates.length) this.mentionIndex = 0
     },
     selectMention(agent) {
-      if (!agent) return
+      if (!agent || !this.isSessionAgentEnabled(agent.agent_id)) return
       const name = this.mentionName(agent)
       this.draft = this.draft.replace(/@([^\s@，,：:；;]*)$/, `@${name} `)
       if (!this.selectedMentions.some(item => item.agent_id === agent.agent_id)) {
@@ -1024,7 +1299,9 @@ export default {
       this.mentionIndex = 0
     },
     syncSelectedMentions() {
-      this.selectedMentions = this.selectedMentions.filter(item => this.draft.includes(`@${item.name}`))
+      this.selectedMentions = this.selectedMentions.filter(item => {
+        return this.draft.includes(`@${item.name}`) && this.isSessionAgentEnabled(item.agent_id)
+      })
     },
     buildMessagePayload() {
       this.syncSelectedMentions()
@@ -1033,7 +1310,22 @@ export default {
         content: this.draft.trim(),
         target_agent_ids: targetIds,
         mentions: this.selectedMentions.slice(),
+        agent_configs: this.sessionAgentConfigPayload(),
       }
+    },
+    sessionAgentConfigPayload() {
+      return this.currentAgentConfigs.reduce((payload, agent) => {
+        if (!agent || !agent.agent_id) return payload
+        payload[agent.agent_id] = {
+          agent_id: agent.agent_id,
+          role: agent.role,
+          system_prompt: agent.system_prompt,
+          skill: agent.skill,
+          adapter_name: agent.adapter_name,
+          enabled: this.singleAgentConfigLocked ? true : agent.enabled !== false,
+        }
+        return payload
+      }, {})
     },
     resetMentionState() {
       this.mentionVisible = false
@@ -1044,14 +1336,302 @@ export default {
     mentionName(agent) {
       return (agent && (agent.role || agent.name || agent.agent_id)) || ''
     },
+    isSessionAgentEnabled(agentId) {
+      if (this.singleAgentConfigLocked) return true
+      const config = this.currentAgentConfigs.find(item => String(item.agent_id) === String(agentId))
+      return !config || config.enabled !== false
+    },
     handleTabSwitch(key) {
       this.activeTab = key
-      if (key !== 'chat') {
-        this.error = key === 'agent_config'
-          ? '智能体配置功能即将上线'
-          : key === 'tool_calls'
-            ? '工具调用记录功能即将上线'
-            : '日志功能即将上线'
+      this.error = ''
+      if (key === 'chat') {
+        this.closeSidePanel()
+        return
+      }
+      if (key === 'workflow') {
+        this.sidePanelVisible = false
+        this.sidePanelMode = ''
+        this.workflowVisible = true
+        this.activeTab = 'workflow'
+        return
+      }
+      this.sidePanelMode = key
+      this.sidePanelVisible = true
+      if (key === 'agent_config') {
+        this.ensureConversationAgentConfigs(this.currentConversation)
+      } else if (key === 'logs') {
+        this.loadSandboxServices()
+      }
+    },
+    closeSidePanel() {
+      this.sidePanelVisible = false
+      this.sidePanelMode = ''
+      if (this.activeTab !== 'workflow') this.activeTab = 'chat'
+    },
+    closeWorkflow() {
+      this.workflowVisible = false
+      this.activeTab = 'chat'
+    },
+    sessionConfigStorageKey(conversationId) {
+      return `weagent.desktop.sessionAgentConfigs.${conversationId}`
+    },
+    ensureConversationAgentConfigs(conversation) {
+      if (!conversation || !conversation.id) return
+      const storageKey = this.sessionConfigStorageKey(conversation.id)
+      let saved = []
+      try {
+        saved = JSON.parse(localStorage.getItem(storageKey) || '[]')
+      } catch (error) {
+        saved = []
+      }
+      const savedMap = new Map((Array.isArray(saved) ? saved : []).map(item => [String(item.agent_id), item]))
+      const configs = this.currentSessionAgents.map(agent => {
+        const globalAgent = this.agents.find(item => String(item.id) === String(agent.agent_id)) || {}
+        const savedItem = savedMap.get(String(agent.agent_id)) || {}
+        return {
+          agent_id: agent.agent_id,
+          name: agent.name || globalAgent.name || agent.agent_id,
+          role: savedItem.role || agent.role || globalAgent.name || agent.agent_id,
+          avatar: agent.avatar || this.agentAvatar(globalAgent),
+          color: agent.color || globalAgent.avatar_color || '#4080ff',
+          adapter_name: savedItem.adapter_name || globalAgent.adapter_name || globalAgent.agent_type || '',
+          system_prompt: savedItem.system_prompt || globalAgent.system_prompt || '',
+          skill: savedItem.skill || globalAgent.skill || '',
+          enabled: this.currentSessionAgents.length <= 1 ? true : savedItem.enabled !== false,
+        }
+      })
+      this.$set(this.conversationAgentConfigs, conversation.id, configs)
+    },
+    saveSessionAgentConfigs() {
+      if (!this.currentId) return
+      const configs = this.currentAgentConfigs.map(item => ({ ...item }))
+      localStorage.setItem(this.sessionConfigStorageKey(this.currentId), JSON.stringify(configs))
+      this.error = '当前会话的智能体配置已保存'
+      window.setTimeout(() => {
+        if (this.error === '当前会话的智能体配置已保存') this.error = ''
+      }, 1600)
+    },
+    resetSessionAgentConfig(agentId) {
+      if (!this.currentConversation || !agentId) return
+      const storageKey = this.sessionConfigStorageKey(this.currentConversation.id)
+      let saved = []
+      try {
+        saved = JSON.parse(localStorage.getItem(storageKey) || '[]')
+      } catch (error) {
+        saved = []
+      }
+      localStorage.setItem(storageKey, JSON.stringify((Array.isArray(saved) ? saved : []).filter(item => String(item.agent_id) !== String(agentId))))
+      this.ensureConversationAgentConfigs(this.currentConversation)
+    },
+    artifactIcon(artifact) {
+      const type = artifact && artifact.type
+      if (type === 'table') return 'el-icon-s-grid'
+      if (type === 'image') return 'el-icon-picture-outline'
+      if (type === 'code') return 'el-icon-tickets'
+      if (type === 'service') return 'el-icon-monitor'
+      return 'el-icon-document'
+    },
+    artifactTypeLabel(artifact) {
+      const map = {
+        code: '代码',
+        table: '表格',
+        image: '图片',
+        file: '文件',
+        service: '服务',
+      }
+      return map[(artifact && artifact.type) || ''] || '产物'
+    },
+    artifactTitle(artifact) {
+      const data = (artifact && artifact.data) || {}
+      return data.title || data.name || data.filename || data.path || this.elementContent(artifact.element) || '产物'
+    },
+    artifactSubtitle(artifact) {
+      if (!artifact) return ''
+      const data = artifact.data || {}
+      if (artifact.type === 'table') {
+        const headers = Array.isArray(data.headers) ? data.headers.length : 0
+        const rows = Array.isArray(data.rows) ? data.rows.length : 0
+        return `${headers} 列 · ${rows} 行`
+      }
+      if (artifact.type === 'service') return data.url || data.proxy_url || data.port || 'app 服务'
+      return data.path || data.url || artifact.type
+    },
+    artifactPreviewText(artifact) {
+      if (!artifact) return ''
+      const data = artifact.data || {}
+      const content = this.elementContent(artifact.element)
+      return String(content || '').replace(/\s+/g, ' ').slice(0, 96)
+    },
+    artifactTablePayload(artifact) {
+      const element = (artifact && artifact.element) || {}
+      const data = (artifact && artifact.data) || this.elementData(element)
+      const candidates = [data, data && data.data]
+      const content = this.elementContent(element)
+      if (content) {
+        try {
+          const parsed = JSON.parse(content)
+          candidates.push(parsed, parsed && parsed.data)
+        } catch (error) {}
+      }
+      return candidates.find(item => {
+        if (!item || typeof item !== 'object') return false
+        return Array.isArray(item.headers) || Array.isArray(item.columns) || Array.isArray(item.rows) || Array.isArray(item.data)
+      }) || {}
+    },
+    artifactTableHeaders(artifact) {
+      const payload = this.artifactTablePayload(artifact)
+      const rows = Array.isArray(payload.rows) ? payload.rows : (Array.isArray(payload.data) ? payload.data : [])
+      const headers = Array.isArray(payload.headers) ? payload.headers : payload.columns
+      if (Array.isArray(headers) && headers.length) return headers.map(header => String(header || ''))
+      const first = rows[0]
+      if (first && typeof first === 'object' && !Array.isArray(first)) return Object.keys(first)
+      if (Array.isArray(first)) return first.map((_, index) => `列 ${index + 1}`)
+      return []
+    },
+    artifactTableRows(artifact) {
+      const payload = this.artifactTablePayload(artifact)
+      const headers = this.artifactTableHeaders(artifact)
+      const rows = Array.isArray(payload.rows) ? payload.rows : (Array.isArray(payload.data) ? payload.data : [])
+      if (!headers.length) return []
+      return rows.map(row => {
+        const cells = Array.isArray(row) ? row : headers.map(header => row && row[header])
+        const item = {}
+        headers.forEach((header, index) => {
+          const value = cells[index]
+          item['col' + index] = value === undefined || value === null ? '' : String(value)
+        })
+        return item
+      })
+    },
+    artifactPreviewContent(artifact) {
+      if (!artifact) return ''
+      const content = this.elementContent(artifact.element)
+      if (content) return content
+      const data = artifact.data || {}
+      try {
+        return JSON.stringify(data, null, 2)
+      } catch (error) {
+        return String(data || '')
+      }
+    },
+    openArtifactPreview(artifact) {
+      this.artifactPreviewArtifact = artifact
+      this.artifactPreviewVisible = true
+    },
+    closeArtifactPreview() {
+      this.artifactPreviewVisible = false
+      this.artifactPreviewArtifact = null
+    },
+    openConversationArtifact(artifact) {
+      if (!artifact) return
+      if (artifact.type === 'service') {
+        const url = this.serviceInfoFromArtifact(artifact).url
+        if (url) window.open(url, '_blank')
+        return
+      }
+      if (artifact.type === 'table') {
+        this.openArtifactPreview(artifact)
+        return
+      }
+      const data = artifact.data || {}
+      const raw = data.path || data.file_path || data.filePath || data.file || data.url || data.src || this.elementContent(artifact.element)
+      const path = this.normalizeWorkspaceFilePath(raw)
+      if (path) {
+        this.handleOpenMessageFile({
+          path,
+          raw,
+          name: data.name || data.filename || data.title || path,
+          agent_id: data.agent_id || data.agentId || data.owner_agent_id || '',
+          type: artifact.type,
+        })
+      } else if (this.artifactPreviewContent(artifact)) {
+        this.openArtifactPreview(artifact)
+      }
+    },
+    artifactReference(artifact) {
+      const data = (artifact && artifact.data) || {}
+      return data.path || data.url || data.proxy_url || data.name || data.filename || this.elementContent(artifact && artifact.element) || this.artifactTitle(artifact)
+    },
+    serviceInfoFromArtifact(artifact) {
+      const data = (artifact && artifact.data) || {}
+      const nested = data.service && typeof data.service === 'object' ? data.service : {}
+      return {
+        id: data.service_id || data.id || nested.service_id || nested.id || '',
+        url: data.proxy_url || nested.proxy_url || data.url || nested.url || '',
+      }
+    },
+    async copyArtifactReference(artifact) {
+      const text = this.artifactReference(artifact)
+      if (!text || !navigator.clipboard) return
+      await navigator.clipboard.writeText(text)
+      this.error = '已复制产物引用'
+      window.setTimeout(() => {
+        if (this.error === '已复制产物引用') this.error = ''
+      }, 1400)
+    },
+    async runArtifactService(artifact) {
+      const id = this.serviceInfoFromArtifact(artifact).id
+      if (!this.currentSessionId || !id) {
+        this.error = '未找到服务 ID'
+        return
+      }
+      try {
+        const response = await restartSandboxService(this.currentSessionId, id)
+        if (!response.code || response.code === 200) {
+          this.error = '服务已运行'
+          await this.loadSandboxServices()
+        }
+      } catch (error) {
+        this.handleRequestError(error, '运行服务失败')
+      }
+    },
+    async stopArtifactService(artifact) {
+      const id = this.serviceInfoFromArtifact(artifact).id
+      if (!this.currentSessionId || !id) {
+        this.error = '未找到服务 ID'
+        return
+      }
+      try {
+        const response = await stopSandboxService(this.currentSessionId, id)
+        if (!response.code || response.code === 200) {
+          this.error = '服务已停止'
+          await this.loadSandboxServices()
+        }
+      } catch (error) {
+        this.handleRequestError(error, '停止服务失败')
+      }
+    },
+    async loadSandboxServices() {
+      if (!this.currentSessionId) return
+      this.serviceLogsLoading = true
+      this.error = ''
+      try {
+        const response = await listSandboxServices(this.currentSessionId)
+        const services = (response.data && response.data.services) || response.services || []
+        this.sandboxServices = Array.isArray(services) ? services : []
+        if (!this.selectedServiceId && this.sandboxServices.length) {
+          this.selectedServiceId = this.sandboxServices[0].id
+        }
+        if (this.selectedServiceId) await this.loadSelectedServiceLogs()
+      } catch (error) {
+        this.handleRequestError(error, '加载容器服务失败')
+      } finally {
+        this.serviceLogsLoading = false
+      }
+    },
+    async loadSelectedServiceLogs() {
+      if (!this.currentSessionId || !this.selectedServiceId) {
+        this.serviceLogs = null
+        return
+      }
+      this.serviceLogsLoading = true
+      try {
+        const response = await getSandboxServiceLogs(this.currentSessionId, this.selectedServiceId)
+        this.serviceLogs = (response.data && (response.data.logs || response.data)) || response.logs || response
+      } catch (error) {
+        this.handleRequestError(error, '读取容器日志失败')
+      } finally {
+        this.serviceLogsLoading = false
       }
     },
     sortMessages(messages) {
@@ -1304,10 +1884,26 @@ export default {
     async copyFilePath(path) {
       if (navigator.clipboard && path) await navigator.clipboard.writeText(path)
     },
+    elementData(element) {
+      const data = element && element.data
+      return data && typeof data === 'object' && !Array.isArray(data) ? data : {}
+    },
+    elementContent(element) {
+      const data = this.elementData(element)
+      const value = (element && element.content) || data.content || data.text || data.message || ''
+      if (value && typeof value === 'object') {
+        try {
+          return JSON.stringify(value)
+        } catch (error) {
+          return String(value)
+        }
+      }
+      return String(value || '')
+    },
     elementKey(element) {
       if (!element || typeof element !== 'object') return ''
-      const data = element.data || {}
-      const detail = element.detail || {}
+      const data = this.elementData(element)
+      const detail = element.detail && typeof element.detail === 'object' && !Array.isArray(element.detail) ? element.detail : {}
       const title = data.title || detail.title || element.title || ''
       const content = element.content || data.content || detail.content || ''
       const stable = data.url || data.path || data.name || data.filename || detail.path || element.step_id || data.progress_key || detail.progress_key
@@ -1334,15 +1930,21 @@ export default {
       return merged
     },
     mergeMessage(oldMessage = {}, incoming = {}) {
-      const next = { ...oldMessage, ...incoming }
-      if (!incoming.raw_output && oldMessage.raw_output) next.raw_output = oldMessage.raw_output
-      if (Array.isArray(oldMessage.elements) && oldMessage.elements.length) {
-        next.elements = Array.isArray(incoming.elements) && incoming.elements.length
-          ? this.mergeElements(oldMessage.elements, incoming.elements)
+      const replaceElements = Boolean(incoming.replace_elements)
+      const clearRawOutput = Boolean(incoming.clear_raw_output)
+      const cleanIncoming = { ...incoming }
+      delete cleanIncoming.replace_elements
+      delete cleanIncoming.clear_raw_output
+      if (clearRawOutput) cleanIncoming.raw_output = ''
+      const next = { ...oldMessage, ...cleanIncoming }
+      if (!cleanIncoming.raw_output && oldMessage.raw_output && !replaceElements && !clearRawOutput) next.raw_output = oldMessage.raw_output
+      if (Array.isArray(oldMessage.elements) && oldMessage.elements.length && !replaceElements) {
+        next.elements = Array.isArray(cleanIncoming.elements) && cleanIncoming.elements.length
+          ? this.mergeElements(oldMessage.elements, cleanIncoming.elements)
           : oldMessage.elements
       }
-      if (oldMessage.meta || incoming.meta) {
-        next.meta = { ...(oldMessage.meta || {}), ...(incoming.meta || {}) }
+      if (oldMessage.meta || cleanIncoming.meta) {
+        next.meta = { ...(oldMessage.meta || {}), ...(cleanIncoming.meta || {}) }
       }
       return next
     },
@@ -1387,6 +1989,8 @@ export default {
             status: event.status == null ? item.status : event.status,
             sender_name: event.sender_name == null ? item.sender_name : event.sender_name,
             meta: event.events ? { events: event.events } : undefined,
+            replace_elements: event.replace_elements,
+            clear_raw_output: event.clear_raw_output,
           })
         })
         this.$set(this.messagesByConversation, event.conversation_id, next)

@@ -23,6 +23,7 @@
         :userId="userId"
         :agentResponding="isAgentResponding"
         :sessionAgents="currentSessionAgents"
+        :allAgents="agents"
         @send-message="handleSendMessage"
         @pin-message="handlePinMessage"
         @delete-conversation="handleDeleteConversation"
@@ -545,6 +546,7 @@ export default {
       const content = typeof payload === 'string' ? payload : payload?.content
       const targetAgentIds = Array.isArray(payload?.target_agent_ids) ? payload.target_agent_ids : []
       const mentions = Array.isArray(payload?.mentions) ? payload.mentions : []
+      const agentConfigs = payload?.agent_configs || {}
       if (!content) return
 
       // === Optimistic UI: show user message immediately ===
@@ -575,6 +577,9 @@ export default {
         }
         if (targetAgentIds.length) {
           requestData.target_agent_ids = targetAgentIds
+        }
+        if (Object.keys(agentConfigs).length) {
+          requestData.agent_configs = agentConfigs
         }
         const res = await apiSendMessage(requestData)
 
@@ -613,6 +618,8 @@ export default {
           elements: event.elements,
           raw_output: event.raw_output,
           status: event.status,
+          replace_elements: event.replace_elements,
+          clear_raw_output: event.clear_raw_output,
         }
         if (event.sender_name) {
           patch.sender_name = event.sender_name
@@ -660,6 +667,8 @@ export default {
           elements: event.elements,
           raw_output: event.raw_output,
           status: event.status,
+          replace_elements: event.replace_elements,
+          clear_raw_output: event.clear_raw_output,
         }
         if (event.sender_name) {
           patch.sender_name = event.sender_name

@@ -1,8 +1,11 @@
-from marshmallow import Schema, fields, validate
+from marshmallow import INCLUDE, Schema, fields, validate
 
 
 class SendMessageSchema(Schema):
     """Send message request schema."""
+    class Meta:
+        unknown = INCLUDE
+
     conversation_id = fields.String(required=True)
     content = fields.String(required=True)
     message_type = fields.String(validate=validate.OneOf(
@@ -10,6 +13,7 @@ class SendMessageSchema(Schema):
     ), load_default='text')
     parent_message_id = fields.String(allow_none=True)
     target_agent_ids = fields.List(fields.String(), load_default=list)
+    agent_configs = fields.Raw(load_default=dict)
 
 
 class MessageResponseSchema(Schema):
