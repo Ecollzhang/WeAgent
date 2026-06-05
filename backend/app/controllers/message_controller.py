@@ -43,6 +43,7 @@ def send_message():
         artifact_id=data.get('artifact_id'),
         target_agent_ids=data.get('target_agent_ids') or [],
         agent_configs=data.get('agent_configs') or {},
+        workflow=data.get('workflow') or None,
     )
 
     if error:

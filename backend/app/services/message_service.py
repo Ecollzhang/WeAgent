@@ -276,7 +276,7 @@ class MessageService:
 
     def send_message(self, conversation_id, sender_type, sender_id, content,
                      message_type='text', parent_message_id=None, artifact_id=None,
-                     target_agent_ids=None, agent_configs=None):
+                     target_agent_ids=None, agent_configs=None, workflow=None):
         """Send a message in a conversation."""
         conversation = conversation_repo.get_by_id(conversation_id)
         if not conversation:
@@ -302,9 +302,9 @@ class MessageService:
             ]
             if disabled_targets:
                 return None, '以下 Agent 已在当前会话中禁用，请先在智能体配置中启用后再 @：' + '、'.join(disabled_targets)
-        message_meta = None
+        message_meta = {}
         if sender_type == 'user' and target_participants:
-            message_meta = {
+            message_meta.update({
                 'dispatch_mode': 'direct',
                 'mentions': [
                     {
@@ -313,7 +313,13 @@ class MessageService:
                     }
                     for p in target_participants
                 ],
-            }
+            })
+        if sender_type == 'user':
+            workflow_meta = self._selected_workflow_meta(workflow)
+            if workflow_meta:
+                message_meta['selected_workflow'] = workflow_meta
+        if not message_meta:
+            message_meta = None
 
         message = message_repo.create(
             conversation_id=conversation_id,
@@ -346,7 +352,7 @@ class MessageService:
                 app = current_app._get_current_object()
                 thread = threading.Thread(
                     target=self._dispatch_agent_sandbox,
-                    args=(app, conversation_id, content, message.id, target_agent_ids, agent_configs),
+                    args=(app, conversation_id, content, message.id, target_agent_ids, agent_configs, workflow),
                     daemon=True,
                 )
                 thread.start()
@@ -358,7 +364,7 @@ class MessageService:
         self._dispatch_agent_sandbox(app, conversation_id, user_content, user_message_id)
 
     def _dispatch_agent_sandbox(self, app, conversation_id, user_content,
-                                user_message_id=None, target_agent_ids=None, agent_configs=None):
+                                user_message_id=None, target_agent_ids=None, agent_configs=None, workflow=None):
         """Dispatch a user round to one agent or a backend-orchestrated group."""
         with app.app_context():
             conversation = conversation_repo.get_by_id(conversation_id)
@@ -376,6 +382,7 @@ class MessageService:
                 agent_configs,
                 agent_participants,
             )
+            user_content = self._apply_selected_workflow(user_content, workflow)
             direct_targets = self._resolve_direct_target_participants(
                 conversation,
                 agent_participants,
@@ -460,6 +467,33 @@ class MessageService:
             str(agent_id)
             for agent_id, cfg in MessageService._normalize_session_agent_configs(agent_configs).items()
             if cfg.get('enabled') is False
+        }
+
+    @staticmethod
+    def _apply_selected_workflow(user_content, workflow):
+        if not isinstance(workflow, dict) or not workflow:
+            return user_content
+        workflow_context = MessageService._selected_workflow_meta(workflow)
+        if not workflow_context:
+            return user_content
+        return (
+            f"{user_content}\n\n"
+            "【用户选择的工作流图】\n"
+            "主持 Agent 必须优先按照该工作流图进行任务分配；如果工作流与用户任务冲突，先说明需要用户调整工作流。\n"
+            "SELECTED_WORKFLOW_JSON: "
+            + json.dumps(workflow_context, ensure_ascii=False)
+        )
+
+    @staticmethod
+    def _selected_workflow_meta(workflow):
+        if not isinstance(workflow, dict) or not workflow:
+            return None
+        return {
+            'id': workflow.get('id') or '',
+            'name': workflow.get('name') or '未命名工作流',
+            'nodes': workflow.get('nodes') if isinstance(workflow.get('nodes'), list) else [],
+            'edges': workflow.get('edges') if isinstance(workflow.get('edges'), list) else [],
+            'parallel_groups': workflow.get('parallel_groups') if isinstance(workflow.get('parallel_groups'), list) else [],
         }
 
     @staticmethod
@@ -940,6 +974,7 @@ class MessageService:
 
         return {
             'type': 'plan',
+            'workflow_name': str(plan.get('workflow_name') or plan.get('name') or ''),
             'summary': str(plan.get('summary') or ''),
             'selected_agents': list(dict.fromkeys(
                 str(agent_id) for agent_id in (plan.get('selected_agents') or [])
@@ -999,7 +1034,7 @@ class MessageService:
 
     @staticmethod
     def _moderator_plan_elements(existing_elements, content, plan):
-        preserved_types = {'result', 'summary', 'error', 'code', 'table', 'image', 'file', 'service'}
+        preserved_types = {'result', 'summary', 'error', 'code', 'table', 'image', 'file', 'service', 'workflow'}
         elements = [{
             'type': 'text',
             'content': content,
@@ -1014,17 +1049,74 @@ class MessageService:
             if element.get('type') in preserved_types:
                 elements.append(element)
         if plan.get('type') == 'plan':
+            workflow = MessageService._workflow_from_plan(plan)
+            elements.append({
+                'type': 'workflow',
+                'content': json.dumps(workflow, ensure_ascii=False),
+                'data': workflow,
+            })
             elements.append({
                 'type': 'code',
                 'content': json.dumps(plan, ensure_ascii=False, indent=2),
                 'data': {
                     'kind': 'moderator_plan_json',
-                    'title': '主持人任务分派计划',
+                    'title': workflow.get('name') or '任务分派工作流',
                     'language': 'json',
                     'filename': 'moderator-plan.json',
+                    'workflow': workflow,
                 },
             })
         return elements
+
+    @staticmethod
+    def _workflow_from_plan(plan):
+        tasks = plan.get('tasks') if isinstance(plan.get('tasks'), list) else []
+        groups = plan.get('parallel_groups') if isinstance(plan.get('parallel_groups'), list) else []
+        stage_by_task = {}
+        for stage_index, group in enumerate(groups):
+            if not isinstance(group, list):
+                continue
+            for order_index, task_id in enumerate(group):
+                stage_by_task[str(task_id)] = (stage_index, order_index)
+        nodes = []
+        for index, task in enumerate(tasks):
+            task_id = str(task.get('task_id') or f'task-{index + 1}')
+            stage_index, order_index = stage_by_task.get(task_id, (index, 0))
+            nodes.append({
+                'id': task_id,
+                'task_id': task_id,
+                'agent_id': task.get('agent_id') or '',
+                'title': task.get('title') or task_id,
+                'instruction': task.get('instruction') or '',
+                'depends_on': task.get('depends_on') or [],
+                'can_parallel': bool(task.get('can_parallel', True)),
+                'x': 80 + stage_index * 240,
+                'y': 80 + order_index * 130,
+            })
+        edges = []
+        for task in tasks:
+            target = str(task.get('task_id') or '')
+            for dep in task.get('depends_on') or []:
+                if target and dep:
+                    edges.append({'from': str(dep), 'to': target})
+        if not edges and len(groups) > 1:
+            for index in range(len(groups) - 1):
+                left = groups[index] if isinstance(groups[index], list) else []
+                right = groups[index + 1] if isinstance(groups[index + 1], list) else []
+                for from_id in left:
+                    for to_id in right:
+                        edges.append({'from': str(from_id), 'to': str(to_id)})
+        first_title = nodes[0].get('title') if nodes else ''
+        name = plan.get('workflow_name') or plan.get('name') or (f'{first_title}工作流' if first_title else '任务分派工作流')
+        return {
+            'id': str(uuid.uuid4()),
+            'name': str(name)[:32],
+            'summary': plan.get('summary') or '',
+            'nodes': nodes,
+            'edges': edges,
+            'parallel_groups': groups,
+            'source': 'moderator_plan',
+        }
 
     @staticmethod
     def _format_team_answer(plan):
@@ -1127,6 +1219,7 @@ class MessageService:
             "type=plan 格式：\n"
             "{\n"
             '  "type": "plan",\n'
+            '  "workflow_name": "简短工作流名称，建议 6 到 16 个字",\n'
             '  "summary": "给用户看的主持说明：我看到团队中有哪些 Agent，现在安排哪些 Agent 处理什么任务。",\n'
             '  "selected_agents": ["agent_id"],\n'
             '  "tasks": [\n'
@@ -1137,6 +1230,7 @@ class MessageService:
             "}\n\n"
             "要求：\n"
             "- type=plan 时 tasks 必须至少有 1 个元素。\n"
+            "- type=plan 时必须提供简短 workflow_name，用于工作流图标题。\n"
             "- type=answer 时 tasks 可以省略，也可以是空数组。\n"
             "- agent_id 必须来自 worker_agents，不要编造。\n\n"
             "可用 worker_agents:\n"
@@ -1283,6 +1377,7 @@ class MessageService:
 
         return {
             'type': 'plan',
+            'workflow_name': str(plan.get('workflow_name') or plan.get('name') or ''),
             'summary': str(plan.get('summary') or ''),
             'selected_agents': list(dict.fromkeys(
                 str(agent_id) for agent_id in (plan.get('selected_agents') or [])

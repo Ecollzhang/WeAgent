@@ -145,6 +145,13 @@ class OpenCodeRunner(ProviderRunner):
         return parts
 
     def fallback_output(self, stdout: str, stderr: str = "") -> str:
+        reported = [
+            text
+            for text in self._reported_element_texts(stdout)
+            if text and not self._is_placeholder_report(text)
+        ]
+        if reported:
+            return reported[-1]
         return ""
 
     def should_retry_without_resume(self, stderr: str) -> bool:
@@ -499,7 +506,7 @@ class OpenCodeRunner(ProviderRunner):
         if not isinstance(element, dict):
             return []
         element_type = str(element.get("type") or "").lower()
-        if element_type not in {"result", "text", "table", "file", "image", "code", "error"}:
+        if element_type not in {"summary", "result", "text", "table", "file", "image", "code", "error"}:
             return []
         title = str(element.get("title") or "").strip()
         content = extract_text_value(element.get("content"))

@@ -14,6 +14,7 @@ class SendMessageSchema(Schema):
     parent_message_id = fields.String(allow_none=True)
     target_agent_ids = fields.List(fields.String(), load_default=list)
     agent_configs = fields.Raw(load_default=dict)
+    workflow = fields.Raw(load_default=None, allow_none=True)
 
 
 class MessageResponseSchema(Schema):

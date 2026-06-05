@@ -547,7 +547,16 @@ export default {
       const targetAgentIds = Array.isArray(payload?.target_agent_ids) ? payload.target_agent_ids : []
       const mentions = Array.isArray(payload?.mentions) ? payload.mentions : []
       const agentConfigs = payload?.agent_configs || {}
+      const workflow = payload?.workflow || null
       if (!content) return
+      const messageMeta = {}
+      if (targetAgentIds.length) {
+        messageMeta.dispatch_mode = 'direct'
+        messageMeta.mentions = mentions
+      }
+      if (workflow) {
+        messageMeta.selected_workflow = this.selectedWorkflowMeta(workflow)
+      }
 
       // === Optimistic UI: show user message immediately ===
       const tempId = 'temp_' + Date.now()
@@ -561,9 +570,7 @@ export default {
           content: content,
           message_type: 'text',
           created_at: this.localDateTimeString(),
-          meta: targetAgentIds.length
-            ? { dispatch_mode: 'direct', mentions }
-            : undefined,
+          meta: Object.keys(messageMeta).length ? messageMeta : undefined,
         },
       })
 
@@ -580,6 +587,9 @@ export default {
         }
         if (Object.keys(agentConfigs).length) {
           requestData.agent_configs = agentConfigs
+        }
+        if (workflow) {
+          requestData.workflow = workflow
         }
         const res = await apiSendMessage(requestData)
 
@@ -598,6 +608,16 @@ export default {
         this.$message.error('发送失败')
         this.isAgentResponding = false
         this.stopMessageRefresh()
+      }
+    },
+
+    selectedWorkflowMeta(workflow) {
+      return {
+        id: workflow?.id || '',
+        name: workflow?.name || '未命名工作流',
+        nodes: Array.isArray(workflow?.nodes) ? workflow.nodes : [],
+        edges: Array.isArray(workflow?.edges) ? workflow.edges : [],
+        parallel_groups: Array.isArray(workflow?.parallel_groups) ? workflow.parallel_groups : [],
       }
     },
 

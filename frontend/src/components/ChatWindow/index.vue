@@ -114,6 +114,7 @@
             @pin="$emit('pin-message', msg.id)"
             @stop-agent="$emit('stop-agent', msg)"
             @open-file="$emit('open-file', $event)"
+            @preview-workflow="openWorkflowPreview"
           />
         </div>
       </template>
@@ -272,6 +273,10 @@
     </div>
 
     <div class="message-input" v-if="conversation">
+      <div v-if="selectedWorkflowLabel" class="selected-workflow-chip">
+        <span>已选工作流：{{ selectedWorkflowLabel }}</span>
+        <button type="button" @click="clearSelectedWorkflow">×</button>
+      </div>
       <div class="input-wrapper">
         <el-input
           type="text"
@@ -307,14 +312,105 @@
       <section class="workflow-dialog">
         <header>
           <div>
-            <h3>工作流</h3>
-            <p>这里后续用于展示和编排当前会话的工作流。</p>
+            <h3>工作流图</h3>
+            <p>{{ workflowDraft ? workflowDraft.name : '选择或创建当前会话的工作流图' }}</p>
           </div>
           <el-button type="text" icon="el-icon-close" @click="closeWorkflow"></el-button>
         </header>
-        <div class="workflow-placeholder">
-          <i class="el-icon-share"></i>
-          <span>工作流内容暂未实现</span>
+        <div class="workflow-editor">
+          <aside class="workflow-library">
+            <div class="workflow-library-head">
+              <strong>工作流产物</strong>
+              <el-button size="mini" type="text" @click="createWorkflowDraft">新建</el-button>
+            </div>
+            <button
+              v-for="workflow in displayWorkflows"
+              :key="workflow.id"
+              type="button"
+              class="workflow-list-item"
+              :class="{ active: workflowDraft && workflowDraft.id === workflow.id }"
+              @click="selectWorkflow(workflow)"
+            >
+              <strong>{{ workflow.name }}</strong>
+              <span>{{ workflow.nodes.length }} 节点 · {{ workflow.edges.length }} 连线</span>
+            </button>
+            <div v-if="!allWorkflows.length" class="workflow-empty">暂无工作流产物</div>
+          </aside>
+          <section class="workflow-main">
+            <div class="workflow-toolbar">
+              <input v-if="workflowDraft" v-model="workflowDraft.name" placeholder="工作流名称" />
+              <input v-else disabled placeholder="工作流名称" />
+              <el-button size="mini" @click="addWorkflowNode" :disabled="!workflowDraft">新增节点</el-button>
+              <el-button size="mini" @click="copyWorkflowDraft" :disabled="!workflowDraft">复制</el-button>
+              <el-button size="mini" type="danger" plain @click="deleteWorkflowDraft" :disabled="!workflowDraft">删除</el-button>
+              <el-button size="mini" type="primary" @click="saveWorkflowDraft" :disabled="!workflowDraft">保存并使用</el-button>
+              <el-button size="mini" type="success" @click="useWorkflowDraft" :disabled="!workflowDraft">使用该图</el-button>
+            </div>
+            <div class="workflow-view-tabs">
+              <button type="button" :class="{ active: workflowViewMode === 'graph' }" @click="setWorkflowViewMode('graph')">图</button>
+              <button type="button" :class="{ active: workflowViewMode === 'json' }" @click="setWorkflowViewMode('json')">JSON</button>
+            </div>
+            <div
+              v-if="workflowViewMode === 'graph'"
+              class="workflow-canvas"
+              @mousemove="dragWorkflowNode"
+              @mouseup="stopWorkflowDrag"
+              @mouseleave="stopWorkflowDrag"
+            >
+              <svg class="workflow-edges">
+                <line
+                  v-for="edge in workflowEdgesForRender"
+                  :key="`${edge.from}-${edge.to}`"
+                  :x1="edge.x1"
+                  :y1="edge.y1"
+                  :x2="edge.x2"
+                  :y2="edge.y2"
+                />
+              </svg>
+              <article
+                v-for="node in workflowDraftNodes"
+                :key="node.id"
+                class="workflow-node"
+                :style="{ left: node.x + 'px', top: node.y + 'px' }"
+                @mousedown.prevent="startWorkflowDrag(node, $event)"
+              >
+                <input v-model="node.title" placeholder="节点标题" @mousedown.stop />
+                <select v-model="node.agent_id" @mousedown.stop>
+                  <option value="">自动选择 Agent</option>
+                  <option v-for="agent in enabledSessionAgents" :key="agent.agent_id" :value="agent.agent_id">
+                    {{ mentionName(agent) }}
+                  </option>
+                </select>
+                <textarea v-model="node.instruction" rows="3" placeholder="任务说明" @mousedown.stop></textarea>
+                <div class="workflow-node-actions" @mousedown.stop>
+                  <button type="button" @click="setWorkflowConnectFrom(node.id)">
+                    {{ workflowConnectFrom === node.id ? '起点已选' : '设为起点' }}
+                  </button>
+                  <button type="button" :disabled="!workflowConnectFrom || workflowConnectFrom === node.id" @click="connectWorkflowNode(node.id)">连到此</button>
+                  <button type="button" class="danger-action" @click="deleteWorkflowNode(node.id)">删除</button>
+                </div>
+              </article>
+              <div v-if="!workflowDraftNodes.length" class="workflow-placeholder">
+                <i class="el-icon-share"></i>
+                <span>新建节点或从左侧选择工作流产物</span>
+              </div>
+            </div>
+            <div v-else class="workflow-json-panel">
+              <div class="workflow-json-head">
+                <span>实时 JSON</span>
+                <button type="button" @click="copyWorkflowJson" :disabled="!workflowDraft">复制</button>
+              </div>
+              <textarea
+                class="workflow-json-preview"
+                :class="{ invalid: workflowJsonError }"
+                v-model="workflowJsonText"
+                spellcheck="false"
+                :disabled="!workflowDraft"
+                @input="handleWorkflowJsonInput"
+              ></textarea>
+              <div v-if="workflowJsonError" class="workflow-json-error">{{ workflowJsonError }}</div>
+            </div>
+          </section>
         </div>
       </section>
     </div>
@@ -382,6 +478,16 @@ export default {
       sidePanelMode: '',
       sessionAgentConfigs: {},
       workflowVisible: false,
+      workflowDraft: null,
+      savedWorkflows: [],
+      deletedWorkflowIds: [],
+      selectedWorkflowId: '',
+      workflowViewMode: 'graph',
+      workflowJsonText: '{}',
+      workflowJsonError: '',
+      syncingWorkflowJson: false,
+      workflowDrag: null,
+      workflowConnectFrom: '',
       artifactPreviewVisible: false,
       artifactPreviewArtifact: null,
       sandboxServices: [],
@@ -398,7 +504,7 @@ export default {
         { key: 'agent_config', label: '智能体配置' },
         { key: 'artifacts', label: '产物' },
         { key: 'logs', label: '日志' },
-        { key: 'workflow', label: '工作流' },
+        { key: 'workflow', label: '工作流图' },
       ],
     }
   },
@@ -456,6 +562,66 @@ export default {
     },
     singleAgentConfigLocked() {
       return this.currentAgentConfigs.length <= 1
+    },
+    enabledSessionAgents() {
+      return (this.sessionAgents || []).filter(agent => agent?.agent_id && this.isSessionAgentEnabled(agent.agent_id))
+    },
+    workflowArtifacts() {
+      const workflows = []
+      ;(this.messages || []).forEach(message => {
+        const elements = Array.isArray(message.elements) ? message.elements : []
+        elements.forEach(element => {
+          if (!element || element.type !== 'workflow') return
+          workflows.push(this.normalizeWorkflow(this.elementData(element), message))
+        })
+      })
+      return workflows.filter(Boolean)
+    },
+    allWorkflows() {
+      const map = new Map()
+      ;[...this.savedWorkflows, ...this.workflowArtifacts].forEach(workflow => {
+        if (workflow && workflow.id) map.set(workflow.id, workflow)
+      })
+      const deleted = new Set(this.deletedWorkflowIds)
+      return Array.from(map.values()).filter(workflow => !deleted.has(workflow.id))
+    },
+    displayWorkflows() {
+      if (!this.workflowDraft || !this.workflowDraft.id) return this.allWorkflows
+      return this.allWorkflows.map(workflow => (
+        workflow.id === this.workflowDraft.id ? this.activeWorkflowPayload() || this.workflowDraft : workflow
+      ))
+    },
+    selectedWorkflowLabel() {
+      const workflow = this.allWorkflows.find(item => item.id === this.selectedWorkflowId) || this.workflowDraft
+      return workflow && this.selectedWorkflowId ? workflow.name : ''
+    },
+    workflowDraftNodes() {
+      return this.workflowDraft && Array.isArray(this.workflowDraft.nodes) ? this.workflowDraft.nodes : []
+    },
+    workflowEdgesForRender() {
+      if (!this.workflowDraft) return []
+      const nodeMap = new Map(this.workflowDraftNodes.map(node => [node.id, node]))
+      return (this.workflowDraft.edges || [])
+        .map(edge => {
+          const from = nodeMap.get(edge.from)
+          const to = nodeMap.get(edge.to)
+          if (!from || !to) return null
+          return {
+            ...edge,
+            x1: from.x + 232,
+            y1: from.y + 62,
+            x2: to.x,
+            y2: to.y + 62,
+          }
+        })
+        .filter(Boolean)
+    },
+    workflowJsonPreview() {
+      if (!this.workflowDraft) return '{}'
+      const workflow = this.cloneWorkflow(this.workflowDraft)
+      workflow.parallel_groups = this.deriveWorkflowParallelGroups(workflow.nodes)
+      workflow.edges = this.deriveWorkflowEdges(workflow.nodes, workflow.edges)
+      return JSON.stringify(workflow, null, 2)
     },
     conversationArtifacts() {
       const artifacts = []
@@ -532,11 +698,20 @@ export default {
       this.selectedServiceId = ''
       this.serviceLogsData = null
       this.ensureSessionAgentConfigs()
+      this.loadSavedWorkflows()
       this.$nextTick(() => this.scrollToBottom(true))
+    },
+    workflowDraft: {
+      deep: true,
+      handler() {
+        if (this.syncingWorkflowJson) return
+        this.refreshWorkflowJsonText()
+      },
     },
   },
   mounted() {
     this.ensureSessionAgentConfigs()
+    this.loadSavedWorkflows()
     const container = this.$refs.messagesContainer
     if (container) {
       container.addEventListener('scroll', this.handleMessagesScroll, { passive: true })
@@ -631,6 +806,7 @@ export default {
         target_agent_ids: targetIds,
         mentions: this.selectedMentions.slice(),
         agent_configs: this.sessionAgentConfigPayload(),
+        workflow: this.activeWorkflowPayload(),
       }
     },
     sessionAgentConfigPayload() {
@@ -646,6 +822,286 @@ export default {
         }
         return payload
       }, {})
+    },
+    workflowStorageKey() {
+      return `weagent.web.workflows.${this.conversation?.id || ''}`
+    },
+    workflowSelectionStorageKey() {
+      return `weagent.web.selectedWorkflow.${this.conversation?.id || ''}`
+    },
+    workflowDeletedStorageKey() {
+      return `weagent.web.deletedWorkflows.${this.conversation?.id || ''}`
+    },
+    loadSavedWorkflows() {
+      if (!this.conversation?.id) {
+        this.savedWorkflows = []
+        this.deletedWorkflowIds = []
+        this.workflowDraft = null
+        return
+      }
+      try {
+        const saved = JSON.parse(localStorage.getItem(this.workflowStorageKey()) || '[]')
+        this.savedWorkflows = Array.isArray(saved) ? saved.map(item => this.normalizeWorkflow(item)).filter(Boolean) : []
+      } catch (e) {
+        this.savedWorkflows = []
+      }
+      try {
+        const deleted = JSON.parse(localStorage.getItem(this.workflowDeletedStorageKey()) || '[]')
+        this.deletedWorkflowIds = Array.isArray(deleted) ? deleted.map(String) : []
+      } catch (e) {
+        this.deletedWorkflowIds = []
+      }
+      const selectedId = localStorage.getItem(this.workflowSelectionStorageKey()) || ''
+      const selected = this.allWorkflows.find(item => item.id === selectedId) || this.allWorkflows[0]
+      if (!this.workflowDraft && selected) {
+        this.selectWorkflow(selected)
+      }
+    },
+    normalizeWorkflow(workflow, message = null) {
+      if (!workflow || typeof workflow !== 'object') return null
+      const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : []
+      const normalizedNodes = nodes.map((node, index) => ({
+        id: String(node.id || node.task_id || `node-${index + 1}`),
+        task_id: String(node.task_id || node.id || `node-${index + 1}`),
+        title: node.title || node.name || `节点 ${index + 1}`,
+        instruction: node.instruction || node.content || '',
+        agent_id: node.agent_id || '',
+        x: Number.isFinite(Number(node.x)) ? Number(node.x) : 80 + index * 220,
+        y: Number.isFinite(Number(node.y)) ? Number(node.y) : 80,
+      }))
+      const nodeIds = new Set(normalizedNodes.map(node => node.id))
+      const edges = (Array.isArray(workflow.edges) ? workflow.edges : [])
+        .filter(edge => edge && nodeIds.has(String(edge.from)) && nodeIds.has(String(edge.to)))
+        .map(edge => ({ from: String(edge.from), to: String(edge.to) }))
+      return {
+        id: String(workflow.id || `workflow-${message?.id || Date.now()}`),
+        name: workflow.name || workflow.summary || '未命名工作流',
+        summary: workflow.summary || '',
+        nodes: normalizedNodes,
+        edges,
+        parallel_groups: Array.isArray(workflow.parallel_groups) ? workflow.parallel_groups : [],
+        source: workflow.source || (message ? 'message' : 'saved'),
+      }
+    },
+    cloneWorkflow(workflow) {
+      return JSON.parse(JSON.stringify(workflow))
+    },
+    refreshWorkflowJsonText() {
+      this.workflowJsonText = this.workflowJsonPreview
+      this.workflowJsonError = ''
+    },
+    setWorkflowViewMode(mode) {
+      this.workflowViewMode = mode
+      if (mode === 'json') {
+        this.refreshWorkflowJsonText()
+      }
+    },
+    handleWorkflowJsonInput() {
+      if (!this.workflowDraft) return
+      let parsed
+      try {
+        parsed = JSON.parse(this.workflowJsonText)
+      } catch (error) {
+        this.workflowJsonError = `JSON 格式错误：${error.message}`
+        return
+      }
+      const normalized = this.normalizeWorkflow(parsed)
+      if (!normalized) {
+        this.workflowJsonError = 'JSON 内容必须是工作流对象'
+        return
+      }
+      if (!Array.isArray(parsed.nodes)) {
+        this.workflowJsonError = 'JSON 内容缺少 nodes 数组'
+        return
+      }
+      this.workflowJsonError = ''
+      this.syncingWorkflowJson = true
+      this.workflowDraft = normalized
+      this.selectedWorkflowId = normalized.id
+      this.$nextTick(() => {
+        this.syncingWorkflowJson = false
+      })
+    },
+    createWorkflowDraft() {
+      this.workflowDraft = {
+        id: `workflow-${Date.now()}`,
+        name: '新建工作流图',
+        summary: '',
+        nodes: [],
+        edges: [],
+        parallel_groups: [],
+        source: 'saved',
+      }
+    },
+    selectWorkflow(workflow) {
+      const normalized = this.normalizeWorkflow(workflow)
+      if (!normalized) return
+      this.workflowDraft = this.cloneWorkflow(normalized)
+      this.selectedWorkflowId = normalized.id
+      if (this.conversation?.id) localStorage.setItem(this.workflowSelectionStorageKey(), normalized.id)
+    },
+    openWorkflowPreview(workflow) {
+      this.selectWorkflow(workflow)
+      this.workflowVisible = true
+      this.activeTab = 'workflow'
+    },
+    activeWorkflowPayload() {
+      if (!this.workflowDraft || !this.selectedWorkflowId) return null
+      const workflow = this.cloneWorkflow(this.workflowDraft)
+      workflow.parallel_groups = this.deriveWorkflowParallelGroups(workflow.nodes)
+      workflow.edges = this.deriveWorkflowEdges(workflow.nodes, workflow.edges)
+      return workflow
+    },
+    saveWorkflowDraft() {
+      if (!this.workflowDraft) return
+      const workflow = this.activeWorkflowPayload() || this.workflowDraft
+      const next = [workflow, ...this.savedWorkflows.filter(item => item.id !== workflow.id)]
+      this.savedWorkflows = next
+      localStorage.setItem(this.workflowStorageKey(), JSON.stringify(next))
+      this.selectedWorkflowId = workflow.id
+      localStorage.setItem(this.workflowSelectionStorageKey(), workflow.id)
+      this.$message.success('工作流图已保存并设为本轮默认')
+    },
+    useWorkflowDraft() {
+      if (!this.workflowDraft) return
+      const workflow = this.activeWorkflowPayload() || this.workflowDraft
+      this.selectedWorkflowId = workflow.id
+      if (this.conversation?.id) localStorage.setItem(this.workflowSelectionStorageKey(), workflow.id)
+      this.workflowVisible = false
+      this.activeTab = 'chat'
+      if (!this.inputText.trim()) {
+        this.inputText = '请根据这个图来分配工作来完成任务：'
+      }
+    },
+    clearSelectedWorkflow() {
+      this.selectedWorkflowId = ''
+      if (this.conversation?.id) localStorage.removeItem(this.workflowSelectionStorageKey())
+    },
+    copyWorkflowDraft() {
+      if (!this.workflowDraft) return
+      const copy = this.cloneWorkflow(this.workflowDraft)
+      copy.id = `workflow-${Date.now()}`
+      copy.name = `${copy.name || '工作流图'} 副本`
+      this.workflowDraft = copy
+      this.selectedWorkflowId = copy.id
+    },
+    deleteWorkflowDraft() {
+      if (!this.workflowDraft) return
+      const name = this.workflowDraft.name || '当前工作流图'
+      if (!window.confirm(`确定删除「${name}」吗？`)) return
+      const id = this.workflowDraft.id
+      this.savedWorkflows = this.savedWorkflows.filter(item => item.id !== id)
+      if (this.conversation?.id) {
+        localStorage.setItem(this.workflowStorageKey(), JSON.stringify(this.savedWorkflows))
+      }
+      if (id && !this.deletedWorkflowIds.includes(id)) {
+        this.deletedWorkflowIds = [...this.deletedWorkflowIds, id]
+        if (this.conversation?.id) {
+          localStorage.setItem(this.workflowDeletedStorageKey(), JSON.stringify(this.deletedWorkflowIds))
+        }
+      }
+      if (this.selectedWorkflowId === id) {
+        this.clearSelectedWorkflow()
+      }
+      const next = this.allWorkflows.find(item => item.id !== id)
+      this.workflowDraft = next ? this.cloneWorkflow(next) : null
+      if (next) {
+        this.selectedWorkflowId = next.id
+        if (this.conversation?.id) localStorage.setItem(this.workflowSelectionStorageKey(), next.id)
+      }
+      this.workflowConnectFrom = ''
+      this.$message.success('工作流图已删除')
+    },
+    copyWorkflowJson() {
+      this.copyTextToClipboard(this.workflowJsonText || this.workflowJsonPreview)
+        .then(() => this.$message.success('JSON 已复制'))
+        .catch(() => this.$message.error('复制失败'))
+    },
+    copyTextToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text)
+      }
+      return new Promise((resolve, reject) => {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.setAttribute('readonly', '')
+        textarea.style.position = 'fixed'
+        textarea.style.left = '-9999px'
+        document.body.appendChild(textarea)
+        textarea.select()
+        try {
+          document.execCommand('copy') ? resolve() : reject(new Error('copy failed'))
+        } catch (error) {
+          reject(error)
+        } finally {
+          document.body.removeChild(textarea)
+        }
+      })
+    },
+    addWorkflowNode() {
+      if (!this.workflowDraft) this.createWorkflowDraft()
+      const index = this.workflowDraft.nodes.length + 1
+      this.workflowDraft.nodes.push({
+        id: `node-${Date.now()}`,
+        task_id: `task-${index}`,
+        title: `任务节点 ${index}`,
+        instruction: '',
+        agent_id: '',
+        x: 80 + (index - 1) * 60,
+        y: 80 + (index - 1) * 38,
+      })
+    },
+    deleteWorkflowNode(nodeId) {
+      if (!this.workflowDraft) return
+      this.workflowDraft.nodes = this.workflowDraft.nodes.filter(node => node.id !== nodeId)
+      this.workflowDraft.edges = (this.workflowDraft.edges || []).filter(edge => edge.from !== nodeId && edge.to !== nodeId)
+      if (this.workflowConnectFrom === nodeId) this.workflowConnectFrom = ''
+    },
+    setWorkflowConnectFrom(nodeId) {
+      this.workflowConnectFrom = this.workflowConnectFrom === nodeId ? '' : nodeId
+    },
+    connectWorkflowNode(nodeId) {
+      if (!this.workflowDraft || !this.workflowConnectFrom || this.workflowConnectFrom === nodeId) return
+      const edge = { from: this.workflowConnectFrom, to: nodeId }
+      const exists = (this.workflowDraft.edges || []).some(item => item.from === edge.from && item.to === edge.to)
+      if (!exists) this.workflowDraft.edges.push(edge)
+      this.workflowConnectFrom = ''
+    },
+    startWorkflowDrag(node, event) {
+      this.workflowDrag = {
+        node,
+        offsetX: event.offsetX,
+        offsetY: event.offsetY,
+      }
+    },
+    dragWorkflowNode(event) {
+      if (!this.workflowDrag) return
+      const rect = event.currentTarget.getBoundingClientRect()
+      this.workflowDrag.node.x = Math.max(12, event.clientX - rect.left - this.workflowDrag.offsetX)
+      this.workflowDrag.node.y = Math.max(12, event.clientY - rect.top - this.workflowDrag.offsetY)
+    },
+    stopWorkflowDrag() {
+      this.workflowDrag = null
+    },
+    deriveWorkflowParallelGroups(nodes) {
+      const groups = new Map()
+      ;(nodes || []).forEach(node => {
+        const stage = Math.round(Number(node.x || 0) / 220)
+        if (!groups.has(stage)) groups.set(stage, [])
+        groups.get(stage).push(node.task_id || node.id)
+      })
+      return Array.from(groups.keys()).sort((a, b) => a - b).map(key => groups.get(key))
+    },
+    deriveWorkflowEdges(nodes, explicitEdges = []) {
+      if (explicitEdges && explicitEdges.length) return explicitEdges
+      const groups = this.deriveWorkflowParallelGroups(nodes)
+      const edges = []
+      for (let index = 0; index < groups.length - 1; index++) {
+        groups[index].forEach(from => {
+          groups[index + 1].forEach(to => edges.push({ from, to }))
+        })
+      }
+      return edges
     },
     mentionName(agent) {
       return agent?.role || agent?.name || agent?.agent_id || ''
@@ -995,6 +1451,10 @@ export default {
       }
     },
     viewArtifact(artifact) {
+      if (artifact?.type === 'code' && artifact.data?.workflow) {
+        this.openWorkflowPreview(artifact.data.workflow)
+        return
+      }
       if (artifact?.type === 'service') {
         const url = this.serviceInfoFromArtifact(artifact).url
         if (url) window.open(url, '_blank', 'noopener')
@@ -1319,11 +1779,32 @@ export default {
 
 /* 飞书风格输入框 */
 .message-input {
-  height: 68px;
+  min-height: 68px;
   padding: 10px 16px;
   border-top: 1px solid #f0f0f0;
   flex-shrink: 0;
   background: #ffffff;
+}
+
+.selected-workflow-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+  padding: 5px 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+}
+
+.selected-workflow-chip button {
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  cursor: pointer;
 }
 
 .input-wrapper {
@@ -1854,6 +2335,300 @@ export default {
 
 .workflow-placeholder i {
   font-size: 44px;
+}
+
+.workflow-editor {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+}
+
+.workflow-library {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid #eef2f7;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.workflow-library-head,
+.workflow-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workflow-library-head {
+  margin-bottom: 10px;
+}
+
+.workflow-list-item {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+  background: #ffffff;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-list-item + .workflow-list-item {
+  margin-top: 8px;
+}
+
+.workflow-list-item.active {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.workflow-list-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.workflow-list-item span,
+.workflow-empty {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.workflow-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-toolbar {
+  padding: 12px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.workflow-toolbar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #dbe4f0;
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: #1e293b;
+}
+
+.workflow-view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eef2f7;
+  background: #fbfdff;
+}
+
+.workflow-view-tabs button {
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 14px;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-view-tabs button.active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.workflow-toolbar .danger-action,
+.workflow-toolbar :deep(.el-button--danger.is-plain) {
+  border-color: #fecdd3;
+  color: #be123c;
+  background: #fff1f2;
+}
+
+.workflow-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: linear-gradient(#eef2f7 1px, transparent 1px), linear-gradient(90deg, #eef2f7 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.workflow-edges {
+  position: absolute;
+  inset: 0;
+  width: 1600px;
+  height: 1000px;
+  pointer-events: none;
+}
+
+.workflow-edges line {
+  stroke: #60a5fa;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.workflow-node {
+  position: absolute;
+  width: 232px;
+  display: grid;
+  gap: 7px;
+  border: 1px solid #d8e4f5;
+  border-top: 3px solid #2563eb;
+  border-radius: 8px;
+  padding: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f9fbff 100%);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.12);
+  cursor: grab;
+}
+
+.workflow-node:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 18px 40px rgba(37, 99, 235, 0.16);
+}
+
+.workflow-node input,
+.workflow-node select,
+.workflow-node textarea {
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #ffffff;
+  color: #1e293b;
+  font-size: 12px;
+}
+
+.workflow-node input {
+  border-color: transparent;
+  padding: 2px 0 4px;
+  background: transparent;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workflow-node select {
+  height: 30px;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.workflow-node textarea {
+  min-height: 66px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.workflow-node-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+}
+
+.workflow-node button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workflow-node button:hover:not(:disabled) {
+  border-color: #bfdbfe;
+  background: #dbeafe;
+}
+
+.workflow-node button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.workflow-node .danger-action {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.workflow-json-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+}
+
+.workflow-json-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workflow-json-head button {
+  height: 26px;
+  border: 1px solid rgba(147, 197, 253, 0.5);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-json-head button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.workflow-json-preview {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 16px 18px;
+  overflow: auto;
+  border: 1px solid transparent;
+  background: #0f172a;
+  color: #dbeafe;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  resize: none;
+  outline: none;
+}
+
+.workflow-json-preview:focus {
+  border-color: rgba(147, 197, 253, 0.55);
+}
+
+.workflow-json-preview.invalid {
+  border-color: #fb7185;
+}
+
+.workflow-json-error {
+  padding: 8px 14px;
+  border-top: 1px solid rgba(248, 113, 113, 0.35);
+  background: #2a1118;
+  color: #fecdd3;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .artifact-preview-overlay {

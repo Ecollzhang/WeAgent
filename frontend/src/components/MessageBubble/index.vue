@@ -282,6 +282,9 @@
 
       <div class="bubble-meta">
         <span class="bubble-time">{{ formatTime(message.created_at) }}</span>
+        <span v-if="selectedWorkflowLabel" class="message-workflow-tag">
+          工作流：{{ selectedWorkflowLabel }}
+        </span>
         <span v-if="isTempMessage" class="bubble-sending">
           <i class="el-icon-loading"></i> 发送中...
         </span>
@@ -478,6 +481,15 @@ export default {
     },
     isTempMessage() {
       return this.message && typeof this.message.id === 'string' && this.message.id.startsWith('temp_')
+    },
+    selectedWorkflowLabel() {
+      if (!this.message || this.message.sender_type !== 'user') return ''
+      const workflow = this.message.meta && this.message.meta.selected_workflow
+      if (!workflow || typeof workflow !== 'object') return ''
+      const name = workflow.name || '未命名工作流'
+      const nodeCount = Array.isArray(workflow.nodes) ? workflow.nodes.length : 0
+      const edgeCount = Array.isArray(workflow.edges) ? workflow.edges.length : 0
+      return `${name}（${nodeCount} 节点 · ${edgeCount} 连线）`
     },
     canStop() {
       return this.message
@@ -891,6 +903,10 @@ export default {
       }
     },
     previewCode(data) {
+      if (data?.workflow) {
+        this.$emit('preview-workflow', data.workflow)
+        return
+      }
       this.previewData = data
       this.codePreviewVisible = true
     },
@@ -1972,6 +1988,19 @@ export default {
 
 .bubble-sending {
   color: #4080ff;
+  font-size: 11px;
+}
+
+.message-workflow-tag {
+  max-width: min(360px, 70%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #eff6ff;
+  color: #2563eb;
   font-size: 11px;
 }
 

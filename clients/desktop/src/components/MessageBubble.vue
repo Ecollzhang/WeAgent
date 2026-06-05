@@ -66,6 +66,7 @@
               <span class="artifact-meta">{{ elementData(el).language || 'code' }}</span>
               <div class="code-actions">
                 <button type="button" @click="copyCode(elementContent(el))">复制</button>
+                <button type="button" @click="previewCode(el)">预览</button>
               </div>
             </div>
             <pre class="code-body"><code>{{ elementContent(el) }}</code></pre>
@@ -175,6 +176,9 @@
 
       <div class="bubble-meta">
         <span class="bubble-time">{{ formatTime(message.created_at) }}</span>
+        <span v-if="selectedWorkflowLabel" class="message-workflow-tag">
+          工作流：{{ selectedWorkflowLabel }}
+        </span>
         <span v-if="isTempMessage" class="bubble-sending">
           <i class="el-icon-loading"></i> 发送中...
         </span>
@@ -263,6 +267,15 @@ export default {
     isTempMessage() {
       return this.message && typeof this.message.id === 'string' && this.message.id.startsWith('temp_')
     },
+    selectedWorkflowLabel() {
+      if (!this.message || this.message.sender_type !== 'user') return ''
+      const workflow = this.message.meta && this.message.meta.selected_workflow
+      if (!workflow || typeof workflow !== 'object') return ''
+      const name = workflow.name || '未命名工作流'
+      const nodeCount = Array.isArray(workflow.nodes) ? workflow.nodes.length : 0
+      const edgeCount = Array.isArray(workflow.edges) ? workflow.edges.length : 0
+      return `${name}（${nodeCount} 节点 · ${edgeCount} 连线）`
+    },
     renderedContent() {
       if (!this.message || !this.message.content) return ''
       return this.renderMarkdown(this.message.content)
@@ -319,6 +332,12 @@ export default {
     },
     getSenderName() {
       return (this.message && (this.message.sender_name || this.message.sender_id)) || '智能体'
+    },
+    previewCode(el) {
+      const data = this.elementData(el)
+      if (data.workflow) {
+        this.$emit('preview-workflow', data.workflow)
+      }
     },
     statusLabel(status) {
       const map = {
