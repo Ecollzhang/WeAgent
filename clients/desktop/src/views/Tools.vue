@@ -45,7 +45,7 @@
             <span>先按分类管理，再展开 Skill / MCP / Plugin / Tool</span>
           </div>
         </div>
-        <div class="header-actions">
+        <div class="toolset-header-actions">
           <el-input
             v-model="keyword"
             size="small"
@@ -1880,6 +1880,12 @@ export default {
   border-bottom: 1px solid #edf0f5;
 }
 
+.content-header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
 .rail-header h3,
 .content-header h2,
 .detail-header h3 {
@@ -1965,18 +1971,86 @@ export default {
   min-width: 0;
 }
 
+.category-title {
+  flex: 1 1 240px;
+  max-width: none;
+}
+
+.category-title > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.category-title h2,
+.category-title span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .category-title i {
   font-size: 26px;
 }
 
-.header-actions {
+.toolset-header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex: 0 1 520px;
+  flex-wrap: nowrap;
   gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+  max-width: min(520px, 100%);
 }
 
-.header-actions .el-input {
-  width: 240px;
+.toolset-header-actions .el-input {
+  width: auto;
+  min-width: 180px;
+  max-width: 240px;
+  flex: 1 1 220px;
+}
+
+.toolset-header-actions .el-button {
+  flex: 0 0 auto;
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 900px) {
+  .content-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .category-title {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+
+  .toolset-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .toolset-header-actions .el-input {
+    max-width: 240px;
+  }
+}
+
+@media (max-width: 720px) {
+  .toolset-header-actions {
+    justify-content: flex-start;
+    flex-basis: 100%;
+  }
+
+  .toolset-header-actions .el-input {
+    max-width: none;
+  }
 }
 
 .type-tabs {

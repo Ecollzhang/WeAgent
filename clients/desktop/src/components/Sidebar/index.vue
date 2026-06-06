@@ -24,7 +24,7 @@
         title="工具集"
         @click="$router.push('/tools')"
       >
-        <i class="el-icon-s-tools"></i>
+        <span class="toolset-wrench-icon"></span>
       </button>
       <button
         class="sidebar-btn"
