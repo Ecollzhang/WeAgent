@@ -14,6 +14,7 @@ import json
 import mimetypes
 import os
 import posixpath
+import re
 import secrets
 import socket
 import tarfile
@@ -29,6 +30,22 @@ from .client import OrchestratorClient
 
 # Lock for thread safety
 _lock = threading.Lock()
+
+_EXPORT_EXCLUDED_BASENAMES = {
+    "CLAUDE.md",
+    "agent.md",
+    "config.json",
+    "latest.txt",
+    "meta.json",
+    "previous.txt",
+    "sandbox.log",
+    "settings.local.json",
+    "weagent-report.log",
+}
+_EXPORT_EXCLUDED_SUFFIXES = (".jsonl",)
+_EXPORT_EXCLUDED_REGEXES = (
+    re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$", re.IGNORECASE),
+)
 
 
 def _clean_config_value(value: str = "") -> str:
@@ -65,6 +82,20 @@ def _merge_no_proxy(value: str = "") -> str:
 
 def _default_host_callback_url() -> str:
     return f"http://host.docker.internal:{os.getenv('PORT', '5002')}"
+
+
+def _should_skip_export_member(path_parts: list[str]) -> bool:
+    clean_parts = [part for part in path_parts if part not in {"", ".", ".."}]
+    if not clean_parts:
+        return True
+    if any(part.startswith(".") for part in clean_parts):
+        return True
+    basename = clean_parts[-1]
+    if basename in _EXPORT_EXCLUDED_BASENAMES:
+        return True
+    if basename.endswith(_EXPORT_EXCLUDED_SUFFIXES):
+        return True
+    return any(pattern.match(basename) for pattern in _EXPORT_EXCLUDED_REGEXES)
 
 
 class DockerNotAvailableError(RuntimeError):
@@ -666,7 +697,8 @@ class DockerContainerManager:
         return session.client.download_file(normalized_path)
 
     def export_zip(self, session_id: str, path: str = "/workspace",
-                   mode: str = "directory") -> tuple[bytes, str, str]:
+                   mode: str = "directory",
+                   selected_paths: Optional[list[str]] = None) -> tuple[bytes, str, str]:
         """Export a workspace directory as a ZIP archive."""
         session = self.get_session(session_id)
         if not session:
@@ -691,26 +723,67 @@ class DockerContainerManager:
         tar_buffer = io.BytesIO(tar_bytes)
         zip_buffer = io.BytesIO()
         top_name = posixpath.basename(export_path.rstrip("/")) or "workspace"
-        is_dir = bool(stat.get("mode", 0) & 0o040000) if isinstance(stat, dict) else False
 
         with tarfile.open(fileobj=tar_buffer, mode="r:*") as tar, zipfile.ZipFile(
             zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED
         ) as zip_file:
-            for member in tar.getmembers():
+            members = tar.getmembers()
+            member_names = [member.name.lstrip("./") for member in members]
+            stat_is_dir = bool(stat.get("mode", 0) & 0o040000) if isinstance(stat, dict) else False
+            inferred_is_dir = any(
+                name == top_name or name.startswith(top_name.rstrip("/") + "/")
+                for name in member_names
+            ) and any("/" in name for name in member_names if name)
+            is_dir = stat_is_dir or inferred_is_dir
+
+            selected_relative_paths = None
+            selected_relative_prefixes = None
+            if selected_paths:
+                if not is_dir:
+                    raise ValueError("Selected export requires a directory path")
+                selected_relative_paths = set()
+                selected_relative_prefixes = set()
+                for raw_path in selected_paths:
+                    normalized_selected = "/" + str(raw_path or "").replace("\\", "/").lstrip("/")
+                    normalized_selected = posixpath.normpath(normalized_selected)
+                    if normalized_selected == export_path:
+                        continue
+                    if not normalized_selected.startswith(export_path.rstrip("/") + "/"):
+                        raise ValueError("Selected export path must stay under the current directory")
+                    relative_selected = posixpath.relpath(normalized_selected, export_path)
+                    if relative_selected in {"", ".", ".."}:
+                        continue
+                    selected_relative_paths.add(relative_selected)
+                    selected_relative_prefixes.add(relative_selected.rstrip("/") + "/")
+
+            for member in members:
                 if member.isdir() or member.issym() or member.islnk():
                     continue
                 extracted = tar.extractfile(member)
                 if extracted is None:
                     continue
                 member_name = member.name.lstrip("./")
-                relative_name = member_name if is_dir else posixpath.basename(member_name)
+                if is_dir:
+                    member_prefix = top_name.rstrip("/") + "/"
+                    if member_name == top_name:
+                        continue
+                    if member_name.startswith(member_prefix):
+                        relative_name = member_name[len(member_prefix):]
+                    else:
+                        relative_name = member_name
+                else:
+                    relative_name = posixpath.basename(member_name)
                 path_parts = [part for part in relative_name.split("/") if part]
                 if not path_parts:
                     continue
-                if any(part.startswith(".") for part in path_parts):
+                if _should_skip_export_member(path_parts):
                     continue
-                if any(part == "CLAUDE.md" for part in path_parts):
-                    continue
+                if selected_relative_paths is not None:
+                    normalized_relative = "/".join(path_parts)
+                    if normalized_relative not in selected_relative_paths and not any(
+                        normalized_relative.startswith(prefix) for prefix in selected_relative_prefixes
+                    ):
+                        continue
                 archive_name = posixpath.join(top_name, relative_name) if is_dir else relative_name
                 zip_file.writestr(archive_name, extracted.read())
 

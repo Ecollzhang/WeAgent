@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="message-bubble" :class="{ own: isOwn }">
     <div class="bubble-sender" v-if="message.sender_type === 'agent'">
       <span class="agent-tag">{{ getSenderName() }}</span>
@@ -104,6 +104,7 @@
                   style="width: 100%"
                 >
                   <el-table-column
+                    v-if="shouldShowSummaryIndexColumn(group)"
                     type="index"
                     label="序号"
                     width="72"
@@ -141,9 +142,25 @@
                       <span class="file-path">{{ artifactGroupSubtitle(group) }}</span>
                     </div>
                   </div>
-                  <div class="file-badge-group">
+                  <div class="file-attr-group">
                     <span class="artifact-kind-chip">{{ artifactGroupKindLabel(group) }}</span>
-                    <span v-if="artifactGroupSize(group)" class="file-size-inline-text">{{ formatFileSize(artifactGroupSize(group)) }}</span>
+                    <span v-if="artifactGroupSizeText(group)" class="file-size-inline-text">{{ artifactGroupSizeText(group) }}</span>
+                  </div>
+                  <div class="artifact-row-actions" @click.stop>
+                    <el-button
+                      v-if="canCopyArtifactGroup(group)"
+                      size="mini"
+                      type="text"
+                      class="artifact-action-btn"
+                      @click="copyArtifactGroup(group)"
+                    >复制</el-button>
+                    <el-button
+                      v-if="canEditArtifactGroup(group)"
+                      size="mini"
+                      type="text"
+                      class="artifact-action-btn"
+                      @click="openArtifactGroup(group, 'edit')"
+                    >编辑</el-button>
                   </div>
                 </div>
                 <div v-if="artifactGroupResolvedDiff(group)" class="file-diff-inline-row" :data-diff-row-key="group.key" @click.stop>
@@ -155,34 +172,25 @@
                     </div>
                   </div>
                   <div class="file-diff-actions">
-                    <el-button
-                      size="mini"
-                      type="text"
-                      @click="toggleArtifactDiff(group.key)"
-                    >{{ isArtifactDiffVisible(group.key) ? '收起Diff' : '展示Diff' }}</el-button>
-                    <el-button
-                      size="mini"
-                      type="text"
-                      :loading="diffBusyKey === group.key"
-                      :disabled="!canRevertArtifactGroup(group)"
-                      @click="revertArtifactDiff(group)"
-                    >撤销</el-button>
+                    <template v-if="supportsInlineArtifactDiff(group)">
+                      <el-button
+                        size="mini"
+                        type="text"
+                        class="artifact-action-btn"
+                        @click="toggleArtifactDiff(group.key)"
+                      >{{ isArtifactDiffVisible(group.key) ? '收起Diff' : '展示Diff' }}</el-button>
+                      <el-button
+                        size="mini"
+                        type="text"
+                        :loading="diffBusyKey === group.key"
+                        class="artifact-action-btn"
+                        :disabled="!canRevertArtifactGroup(group)"
+                        @click="revertArtifactDiff(group)"
+                      >撤销</el-button>
+                    </template>
+                    <span v-else class="file-diff-note">详情请在工作台查看</span>
                   </div>
                 </div>
-              </div>
-              <div class="artifact-row-actions" @click.stop>
-                <el-button
-                  v-if="canCopyArtifactGroup(group)"
-                  size="mini"
-                  type="text"
-                  @click="copyArtifactGroup(group)"
-                >复制</el-button>
-                <el-button
-                  v-if="canEditArtifactGroup(group)"
-                  size="mini"
-                  type="text"
-                  @click="openArtifactGroup(group, 'edit')"
-                >编辑</el-button>
               </div>
             </div>
           </div>
@@ -193,13 +201,13 @@
               <template v-else>
                 <pre class="code-body code-body-soft"><code>{{ artifactGroupCodeContent(group) }}</code></pre>
               </template>
-                <div v-if="artifactGroupResolvedDiff(group) && isArtifactDiffVisible(group.key)" class="artifact-attached-diff">
-                  <div class="artifact-attached-diff-title">变更</div>
+                <div v-if="supportsInlineArtifactDiff(group) && artifactGroupResolvedDiff(group) && isArtifactDiffVisible(group.key)" class="artifact-attached-diff">
                   <DiffViewCard
                     :element="artifactGroupResolvedDiff(group)"
-                  :session-id="sessionId"
-                  @applied="onWorkbenchDiffApplied"
-                />
+                    :session-id="sessionId"
+                    compact
+                    @applied="onWorkbenchDiffApplied"
+                  />
               </div>
             </div>
 
@@ -374,7 +382,7 @@
 
 <script>
 import { formatTime } from '../../utils/format'
-import { getSessionRawFileUrl, getWorkspaceFileUrl, getServiceLogs, restartService, stopService, writeFile } from '@/api/sandbox'
+import { getFileTree, getSessionRawFileUrl, getWorkspaceFileUrl, getServiceLogs, restartService, stopService, writeFile } from '@/api/sandbox'
 import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
 
@@ -390,12 +398,12 @@ export default {
     return {
       workbenchVisible: false,
       workbenchArtifact: null,
-      awbDebugSeq: 0,
       artifactExpanded: {},
       artifactDiffExpanded: {},
       showAllPreviews: true,
       artifactPreviewCache: {},
       artifactPreviewLoading: {},
+      artifactMetaLoading: {},
       diffBusyKey: '',
 
       servicePreviewVisible: false,
@@ -409,10 +417,8 @@ export default {
   watch: {
     artifactGroups: {
       handler() {
-        this.logDiffGroupDebug()
         this.$nextTick(() => {
           this.ensureVisibleArtifactPreviews()
-          this.logDiffRenderDebug()
         })
       },
       immediate: true,
@@ -699,6 +705,8 @@ export default {
       return group.path || this.normalizeWorkspacePath(this.elementWorkspacePath(group.primaryElement) || '')
     },
     artifactGroupSize(group) {
+      const groupSize = Number(group?.size || group?.file_size || group?.bytes || 0) || 0
+      if (groupSize > 0) return groupSize
       const candidates = [
         group.fileElement,
         group.primaryElement,
@@ -724,6 +732,12 @@ export default {
         if (size > 0) return size
       }
       return 0
+    },
+    artifactGroupSizeText(group) {
+      const size = this.artifactGroupSize(group)
+      if (size > 0) return this.formatFileSize(size)
+      this.ensureArtifactGroupMetadata(group)
+      return ''
     },
     artifactGroupKindLabel(group) {
       return {
@@ -758,7 +772,6 @@ export default {
         const group = this.artifactGroups.find(item => item.key === key)
         if (group) {
           this.ensureArtifactGroupPreview(group)
-          this.$nextTick(() => this.logSingleDiffRenderDebug(group, 'toggle-expand'))
         }
       }
     },
@@ -767,6 +780,9 @@ export default {
     },
     toggleArtifactDiff(key) {
       this.$set(this.artifactDiffExpanded, key, !this.isArtifactDiffVisible(key))
+      if (!this.isArtifactGroupExpanded(key)) {
+        this.$set(this.artifactExpanded, key, true)
+      }
     },
     artifactGroupResolvedDiff(group) {
       if (!group) return null
@@ -786,6 +802,9 @@ export default {
     canRevertArtifactGroup(group) {
       const diffData = this.elementData(this.artifactGroupResolvedDiff(group))
       return typeof diffData.before === 'string' && !!this.sessionId && !!this.artifactGroupPath(group)
+    },
+    supportsInlineArtifactDiff(group) {
+      return group?.type === 'code'
     },
     async revertArtifactDiff(group) {
       if (!this.canRevertArtifactGroup(group)) return
@@ -924,6 +943,42 @@ export default {
         console.warn('[ArtifactPreview] failed to load raw preview', { path, error })
       } finally {
         this.$delete(this.artifactPreviewLoading, path)
+      }
+    },
+    async ensureArtifactGroupMetadata(group) {
+      const path = this.normalizeWorkspacePath(this.artifactGroupPath(group))
+      if (!path || !this.sessionId || this.artifactMetaLoading[path]) return
+      if (this.artifactGroupSize(group) > 0) return
+      this.$set(this.artifactMetaLoading, path, true)
+      try {
+        const res = await getFileTree(this.sessionId, path)
+        const tree = res?.data?.tree || null
+        const size = Number(tree?.size || 0) || 0
+        if (size > 0) this.applyArtifactSize(path, size)
+      } catch (error) {
+        console.warn('[ArtifactMeta] failed to load file metadata', { path, error })
+      } finally {
+        this.$delete(this.artifactMetaLoading, path)
+      }
+    },
+    applyArtifactSize(path, size) {
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      this.artifactElements.forEach(el => {
+        const elementPath = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (elementPath !== normalizedPath) return
+        const data = this.elementData(el)
+        this.$set(el, 'data', {
+          ...data,
+          size,
+          file_size: size,
+          bytes: size,
+        })
+      })
+      if (this.workbenchArtifact && this.normalizeWorkspacePath(this.workbenchArtifact.path) === normalizedPath) {
+        this.workbenchArtifact = {
+          ...this.workbenchArtifact,
+          size,
+        }
       }
     },
     normalizeDisplayText(text) {
@@ -1133,12 +1188,10 @@ export default {
       return {}
     },
     tableHeaders(el) {
-      const payload = this.tablePayload(el)
-      return Array.isArray(payload.headers) ? payload.headers.map(h => String(h || '')) : []
+      return this.normalizedTablePayload(el).headers
     },
     tableRowCount(el) {
-      const payload = this.tablePayload(el)
-      return Array.isArray(payload.rows) ? payload.rows.length : 0
+      return this.normalizedTablePayload(el).rows.length
     },
     tablePath(el) {
       const data = this.elementData(el)
@@ -1149,9 +1202,7 @@ export default {
       return data.path || data.file || this.workspacePathFromContent(this.elementContent(el)) || ''
     },
     normalizeTable(el) {
-      const payload = this.tablePayload(el)
-      const headers = this.tableHeaders(el)
-      const rows = Array.isArray(payload.rows) ? payload.rows : []
+      const { headers, rows } = this.normalizedTablePayload(el)
       if (!headers.length) return []
       return rows.map(row => {
         const cells = Array.isArray(row) ? row : headers.map(h => row?.[h])
@@ -1161,6 +1212,54 @@ export default {
         })
         return obj
       })
+    },
+    normalizedTablePayload(el) {
+      const payload = this.tablePayload(el)
+      const headers = Array.isArray(payload.headers) ? payload.headers.map(h => String(h || '')) : []
+      const rows = Array.isArray(payload.rows) ? payload.rows : []
+      return this.removeDuplicateIndexColumn(headers, rows)
+    },
+    removeDuplicateIndexColumn(headers, rows) {
+      if (!Array.isArray(headers) || headers.length < 2) return { headers, rows }
+      const normalizedHeaders = headers.map(h => this.normalizeIndexHeaderLabel(h))
+      const isIndexLike = label => ['#', '序号', 'index', 'idx', 'no', 'no.', 'number'].includes(label)
+      if (!(isIndexLike(normalizedHeaders[0]) && isIndexLike(normalizedHeaders[1]))) {
+        return { headers, rows }
+      }
+
+      const materializedRows = rows.map(row => (
+        Array.isArray(row) ? row.slice() : headers.map(h => row?.[h])
+      ))
+      if (!materializedRows.length) return { headers, rows }
+
+      const sameSequence = materializedRows.every((cells, index) => {
+        const left = String(cells?.[0] ?? '').trim()
+        const right = String(cells?.[1] ?? '').trim()
+        const expected = String(index + 1)
+        return left && right && left === right && left === expected
+      })
+      if (!sameSequence) return { headers, rows }
+
+      const dropIndex = normalizedHeaders[0] === '序号' ? 1 : 0
+      return {
+        headers: headers.filter((_, index) => index !== dropIndex),
+        rows: materializedRows.map(cells => cells.filter((_, index) => index !== dropIndex)),
+      }
+    },
+    normalizeIndexHeaderLabel(label) {
+      const text = String(label || '').trim().toLowerCase()
+      if (!text) return ''
+      if (text === '#') return '#'
+      if (['序号', '序列', '编号'].includes(text)) return '序号'
+      if (['index', 'idx'].includes(text)) return 'index'
+      if (['no', 'no.', 'number'].includes(text)) return 'no'
+      return text
+    },
+    shouldShowSummaryIndexColumn(group) {
+      const firstHeader = this.artifactGroupTableHeaders(group)[0] || ''
+      return !['#', '序号', 'index', 'idx', 'no', 'no.', 'number'].includes(
+        this.normalizeIndexHeaderLabel(firstHeader)
+      )
     },
     elementData(el) {
       return el?.data || {}
@@ -1444,16 +1543,6 @@ export default {
       const primaryElement = related.codeElement || related.tableElement || related.webpageElement || related.imageElement || related.fileElement || related.diffElement || element
       const data = primaryElement ? this.elementData(primaryElement) : {}
       this.workbenchArtifact = this.buildWorkbenchPayload(normalizedPath, primaryElement, data, related)
-      this.logWorkbenchDebug('open-artifact', {
-        seq: ++this.awbDebugSeq,
-        path: normalizedPath,
-        sourceType: element?.type || '',
-        payloadType: this.workbenchArtifact?.type || '',
-        hasCodeContent: Boolean(this.workbenchArtifact?.codeContent),
-        tableRows: Array.isArray(this.workbenchArtifact?.tableRows) ? this.workbenchArtifact.tableRows.length : 0,
-        hasImageUrl: Boolean(this.workbenchArtifact?.imageUrl),
-        relatedTypes: Object.keys(related).filter(key => related[key]).map(key => key.replace('Element', '')),
-      })
       this.workbenchVisible = true
     },
     emitOpenFilePath(path) {
@@ -1477,6 +1566,8 @@ export default {
         type,
         name: data.name || data.filename || normalizedPath.split('/').pop() || '',
         diffElement: context.diffElement || null,
+        diffMap: this.buildWorkbenchDiffMap(),
+        fileMap: this.buildWorkbenchFileMap(),
       }
       if ((type === 'code' || type === 'text') && context.codeElement) {
         payload.codeContent = this.elementContent(context.codeElement)
@@ -1497,6 +1588,26 @@ export default {
         })
       }
       return payload
+    },
+    buildWorkbenchDiffMap() {
+      const map = {}
+      ;(this.artifactElements || []).forEach(el => {
+        if (!this.looksLikeDiffElement(el)) return
+        const path = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (!path || map[path]) return
+        map[path] = el
+      })
+      return map
+    },
+    buildWorkbenchFileMap() {
+      const map = {}
+      ;(this.artifactElements || []).forEach(el => {
+        if (el.type !== 'file') return
+        const path = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (!path || map[path]) return
+        map[path] = true
+      })
+      return map
     },
     inferWorkbenchTypeFromContext(context, normalizedPath) {
       if (context.codeElement) return 'code'
@@ -1540,74 +1651,6 @@ export default {
         if ((el.type === 'code' || el.type === 'text') && !result.codeElement) result.codeElement = el
       })
       return result
-    },
-    logWorkbenchDebug(stage, payload) {
-      const stamp = typeof performance !== 'undefined' && performance.now ? performance.now().toFixed(1) : Date.now()
-      console.log(`[AWB DEBUG][MessageBubble][${stamp}] ${stage}`, payload)
-    },
-    logDiffGroupDebug() {
-      const diffGroups = (this.artifactGroups || [])
-        .map(group => ({
-          group,
-          diffElement: this.artifactGroupResolvedDiff(group),
-        }))
-        .filter(item => item.diffElement)
-        .map(({ group, diffElement }) => ({
-          key: group.key,
-          type: group.type,
-          path: this.artifactGroupPath(group),
-          hasFile: Boolean(group.fileElement),
-          hasCode: Boolean(group.codeElement),
-          hasDiff: Boolean(diffElement),
-          directDiff: Boolean(group.diffElement),
-        }))
-      if (diffGroups.length) {
-        const stamp = typeof performance !== 'undefined' && performance.now ? performance.now().toFixed(1) : Date.now()
-        console.log(`[AWB DEBUG][MessageBubble][${stamp}] diff-groups`, diffGroups)
-      }
-    },
-    logDiffRenderDebug() {
-      const diffGroups = (this.artifactGroups || []).filter(group => this.artifactGroupResolvedDiff(group))
-      diffGroups.forEach(group => this.logSingleDiffRenderDebug(group, 'render-check'))
-    },
-    logSingleDiffRenderDebug(group, stage = 'render-check') {
-      const diffElement = this.artifactGroupResolvedDiff(group)
-      if (!diffElement) return
-      const diffText = this.diffText(diffElement)
-      let dom = null
-      let rowDom = null
-      if (typeof document !== 'undefined') {
-        const escapedKey = (window.CSS && window.CSS.escape)
-          ? window.CSS.escape(group.key)
-          : String(group.key).replace(/"/g, '\\"')
-        dom = document.querySelector(`[data-artifact-group-key="${escapedKey}"]`)
-        rowDom = document.querySelector(`[data-diff-row-key="${escapedKey}"]`)
-      }
-      const payload = {
-        key: group.key,
-        type: group.type,
-        expanded: this.isArtifactGroupExpanded(group.key, group),
-        loading: this.isArtifactGroupPreviewLoading(group),
-        hasCode: Boolean(group.codeElement),
-        hasFile: Boolean(group.fileElement),
-        hasDiff: Boolean(diffElement),
-        directDiff: Boolean(group.diffElement),
-        codePreviewLength: this.artifactGroupCodeContent(group)?.length || 0,
-        diffLength: diffText?.length || 0,
-        diffApplied: Boolean(this.elementData(diffElement)?.applied),
-        path: this.artifactGroupPath(group),
-        groupDom: dom ? {
-          height: dom.offsetHeight,
-          width: dom.offsetWidth,
-        } : null,
-        diffRowDom: rowDom ? {
-          height: rowDom.offsetHeight,
-          width: rowDom.offsetWidth,
-          text: (rowDom.textContent || '').replace(/\s+/g, ' ').trim(),
-        } : null,
-      }
-      const stamp = typeof performance !== 'undefined' && performance.now ? performance.now().toFixed(1) : Date.now()
-      console.log(`[AWB DEBUG][MessageBubble][${stamp}] diff-render:${stage}`, payload)
     },
     elementWorkspacePath(el) {
       if (!el) return ''
@@ -2438,8 +2481,8 @@ export default {
 .artifact-row-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin-left: auto;
+  justify-content: flex-end;
+  gap: 10px;
   flex-shrink: 0;
 }
 
@@ -2678,25 +2721,32 @@ export default {
 
 .file-info-row {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 30px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
   min-width: 0;
   width: 100%;
 }
 
 .file-info-stack {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  max-width: 360px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  justify-content: center;
+  gap: 3px;
 }
 
-.file-badge-group {
+.file-attr-group {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 130px;
+  flex: 0 0 auto;
+  margin-left: 30px;
+  margin-right: auto;
   flex-shrink: 0;
 }
 
@@ -2712,8 +2762,9 @@ export default {
   background: transparent;
   padding: 0;
   color: #1e293b;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 700;
   cursor: pointer;
   text-align: left;
   overflow: hidden;
@@ -2722,8 +2773,9 @@ export default {
 }
 
 .file-path {
-  color: #94a3b8;
-  font-size: 11px;
+  color: #8fa0b7;
+  font-size: 12px;
+  line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2769,14 +2821,41 @@ export default {
 .file-diff-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-shrink: 0;
   margin-left: auto;
 }
 
-.file-diff-inline-row :deep(.el-button--text) {
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text) {
   color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  min-height: auto;
+  line-height: 1.2;
+  border: 1px solid #d8e6ff;
+  border-radius: 999px;
+  background: #f8fbff;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text:hover),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text:hover) {
+  color: #1d4ed8;
+  border-color: #bfd5ff;
+  background: #eef5ff;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text + .artifact-action-btn.el-button--text),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text + .artifact-action-btn.el-button--text) {
+  margin-left: 0;
+}
+
+.file-diff-note {
+  color: #7b8aa5;
+  font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .file-meta-line .file-path {
@@ -2795,15 +2874,7 @@ export default {
 
 .artifact-attached-diff {
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #e5edf7;
-}
-
-.artifact-attached-diff-title {
-  margin-bottom: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #5b6b82;
+  padding-top: 4px;
 }
 
 .diff-card {
@@ -3368,4 +3439,5 @@ export default {
   line-height: 1.5;
   white-space: pre-wrap;
 }
+
 </style>

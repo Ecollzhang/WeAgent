@@ -1,14 +1,12 @@
 import Vue from 'vue'
-import { ColorPicker, Option, Select } from 'element-ui'
+import ElementUI from 'element-ui'
 import 'element-ui/lib/theme-chalk/index.css'
 import App from './App.vue'
 import router from './router'
 import './styles.css'
 
 Vue.config.productionTip = false
-Vue.use(ColorPicker)
-Vue.use(Select)
-Vue.use(Option)
+Vue.use(ElementUI)
 
 new Vue({
   router,

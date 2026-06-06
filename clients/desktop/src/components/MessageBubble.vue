@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="message-bubble web-message-bubble" :class="{ own: isOwn }">
     <div class="bubble-sender" v-if="message.sender_type === 'agent'">
       <span class="agent-tag">{{ getSenderName() }}</span>
@@ -95,33 +95,35 @@
           </div>
 
           <div
-            v-else-if="el.type === 'image' || (el.type === 'file' && isImageElement(el))"
-            class="artifact-block image-block artifact-openable"
-            @click="openArtifactFile(el)"
-          >
-            <div class="artifact-header">
-              <i class="el-icon-picture-outline"></i>
-              <span>{{ elementData(el).name || elementData(el).alt || elementContent(el) || '图片' }}</span>
-              <span class="artifact-meta">image</span>
-            </div>
-            <div class="image-frame">
-              <img class="artifact-image" :src="imageSrc(el)" :alt="elementData(el).alt || elementData(el).name || ''" />
-            </div>
-          </div>
-
-          <div
-            v-else-if="el.type === 'file'"
+            v-else-if="el.type === 'file' || el.type === 'image'"
             class="artifact-block file-card artifact-openable"
             @click="openArtifactFile(el)"
           >
             <div class="file-icon"><i :class="fileIcon(el)"></i></div>
             <div class="file-main">
               <button type="button" class="file-link-btn" @click.stop="openArtifactFile(el)">
-                {{ elementData(el).name || elementContent(el) }}
+                {{ displayFileName(el) }}
               </button>
               <span class="file-path">{{ elementData(el).path || elementData(el).url || elementContent(el) }}</span>
             </div>
             <span v-if="elementData(el).size" class="file-size">{{ formatFileSize(elementData(el).size) }}</span>
+          </div>
+
+          <div
+            v-else-if="el.type === 'diff'"
+            class="artifact-block diff-card artifact-openable"
+            @click="openArtifactFile(el)"
+          >
+            <div class="artifact-header">
+              <i class="el-icon-document-checked"></i>
+              <span>{{ elementData(el).filename || elementData(el).path || 'Diff 产物' }}</span>
+              <span class="artifact-meta">diff</span>
+            </div>
+            <div class="diff-summary">
+              <span class="diff-stat add">+{{ (elementData(el).diff_stat && elementData(el).diff_stat.additions) || 0 }}</span>
+              <span class="diff-stat del">-{{ (elementData(el).diff_stat && elementData(el).diff_stat.deletions) || 0 }}</span>
+              <span class="diff-path">{{ elementData(el).path || '点击在工作台打开' }}</span>
+            </div>
           </div>
 
           <div v-else-if="el.type === 'service'" class="artifact-block service-card">
@@ -251,7 +253,7 @@ export default {
       return null
     },
     artifactElements() {
-      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file', 'service'].includes(el && el.type))
+      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file', 'service', 'diff'].includes(el && el.type))
       const seen = new Set()
       return artifacts.filter(el => {
         const key = this.artifactKey(el)
@@ -278,8 +280,9 @@ export default {
       return Boolean(this.visibleRawOutput)
     },
     executionEvents() {
-      const events = (this.message && this.message.meta && this.message.meta.execution_events)
+      const events = (this.message && this.message.meta && (this.message.meta.execution_events || this.message.meta.events))
         || (this.message && this.message.execution_events)
+        || (this.message && this.message.events)
         || []
       return Array.isArray(events) ? events : []
     },
@@ -477,6 +480,7 @@ export default {
         agent_id: data.agent_id || data.agentId || data.owner_agent_id || data.ownerAgentId || '',
         type: el && el.type ? el.type : 'file',
         data,
+        element: el,
       }
     },
     normalizeArtifactFilePath(value) {
@@ -500,6 +504,12 @@ export default {
     fileNameFromPath(value) {
       const parts = String(value || '').split(/[\\/]/).filter(Boolean)
       return parts.length ? parts[parts.length - 1] : String(value || '')
+    },
+    displayFileName(el) {
+      const data = this.elementData(el)
+      const preferred = data.name || data.filename || data.title || this.elementContent(el)
+      const normalizedPath = data.path || data.file || data.url || preferred
+      return this.fileNameFromPath(preferred) || this.fileNameFromPath(normalizedPath) || '文件'
     },
     artifactKey(el) {
       const data = this.elementData(el)
@@ -592,3 +602,4 @@ export default {
   },
 }
 </script>
+

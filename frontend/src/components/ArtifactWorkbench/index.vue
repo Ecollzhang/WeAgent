@@ -15,8 +15,10 @@
         </div>
         <div class="awb-toolbar-right">
           <el-button v-if="canGoUp" size="small" icon="el-icon-back" @click="goUp">上级目录</el-button>
+          <el-button v-if="canToggleDiffPanel" size="small" icon="el-icon-document" @click="toggleDiffPanel">{{ showDiffPanel ? '关闭 Diff' : '打开 Diff' }}</el-button>
           <el-button v-if="canDownload" size="small" icon="el-icon-download" @click="downloadCurrent">下载</el-button>
           <el-button v-if="canExportZip" size="small" icon="el-icon-download" @click="exportZip">导出 ZIP</el-button>
+          <el-button v-if="canExportZip" size="small" icon="el-icon-document-checked" @click="openSelectiveExport">选择导出</el-button>
           <el-button v-if="canEdit" size="small" type="primary" icon="el-icon-edit" @click="enterEditMode">{{ isEditing ? '继续编辑' : '编辑' }}</el-button>
           <el-button v-if="isEditing" size="small" icon="el-icon-close" @click="exitEditMode">退出编辑</el-button>
           <el-button v-if="canCrop" size="small" type="primary" icon="el-icon-crop" @click="enterCropMode">{{ isCropping ? '继续裁剪' : '裁剪' }}</el-button>
@@ -45,6 +47,8 @@
             <span slot-scope="{ data }" class="awb-tree-node">
               <i :class="data.type === 'directory' ? 'el-icon-folder' : fileIcon(data.path)"></i>
               <span class="awb-tree-label">{{ data.name }}</span>
+              <span v-if="data.diffAdded" class="awb-tree-added">A</span>
+              <span v-if="data.diffModified" class="awb-tree-modified">M</span>
             </span>
           </el-tree>
         </aside>
@@ -117,7 +121,7 @@
               :alt="currentName"
               @load="onImageLoaded"
               @error="onImageLoaded"
-            >
+            />
             <div v-else class="awb-empty">无法加载图片</div>
             <div v-if="loading" class="awb-loading awb-overlay-loading"><i class="el-icon-loading" /> 加载中...</div>
           </div>
@@ -202,12 +206,18 @@
             <div class="awb-empty">当前文件暂不支持直接预览，可下载到本地查看。</div>
           </div>
 
-          <div v-else class="awb-generic">
+          <div v-if="showWorkbenchPlaceholder" class="awb-generic">
             <div class="awb-empty">请选择左侧文件进行查看。</div>
           </div>
         </div>
 
-        <aside class="awb-side" v-if="currentDiffElement && currentKind !== 'diff'">
+        <div v-if="sideResizeState" class="awb-resize-overlay"></div>
+        <div
+          v-if="showInlineDiffPanel"
+          class="awb-side-resizer"
+          @mousedown="startSideResize"
+        ></div>
+        <aside class="awb-side" v-if="showInlineDiffPanel" :style="{ width: `${sidePanelWidth}px` }">
           <div class="awb-side-title">变更详情</div>
           <DiffViewCard
             :element="currentDiffElement"
@@ -215,6 +225,36 @@
             @applied="payload => $emit('diff-applied', payload)"
           />
         </aside>
+      </div>
+    </div>
+
+    <div v-if="exportDialogVisible" class="awb-export-overlay" @click.self="exportDialogVisible = false">
+      <div class="awb-export-modal">
+        <div class="awb-export-modal-header">
+          <span>选择导出文件</span>
+          <el-button type="text" @click="exportDialogVisible = false">关闭</el-button>
+        </div>
+        <div class="awb-export-panel">
+          <div class="awb-export-hint">勾选要导出的文件或文件夹，ZIP 会保留当前目录下的文件夹层级。</div>
+          <el-tree
+            ref="exportTree"
+            :data="exportTreeData"
+            node-key="path"
+            show-checkbox
+            :props="treeProps"
+            :default-expanded-keys="expandedKeys"
+            class="awb-export-tree"
+          >
+            <span slot-scope="{ data }" class="awb-tree-node">
+              <i :class="data.type === 'directory' ? 'el-icon-folder' : fileIcon(data.path)"></i>
+              <span class="awb-tree-label">{{ data.name }}</span>
+            </span>
+          </el-tree>
+        </div>
+        <div class="awb-export-actions">
+          <el-button @click="exportDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="exportingZip" @click="exportSelectedZip">导出所选</el-button>
+        </div>
       </div>
     </div>
   </el-dialog>
@@ -265,6 +305,11 @@ export default {
       activePreviewKey: 0,
       openPerfToken: 0,
       openPerfStartedAt: 0,
+      showDiffPanel: true,
+      sidePanelWidth: 420,
+      sideResizeState: null,
+      exportDialogVisible: false,
+      exportingZip: false,
       pathCache: {},
       objectPreviewUrls: {},
       treeProps: {
@@ -299,9 +344,22 @@ export default {
     canGoUp() {
       return this.currentRoot && this.currentRoot !== '/workspace'
     },
+    canToggleDiffPanel() {
+      return !!this.currentDiffElement && this.currentKind !== 'diff'
+    },
+    showInlineDiffPanel() {
+      return this.canToggleDiffPanel && this.showDiffPanel
+    },
+    showWorkbenchPlaceholder() {
+      return !this.isEditing
+        && !this.isCropping
+        && !['html', 'image', 'table', 'code', 'text', 'diff', 'binary'].includes(this.currentKind)
+    },
     currentDiffElement() {
-      if (!this.artifact?.diffElement) return null
-      return this.currentPath === (this.artifact?.path || '') ? this.artifact.diffElement : null
+      const normalizedPath = String(this.currentPath || '')
+      if (!normalizedPath) return null
+      const diffMap = this.artifact?.diffMap || {}
+      return diffMap[normalizedPath] || null
     },
     imageUrl() {
       const cached = this.pathCache[this.currentPath]
@@ -332,6 +390,13 @@ export default {
     imagePreviewNodeKey() {
       return `image:${this.activePreviewKey}:${this.currentPath}:${this.imageVersion}`
     },
+    zipExportFilename() {
+      const name = String(this.currentRoot || '').split('/').filter(Boolean).pop() || 'export'
+      return /\.zip$/i.test(name) ? name : `${name}.zip`
+    },
+    exportTreeData() {
+      return this.filterExportTree(this.treeData)
+    },
   },
   watch: {
     visible(v) {
@@ -352,6 +417,29 @@ export default {
     if (this.visible) this.initializeWorkbench()
   },
   methods: {
+    startSideResize(event) {
+      if (this.sideResizeState) return
+      this.sideResizeState = {
+        startX: event.clientX,
+        startWidth: this.sidePanelWidth,
+      }
+      document.addEventListener('mousemove', this.onSideResizeMove)
+      document.addEventListener('mouseup', this.stopSideResize)
+    },
+    onSideResizeMove(event) {
+      if (!this.sideResizeState) return
+      const delta = event.clientX - this.sideResizeState.startX
+      this.sidePanelWidth = Math.min(640, Math.max(300, this.sideResizeState.startWidth - delta))
+    },
+    stopSideResize() {
+      this.sideResizeState = null
+      document.removeEventListener('mousemove', this.onSideResizeMove)
+      document.removeEventListener('mouseup', this.stopSideResize)
+    },
+    toggleDiffPanel() {
+      if (!this.canToggleDiffPanel) return
+      this.showDiffPanel = !this.showDiffPanel
+    },
     beginPreviewPerf(path) {
       this.openPerfToken = Date.now()
       this.openPerfStartedAt = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()
@@ -367,6 +455,7 @@ export default {
       this.currentRoot = this.artifact?.root || this.deriveInitialRoot(this.currentPath)
       this.isEditing = false
       this.isCropping = false
+      this.showDiffPanel = true
       this.imageVersion = this.artifact?._imageVersion || 0
       this.htmlVersion = this.artifact?._htmlVersion || 0
       if (this.currentPath) {
@@ -402,14 +491,14 @@ export default {
       this.treeLoading = true
       try {
         const res = await getFileTree(this.sessionId, root)
-        const tree = res?.data?.data?.tree || res?.data?.tree || null
+        const tree = res?.code === 200 ? (res?.data?.tree || null) : null
         this.treeData = tree ? [this.filterTree(tree)] : []
         this.currentRoot = root
         this.expandedKeys = this.buildExpandedKeys(this.currentPath, root)
         this.logPerf('tree:loaded', {
           root,
           elapsedMs: this.perfElapsed(startedAt),
-          routeMs: res?.headers?.['x-weagent-elapsed-ms'] || '',
+          routeMs: '',
         })
       } finally {
         this.treeLoading = false
@@ -425,8 +514,20 @@ export default {
         : []
       return {
         ...node,
+        diffModified: node.type === 'file' && this.hasDiffForPath(node.path),
+        diffAdded: node.type === 'file' && this.hasFileForPath(node.path) && !this.hasDiffForPath(node.path),
         children,
       }
+    },
+    hasDiffForPath(path) {
+      const normalizedPath = String(path || '')
+      const diffMap = this.artifact?.diffMap || {}
+      return !!diffMap[normalizedPath]
+    },
+    hasFileForPath(path) {
+      const normalizedPath = String(path || '')
+      const fileMap = this.artifact?.fileMap || {}
+      return !!fileMap[normalizedPath]
     },
     isInternalPath(path, name) {
       const normalized = String(path || '')
@@ -521,6 +622,8 @@ export default {
         imageUrl: this.artifact.imageUrl || '',
         previewUrl: this.artifact.previewUrl || '',
         diffElement: this.artifact.diffElement || null,
+        diffMap: this.artifact.diffMap || {},
+        fileMap: this.artifact.fileMap || {},
       }
     },
     hydrateFromCacheOrArtifact(path) {
@@ -616,7 +719,7 @@ export default {
         }
       } catch (error) {
         if (previewKey !== this.activePreviewKey || path !== this.currentPath) return
-        this.textContent = `加载失败：${error.message || error}`
+        this.textContent = `鍔犺浇澶辫触锛?{error.message || error}`
         if (shouldControlLoading) {
           this.loading = false
         }
@@ -632,7 +735,7 @@ export default {
         const rows = this.parseCsv(text)
         const headers = (rows[0] || []).map((header, index) => {
           const normalized = String(header || '').replace(/^\uFEFF/, '')
-          return normalized || `列${index + 1}`
+          return normalized || `鍒?{index + 1}`
         })
         const body = rows.slice(1).map(row => {
           const item = {}
@@ -705,6 +808,7 @@ export default {
     },
     async enterEditMode() {
       this.isCropping = false
+      this.showDiffPanel = false
       if (this.currentKind === 'html' && !this.textContent) {
         await this.loadText(this.currentPath, this.activePreviewKey)
       }
@@ -722,6 +826,7 @@ export default {
     enterCropMode() {
       if (!this.canCrop) return
       this.isEditing = false
+      this.showDiffPanel = false
       this.isCropping = true
     },
     async applyRequestedMode() {
@@ -768,7 +873,7 @@ export default {
         this.$message.success('图片已保存')
       } catch (error) {
         this.setPathCache(this.currentPath, { imageUrl: previousImageUrl })
-        this.$message.error(`保存失败: ${error.message || ''}`)
+        this.$message.error(`淇濆瓨澶辫触: ${error.message || ''}`)
       }
     },
     handleDiffApplied(payload) {
@@ -808,7 +913,7 @@ export default {
         this.$emit('saved', { path: this.currentPath, content })
         this.$message.success('表格已保存')
       } catch (error) {
-        this.$message.error(`保存失败: ${error.message || ''}`)
+        this.$message.error(`淇濆瓨澶辫触: ${error.message || ''}`)
       } finally {
         this.savingTable = false
       }
@@ -844,6 +949,48 @@ export default {
       link.click()
       document.body.removeChild(link)
     },
+    openSelectiveExport() {
+      this.exportDialogVisible = true
+      this.$nextTick(() => {
+        if (this.$refs.exportTree) this.$refs.exportTree.setCheckedKeys([])
+      })
+    },
+    exportSelectedZip() {
+      if (!this.$refs.exportTree || !this.sessionId || !this.currentRoot) return
+      const selectedPaths = this.$refs.exportTree.getCheckedKeys()
+      if (!selectedPaths || !selectedPaths.length) {
+        this.$message.warning('请至少选择一个文件或文件夹')
+        return
+      }
+      this.exportingZip = true
+      try {
+        const href = getSessionZipExportUrl(this.sessionId, this.currentRoot, 'auto', selectedPaths)
+        const link = document.createElement('a')
+        link.href = href
+        link.download = this.zipExportFilename
+        link.target = '_blank'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        this.exportDialogVisible = false
+        this.$message.success('已导出所选文件')
+      } finally {
+        this.exportingZip = false
+      }
+    },
+    filterExportTree(nodes) {
+      if (!Array.isArray(nodes)) return []
+      return nodes
+        .map(node => {
+          if (!node) return null
+          const children = Array.isArray(node.children) ? this.filterExportTree(node.children) : []
+          return {
+            ...node,
+            children,
+          }
+        })
+        .filter(Boolean)
+    },
     downloadCurrent() {
       if (!this.sessionId || !this.currentPath) return
       const href = getSessionDownloadUrl(this.sessionId, this.currentPath) + `&t=${Date.now()}`
@@ -872,6 +1019,7 @@ export default {
       this.isEditing = false
       this.isCropping = false
       this.loading = false
+      this.exportDialogVisible = false
     },
     releaseObjectPreviewUrls() {
       if (typeof URL === 'undefined') return
@@ -890,6 +1038,7 @@ export default {
     },
   },
   beforeDestroy() {
+    this.stopSideResize()
     this.releaseObjectPreviewUrls()
   },
 }
@@ -1011,6 +1160,30 @@ export default {
   white-space: nowrap;
 }
 
+.awb-tree-modified {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fff4d6;
+  color: #b7791f;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  flex-shrink: 0;
+}
+
+.awb-tree-added {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fde8e8;
+  color: #dc2626;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  flex-shrink: 0;
+}
+
 .awb-main {
   flex: 1;
   min-width: 0;
@@ -1020,14 +1193,48 @@ export default {
     linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
 }
 
+.awb-side-resizer {
+  width: 10px;
+  flex: 0 0 10px;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+  align-self: stretch;
+}
+
+.awb-side-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  border-radius: 999px;
+  background: #d6e1f0;
+}
+
+.awb-side-resizer:hover::before {
+  background: #9fb9e7;
+}
+
+.awb-resize-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  cursor: col-resize;
+}
+
 .awb-side {
   width: 420px;
-  max-width: 36%;
   min-width: 320px;
   border-left: 1px solid #dbe3f0;
   background: #ffffff;
   padding: 16px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  align-self: stretch;
 }
 
 .awb-side-title {
@@ -1035,6 +1242,92 @@ export default {
   font-size: 13px;
   font-weight: 600;
   color: #22324d;
+  flex-shrink: 0;
+}
+
+.awb-side :deep(.diff-view-card) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.awb-side :deep(.diff-view-card .diff-lines) {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+.awb-side :deep(.diff-view-card .code-panel) {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+.awb-export-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.awb-export-modal {
+  width: min(620px, calc(100vw - 40px));
+  max-height: min(78vh, 760px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.24);
+  overflow: hidden;
+}
+
+.awb-export-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.awb-export-panel {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
+  min-height: 0;
+}
+
+.awb-export-hint {
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+.awb-export-tree {
+  flex: 1;
+  min-height: 260px;
+  max-height: 50vh;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+}
+
+.awb-export-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid #e2e8f0;
 }
 
 .awb-editor-wrap,

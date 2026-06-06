@@ -619,9 +619,15 @@ def export_session_zip(session_id: str):
     """Export a workspace directory as ZIP."""
     path = request.args.get("path", "/workspace")
     mode = request.args.get("mode", "directory")
+    selected_paths = [item for item in request.args.getlist("selected_path") if str(item or "").strip()]
     try:
         mgr = _mgr()
-        content_bytes, mime_type, disposition = mgr.export_zip(session_id, path, mode=mode)
+        content_bytes, mime_type, disposition = mgr.export_zip(
+            session_id,
+            path,
+            mode=mode,
+            selected_paths=selected_paths or None,
+        )
         response = Response(content_bytes, mimetype=mime_type)
         if disposition:
             response.headers["Content-Disposition"] = disposition

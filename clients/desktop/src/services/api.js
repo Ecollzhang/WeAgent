@@ -144,34 +144,3 @@ export function uploadFile(file) {
     data: formData,
   })
 }
-
-export function getFileTree(sessionId, root = '/workspace') {
-  return request({
-    method: 'get',
-    url: `/sandbox/sessions/${sessionId}/files/tree`,
-    params: { root },
-  })
-}
-
-export function readAgentFile(sessionId, agentId, path) {
-  return request({
-    method: 'get',
-    url: `/sandbox/sessions/${sessionId}/agents/${agentId}/files`,
-    params: { path },
-  })
-}
-
-export async function getWorkspaceFileUrl(sessionId, filepath) {
-  const serverUrl = await getServerUrl()
-  const clean = String(filepath || '').replace(/^\/?workspace\//, '')
-  const encoded = clean.split('/').map(encodeURIComponent).join('/')
-  return apiUrl(serverUrl, `/sandbox/sessions/${sessionId}/workspace/${encoded}`)
-}
-
-export async function getAgentFileUrl(sessionId, agentId, path) {
-  const serverUrl = await getServerUrl()
-  return apiUrl(
-    serverUrl,
-    `/sandbox/sessions/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/files/raw?path=${encodeURIComponent(path)}`
-  )
-}

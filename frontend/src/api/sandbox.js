@@ -123,7 +123,6 @@ export function getWorkspaceFileUrl(sessionId, filepath) {
 export function getFileTree(sessionId, root = '/workspace') {
   return request.get(`/sandbox/sessions/${sessionId}/files/tree`, {
     params: { root },
-    returnFullResponse: true,
   })
 }
 
@@ -135,8 +134,14 @@ export function getSessionDownloadUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`
 }
 
-export function getSessionZipExportUrl(sessionId, path, mode = 'auto') {
-  return `/api/sandbox/sessions/${sessionId}/files/export-zip?path=${encodeURIComponent(path)}&mode=${encodeURIComponent(mode)}`
+export function getSessionZipExportUrl(sessionId, path, mode = 'auto', selectedPaths = []) {
+  const params = new URLSearchParams()
+  params.set('path', path)
+  params.set('mode', mode)
+  ;(selectedPaths || []).forEach(item => {
+    if (item) params.append('selected_paths', item)
+  })
+  return `/api/sandbox/sessions/${sessionId}/files/export-zip?${params.toString()}`
 }
 
 // ===== Custom tools =====

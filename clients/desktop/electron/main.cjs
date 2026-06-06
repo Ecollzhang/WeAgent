@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, net } = require('electron')
+app.disableHardwareAcceleration()
 const path = require('path')
 const fs = require('fs')
 
@@ -28,6 +29,11 @@ function writeConfig(config) {
   return config
 }
 
+function normalizeDownloadFilename(value, fallback = 'download') {
+  const name = String(value || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+  return name || fallback
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1180,
@@ -55,6 +61,49 @@ ipcMain.handle('weagent-config:get', () => readConfig())
 ipcMain.handle('weagent-config:set', (event, patch) => {
   const next = { ...readConfig(), ...(patch || {}) }
   return writeConfig(next)
+})
+ipcMain.handle('weagent-download:save', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const url = String(payload?.url || '').trim()
+  const token = String(payload?.token || '').trim()
+  const suggestedName = normalizeDownloadFilename(payload?.filename, 'download')
+
+  if (!url) {
+    throw new Error('Download URL is required')
+  }
+
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    defaultPath: path.join(app.getPath('downloads'), suggestedName),
+  })
+
+  if (canceled || !filePath) {
+    return { canceled: true }
+  }
+
+  const headers = {}
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const response = await net.fetch(url, { headers })
+  if (!response.ok) {
+    let message = `Download failed with status ${response.status}`
+    try {
+      const text = await response.text()
+      if (text) message = text
+    } catch (error) {
+      // Keep the fallback status error when parsing fails.
+    }
+    throw new Error(message)
+  }
+
+  const data = Buffer.from(await response.arrayBuffer())
+  fs.writeFileSync(filePath, data)
+
+  return {
+    canceled: false,
+    filePath,
+  }
 })
 
 app.whenReady().then(() => {

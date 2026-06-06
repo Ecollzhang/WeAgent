@@ -4,3 +4,7 @@ contextBridge.exposeInMainWorld('weagentDesktopConfig', {
   get: () => ipcRenderer.invoke('weagent-config:get'),
   set: patch => ipcRenderer.invoke('weagent-config:set', patch),
 })
+
+contextBridge.exposeInMainWorld('weagentDesktopDownload', {
+  save: payload => ipcRenderer.invoke('weagent-download:save', payload),
+})

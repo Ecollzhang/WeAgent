@@ -1,6 +1,6 @@
 <template>
-  <div class="diff-view-card" :class="{ compact }">
-    <div v-if="!compact" class="diff-header">
+  <div class="diff-view-card">
+    <div class="diff-header">
       <div class="diff-title">
         <i class="el-icon-document"></i>
         <span>{{ fileName }}</span>
@@ -12,10 +12,13 @@
       </div>
     </div>
 
-    <div v-if="!compact" class="diff-toolbar">
-      <div class="toolbar-label">变更</div>
+    <div class="diff-toolbar">
+      <el-radio-group v-model="viewMode" size="mini">
+        <el-radio-button label="diff">Diff</el-radio-button>
+        <el-radio-button label="after">修改后</el-radio-button>
+      </el-radio-group>
       <div class="toolbar-actions">
-        <el-button size="mini" type="text" @click="copyText(diffContent)">复制</el-button>
+        <el-button size="mini" type="text" @click="copyText(activeText)">复制</el-button>
         <el-button
           v-if="canApply"
           size="mini"
@@ -26,33 +29,36 @@
       </div>
     </div>
 
-    <div class="diff-lines">
+    <div v-if="viewMode === 'diff'" class="diff-lines">
       <div
         v-for="(line, index) in parsedDiff"
         :key="index"
         class="diff-line"
         :class="line.type"
       >
-        <span class="line-num final">{{ line.displayNum || '' }}</span>
+        <span class="line-num old">{{ line.oldNum || '' }}</span>
+        <span class="line-num new">{{ line.newNum || '' }}</span>
         <span class="line-content">{{ line.content }}</span>
       </div>
       <div v-if="!parsedDiff.length" class="empty-state">暂无 diff 内容</div>
     </div>
+
+    <pre v-else class="code-panel"><code>{{ activeText }}</code></pre>
   </div>
 </template>
 
 <script>
-import { writeFile } from '@/api/sandbox'
+import { writeFile } from '@/services/sandbox'
 
 export default {
-  name: 'DiffViewCard',
+  name: 'DesktopDiffViewCard',
   props: {
     element: { type: Object, required: true },
     sessionId: { type: String, default: '' },
-    compact: { type: Boolean, default: false },
   },
   data() {
     return {
+      viewMode: 'diff',
       saving: false,
     }
   },
@@ -75,8 +81,9 @@ export default {
     canApply() {
       return !!this.sessionId && !!this.data.path && typeof this.data.after === 'string' && !this.isApplied
     },
-    diffContent() {
-      return this.data.diff_text || this.element?.content || ''
+    activeText() {
+      if (this.viewMode === 'diff') return this.data.diff_text || this.element?.content || ''
+      return this.data.after_preview || this.data.after || ''
     },
     parsedDiff() {
       const diffText = this.data.diff_text || this.element?.content || ''
@@ -98,12 +105,12 @@ export default {
         if (raw.startsWith('---') || raw.startsWith('+++')) return
         if (raw.startsWith('-')) {
           oldLine += 1
-          result.push({ type: 'del', oldNum: oldLine, newNum: '', displayNum: oldLine, content: raw.slice(1) })
+          result.push({ type: 'del', oldNum: oldLine, newNum: '', content: raw.slice(1) })
           return
         }
         if (raw.startsWith('+')) {
           newLine += 1
-          result.push({ type: 'add', oldNum: '', newNum: newLine, displayNum: newLine, content: raw.slice(1) })
+          result.push({ type: 'add', oldNum: '', newNum: newLine, content: raw.slice(1) })
           return
         }
         oldLine += 1
@@ -112,7 +119,6 @@ export default {
           type: 'ctx',
           oldNum: oldLine,
           newNum: newLine,
-          displayNum: newLine,
           content: raw.startsWith(' ') ? raw.slice(1) : raw,
         })
       })
@@ -123,7 +129,6 @@ export default {
     async copyText(text) {
       try {
         await navigator.clipboard.writeText(text || '')
-        this.$message.success('已复制')
       } catch (error) {
         const textarea = document.createElement('textarea')
         textarea.value = text || ''
@@ -131,8 +136,8 @@ export default {
         textarea.select()
         document.execCommand('copy')
         document.body.removeChild(textarea)
-        this.$message.success('已复制')
       }
+      this.$message.success('已复制')
     },
     async applyDiff() {
       if (!this.canApply) return
@@ -157,12 +162,6 @@ export default {
   border-radius: 12px;
   overflow: hidden;
   background: #fff;
-}
-
-.diff-view-card.compact {
-  border: none;
-  border-radius: 0;
-  background: transparent;
 }
 
 .diff-header {
@@ -223,13 +222,6 @@ export default {
   background: #fbfdff;
 }
 
-.diff-view-card.compact .diff-lines {
-  max-height: none;
-  border: 1px solid #dbe7f3;
-  border-radius: 10px;
-  background: #fcfdff;
-}
-
 .diff-line {
   display: flex;
   font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
@@ -242,45 +234,43 @@ export default {
 }
 
 .diff-line.add {
-  background: #eefbf3;
+  background: #f0fff4;
 }
 
 .diff-line.del {
-  background: #fff1f1;
+  background: #fff5f5;
 }
 
 .line-num {
-  width: 44px;
-  min-width: 44px;
-  padding: 0 8px 0 0;
-  text-align: right;
-  color: #8da0b8;
-  user-select: none;
-  border-right: 1px solid #edf2f7;
-}
-
-.line-num.final {
   width: 52px;
-  min-width: 52px;
-  padding-right: 10px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  text-align: right;
+  color: #94a3b8;
+  border-right: 1px solid #edf2f7;
 }
 
 .line-content {
   flex: 1;
-  padding: 0 12px 0 10px;
-  white-space: pre;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.toolbar-label {
+.code-panel {
+  margin: 0;
+  padding: 12px;
+  max-height: 360px;
+  overflow: auto;
+  background: #fbfdff;
+  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
-  font-weight: 600;
-  color: #475569;
+  line-height: 1.6;
 }
 
 .empty-state {
-  padding: 18px 12px;
+  padding: 24px 16px;
+  color: #64748b;
   text-align: center;
-  font-size: 12px;
-  color: #8da0b8;
 }
 </style>
