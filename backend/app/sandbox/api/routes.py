@@ -13,6 +13,7 @@ from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from flask import Blueprint, request, jsonify, Response
 import simple_websocket
+from app.services.conversation_service import conversation_service
 
 try:
     from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
@@ -185,6 +186,13 @@ def _current_user_id_optional() -> str | None:
         return get_jwt_identity()
     except Exception:
         return None
+
+
+def _current_user_id_required() -> str:
+    if not verify_jwt_in_request or not get_jwt_identity:
+        raise RuntimeError("JWT auth not available")
+    verify_jwt_in_request()
+    return get_jwt_identity()
 
 
 def _session_access_allowed(session_id: str, user_id: str | None) -> bool:
@@ -659,14 +667,9 @@ def serve_workspace_file(session_id: str, filepath: str):
     if not session:
         return _with_timing_headers(jsonify({"code": 404, "message": "Session not found"}), "workspace/file", started_at), 404
 
-    # Pick the first agent (orchestrator read_file doesn't restrict by agent)
-    agent_id = session.agents_config[0]["agent_id"] if session.agents_config else ""
-    if not agent_id:
-        return _with_timing_headers(jsonify({"code": 400, "message": "No agents in session"}), "workspace/file", started_at), 400
-
     try:
         workspace_path = f"/workspace/{filepath}"
-        content_bytes, mime_type = mgr.get_agent_raw_file(session_id, agent_id, workspace_path)
+        content_bytes, mime_type = mgr.get_raw_file(session_id, workspace_path)
         normalized_mime = (mime_type or "").split(";", 1)[0].strip().lower()
         if normalized_mime in {"text/html", "application/xhtml+xml"}:
             content_bytes = _inject_html_base(content_bytes, session_id, workspace_path)
@@ -703,6 +706,102 @@ def write_workspace_file(session_id: str):
         result = _mgr().write_workspace_file(session_id, path, content_bytes)
         if result.get("status") == "error":
             return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+    except Exception as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+
+
+@sandbox_bp.route("/conversations/<source_conversation_id>/files/migrate-preview", methods=["GET"])
+def preview_conversation_file_migration(source_conversation_id: str):
+    try:
+        user_id = _current_user_id_required()
+        target_conversation_id = (request.args.get("target_conversation_id") or "").strip()
+        if not target_conversation_id:
+            return jsonify({"code": 400, "message": "target_conversation_id is required"}), 400
+        if target_conversation_id == source_conversation_id:
+            return jsonify({"code": 400, "message": "source and target conversations must differ"}), 400
+        source_conversation, error = conversation_service.get_owned_conversation_or_error(
+            source_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        target_conversation, error = conversation_service.get_owned_conversation_or_error(
+            target_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        source_session_id = conversation_service.resolve_sandbox_session_id(source_conversation)
+        target_session_id = conversation_service.resolve_sandbox_session_id(target_conversation)
+        result = _mgr().preview_files_between_sessions(
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            root=request.args.get("root", "/workspace/agents"),
+            paths=[
+                item for item in (
+                    request.args.getlist("paths")
+                    + request.args.getlist("paths[]")
+                ) if str(item or "").strip()
+            ] or None,
+            include_hidden=request.args.get("include_hidden", "false").lower() == "true",
+        )
+        result["source_conversation_id"] = source_conversation_id
+        result["target_conversation_id"] = target_conversation_id
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+    except Exception as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+
+
+@sandbox_bp.route("/conversations/<source_conversation_id>/files/migrate", methods=["POST"])
+def migrate_conversation_files(source_conversation_id: str):
+    data = request.get_json(silent=True) or {}
+    try:
+        user_id = _current_user_id_required()
+        target_conversation_id = (data.get("target_conversation_id") or "").strip()
+        if not target_conversation_id:
+            return jsonify({"code": 400, "message": "target_conversation_id is required"}), 400
+        if target_conversation_id == source_conversation_id:
+            return jsonify({"code": 400, "message": "source and target conversations must differ"}), 400
+        source_conversation, error = conversation_service.get_owned_conversation_or_error(
+            source_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        target_conversation, error = conversation_service.get_owned_conversation_or_error(
+            target_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        source_session_id = conversation_service.resolve_sandbox_session_id(source_conversation)
+        target_session_id = conversation_service.resolve_sandbox_session_id(target_conversation)
+        result = _mgr().copy_files_between_sessions(
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            root=data.get("root", "/workspace/agents"),
+            paths=data.get("paths") or None,
+            path_mapping=data.get("path_mapping") or None,
+            overwrite=bool(data.get("overwrite")),
+            include_hidden=bool(data.get("include_hidden")),
+        )
+        result["source_conversation_id"] = source_conversation_id
+        result["target_conversation_id"] = target_conversation_id
+
+        summary = (
+            f"已从旧会话迁移 {result.get('migrated', 0)} 个文件，"
+            f"跳过 {result.get('skipped', 0)} 个文件，"
+            f"失败 {len(result.get('errors') or [])} 个文件"
+        )
+        title = source_conversation.title or source_conversation_id
+        result_text = f"已从旧会话「{title}」迁移 {result.get('migrated', 0)} 个文件到当前会话"
+        conversation_service.create_migration_result_message(
+            target_conversation.id,
+            summary,
+            result_text=result_text,
+            status="done" if not result.get("errors") else "error",
+        )
         return jsonify({"code": 200, "data": result})
     except KeyError as e:
         return jsonify({"code": 404, "message": str(e)}), 404

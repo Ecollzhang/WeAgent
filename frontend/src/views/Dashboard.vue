@@ -35,6 +35,7 @@
         @open-file="handleOpenFile"
         @open-attachments="handleOpenAttachments"
         @open-services="handleOpenServices"
+        @open-migration="handleOpenMigration"
       />
     </div>
 
@@ -42,6 +43,14 @@
       :visible.sync="artifactWorkbenchVisible"
       :artifact="currentWorkbenchArtifact"
       :session-id="currentSessionId"
+    />
+
+    <FileMigrationDialog
+      :visible.sync="migrationDialogVisible"
+      :source-conversation="currentConversation"
+      :conversations="conversations"
+      @refresh-conversations="$store.dispatch('conversation/fetchConversations')"
+      @open-target="handleOpenMigrationTarget"
     />
 
     <el-dialog
@@ -343,6 +352,7 @@ import AppSidebar from '../components/Sidebar/index.vue'
 import ArtifactWorkbench from '../components/ArtifactWorkbench/index.vue'
 import ConversationList from '../components/ConversationList/index.vue'
 import ChatWindow from '../components/ChatWindow/index.vue'
+import FileMigrationDialog from '../components/FileMigrationDialog/index.vue'
 import { getCategories, getAgents } from '../api/agent'
 import { sendMessage as apiSendMessage } from '../api/message'
 import {
@@ -376,7 +386,7 @@ function getAgentMeta(agentId) {
 
 export default {
   name: 'Dashboard',
-  components: { AppSidebar, ArtifactWorkbench, ConversationList, ChatWindow },
+  components: { AppSidebar, ArtifactWorkbench, ConversationList, ChatWindow, FileMigrationDialog },
   data() {
     return {
       showCreateDialog: false,
@@ -400,6 +410,7 @@ export default {
       selectedFilePath: '',
       artifactWorkbenchVisible: false,
       currentWorkbenchArtifact: null,
+      migrationDialogVisible: false,
       fileTreeData: [],
       fileTreeRoot: '/workspace',
       fileScope: 'workspace',
@@ -832,6 +843,23 @@ export default {
       }
       this.syncServiceCommand()
       await this.loadServices()
+    },
+
+    handleOpenMigration() {
+      if (!this.currentConversation) return
+      this.migrationDialogVisible = true
+    },
+
+    handleOpenMigrationTarget(conversationId) {
+      const target = this.conversations.find(item => item.id === conversationId)
+      if (target) {
+        this.handleSelectConversation(target)
+        return
+      }
+      this.$store.dispatch('conversation/fetchConversations').then(() => {
+        const next = this.conversations.find(item => item.id === conversationId)
+        if (next) this.handleSelectConversation(next)
+      })
     },
 
     async loadServices() {

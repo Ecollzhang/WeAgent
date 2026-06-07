@@ -1602,7 +1602,7 @@ export default {
     buildWorkbenchFileMap() {
       const map = {}
       ;(this.artifactElements || []).forEach(el => {
-        if (el.type !== 'file') return
+        if (!['file', 'image', 'code', 'webpage', 'table'].includes(el?.type)) return
         const path = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
         if (!path || map[path]) return
         map[path] = true

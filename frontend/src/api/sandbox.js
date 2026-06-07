@@ -126,6 +126,27 @@ export function getFileTree(sessionId, root = '/workspace') {
   })
 }
 
+export function previewMigration(
+  sourceConversationId,
+  targetConversationId,
+  root = '/workspace/agents',
+  includeHidden = false,
+  paths = [],
+) {
+  return request.get(`/sandbox/conversations/${sourceConversationId}/files/migrate-preview`, {
+    params: {
+      target_conversation_id: targetConversationId,
+      root,
+      include_hidden: includeHidden,
+      paths,
+    },
+  })
+}
+
+export function migrateFiles(sourceConversationId, payload) {
+  return request.post(`/sandbox/conversations/${sourceConversationId}/files/migrate`, payload)
+}
+
 export function getSessionRawFileUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/raw?path=${encodeURIComponent(path)}`
 }

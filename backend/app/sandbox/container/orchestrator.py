@@ -349,13 +349,25 @@ class Orchestrator:
             "message": "主持 Agent 开始分析和分派任务",
         })
 
+        agent_list = []
+        for aid in self.agents:
+            if aid == moderator_id:
+                continue
+            agent = self.agents.get(aid)
+            name = agent.role if agent else aid
+            ws = agent.workspace_name if agent else aid
+            agent_list.append(f"  - agent_id: {aid}, name: {name}, workspace: /workspace/agents/{ws}")
+        agent_lines = "\n".join(agent_list) if agent_list else "  (无可用 worker agent)"
+
         moderator_prompt = (
             "你是主持 Agent。请先分析用户任务，拆解为可执行步骤，"
             "并说明应该由哪些专业 Agent 完成。不要自己写最终产物，"
             "只输出任务分析、分工和执行计划。\n\n"
-            "目录策略必须写清楚：每个 Agent 的正式产物只能放在自己的私有目录 "
-            "/workspace/agents/<Agent名称>/；/workspace/shared/ 只允许放任务分工、"
+            "目录策略：每个 Agent 的正式产物必须放在自己的 workspace 目录下，"
+            "不能写入其他 Agent 的目录。/workspace/shared/ 只允许放任务分工、"
             "简短协作摘要、接口约定，不允许放完整 HTML/CSS/JS 成品或重复文件。\n\n"
+            "可用 worker agents 及其工作目录：\n"
+            f"{agent_lines}\n\n"
             f"用户任务：\n{message}"
         )
         moderator_result = self.send_to_agent(moderator_id, moderator_prompt)
@@ -528,7 +540,10 @@ class Orchestrator:
             return []
 
     def _register_command_tool(self, spec: dict):
-        name = spec["name"]
+        name = spec.get("name", "")
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", name):
+            print(f"[ToolRegistry] skip invalid tool name: '{name}'")
+            return
         entrypoint = spec["entrypoint"]
         description = spec.get("description", name)
 

@@ -686,8 +686,9 @@ class MessageService:
     def _build_moderator_plan_prompt(self, user_content, workers):
         worker_lines = []
         for p in workers:
+            ws = p.participant_name or p.participant_id
             worker_lines.append(
-                f'- agent_id: {p.participant_id}; name: {p.participant_name or p.participant_id}'
+                f'- agent_id: {p.participant_id}; name: {p.participant_name or p.participant_id}; workspace: /workspace/agents/{ws}'
             )
         return (
             '请基于下面用户任务生成严格 JSON。只输出 JSON，不要输出 Markdown，不要使用代码块。\n\n'
