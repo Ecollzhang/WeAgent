@@ -126,12 +126,43 @@ export function getFileTree(sessionId, root = '/workspace') {
   })
 }
 
+export function previewMigration(
+  sourceConversationId,
+  targetConversationId,
+  root = '/workspace/agents',
+  includeHidden = false,
+  paths = [],
+) {
+  return request.get(`/sandbox/conversations/${sourceConversationId}/files/migrate-preview`, {
+    params: {
+      target_conversation_id: targetConversationId,
+      root,
+      include_hidden: includeHidden,
+      paths,
+    },
+  })
+}
+
+export function migrateFiles(sourceConversationId, payload) {
+  return request.post(`/sandbox/conversations/${sourceConversationId}/files/migrate`, payload)
+}
+
 export function getSessionRawFileUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/raw?path=${encodeURIComponent(path)}`
 }
 
 export function getSessionDownloadUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`
+}
+
+export function getSessionZipExportUrl(sessionId, path, mode = 'auto', selectedPaths = []) {
+  const params = new URLSearchParams()
+  params.set('path', path)
+  params.set('mode', mode)
+  ;(selectedPaths || []).forEach(item => {
+    if (item) params.append('selected_paths', item)
+  })
+  return `/api/sandbox/sessions/${sessionId}/files/export-zip?${params.toString()}`
 }
 
 // ===== Custom tools =====
@@ -176,6 +207,11 @@ export function getServiceLogs(sessionId, serviceId, tailBytes = 65536) {
   return request.get(`/sandbox/sessions/${sessionId}/services/${serviceId}/logs`, {
     params: { tail_bytes: tailBytes },
   })
+}
+
+// ===== File write-back =====
+export function writeFile(sessionId, path, content) {
+  return request.put(`/sandbox/sessions/${sessionId}/files/write`, { path, content })
 }
 
 // ===== Agent control =====

@@ -3,11 +3,12 @@ from app.utils.timezone import format_beijing, beijing_now
 from app.models.user import User
 from app.models.agent import Agent
 from app.models.agent_run import AgentRun
-from app import db
+from app import db, socketio
 from app.repositories.conversation_repo import conversation_repo
 from app.repositories.agent_repo import agent_repo
 from app.repositories.message_repo import message_repo
 from app.services.settings_service import settings_service
+from app.services.message_service import _message_dict
 MODERATOR_AGENT_ID = 'moderator'
 
 
@@ -297,6 +298,45 @@ class ConversationService:
         if not conversation:
             return None, 'Conversation not found'
         return self._conv_to_dict(conversation), None
+
+    def get_owned_conversation_or_error(self, conversation_id, user_id):
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation:
+            return None, 'Conversation not found'
+        if conversation.owner_id != user_id:
+            return None, 'Permission denied'
+        return conversation, None
+
+    @staticmethod
+    def resolve_sandbox_session_id(conversation):
+        if not conversation:
+            return None
+        return conversation.sandbox_session_id or conversation.id
+
+    def create_migration_result_message(
+        self,
+        conversation_id,
+        summary_text,
+        result_text=None,
+        status='done',
+    ):
+        msg = Message(
+            conversation_id=conversation_id,
+            sender_type='agent',
+            sender_id='system',
+            content=summary_text,
+            message_type='text',
+            status=status,
+            elements=[{
+                'type': 'result',
+                'content': result_text or summary_text,
+                'status': status,
+            }],
+        )
+        db.session.add(msg)
+        db.session.commit()
+        socketio.emit('conversation_message_created', _message_dict(msg), room=conversation_id)
+        return msg
 
     def set_conversation_favorite(self, conversation_id, user_id, is_favorite):
         """Update conversation favorite state."""

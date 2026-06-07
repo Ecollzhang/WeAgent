@@ -349,13 +349,25 @@ class Orchestrator:
             "message": "主持 Agent 开始分析和分派任务",
         })
 
+        agent_list = []
+        for aid in self.agents:
+            if aid == moderator_id:
+                continue
+            agent = self.agents.get(aid)
+            name = agent.role if agent else aid
+            ws = agent.workspace_name if agent else aid
+            agent_list.append(f"  - agent_id: {aid}, name: {name}, workspace: /workspace/agents/{ws}")
+        agent_lines = "\n".join(agent_list) if agent_list else "  (无可用 worker agent)"
+
         moderator_prompt = (
             "你是主持 Agent。请先分析用户任务，拆解为可执行步骤，"
             "并说明应该由哪些专业 Agent 完成。不要自己写最终产物，"
             "只输出任务分析、分工和执行计划。\n\n"
-            "目录策略必须写清楚：每个 Agent 的正式产物只能放在自己的私有目录 "
-            "/workspace/agents/<Agent名称>/；/workspace/shared/ 只允许放任务分工、"
+            "目录策略：每个 Agent 的正式产物必须放在自己的 workspace 目录下，"
+            "不能写入其他 Agent 的目录。/workspace/shared/ 只允许放任务分工、"
             "简短协作摘要、接口约定，不允许放完整 HTML/CSS/JS 成品或重复文件。\n\n"
+            "可用 worker agents 及其工作目录：\n"
+            f"{agent_lines}\n\n"
             f"用户任务：\n{message}"
         )
         moderator_result = self.send_to_agent(moderator_id, moderator_prompt)
@@ -528,7 +540,10 @@ class Orchestrator:
             return []
 
     def _register_command_tool(self, spec: dict):
-        name = spec["name"]
+        name = spec.get("name", "")
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", name):
+            print(f"[ToolRegistry] skip invalid tool name: '{name}'")
+            return
         entrypoint = spec["entrypoint"]
         description = spec.get("description", name)
 
@@ -1463,13 +1478,24 @@ class Orchestrator:
     def list_tree(self, root: str = "/workspace", include_hidden: bool = False,
                   max_depth: int = 8) -> dict:
         """Return a tree of files under a workspace path."""
+        started_at = time.time()
         real_root, error = self._resolve_workspace_path(root)
+        resolve_ms = round((time.time() - started_at) * 1000, 1)
         if error:
+            log_event("list_tree_error", root=root, resolve_ms=resolve_ms, error=error)
             return {"error": error}
         if not os.path.exists(real_root):
+            log_event("list_tree_missing", root=root, real_root=real_root, resolve_ms=resolve_ms)
             return {"error": f"Path not found: {root}"}
 
         workspace_root = os.path.realpath("/workspace")
+        stats = {
+            "dirs": 0,
+            "files": 0,
+            "listdir_ms": 0.0,
+            "sort_ms": 0.0,
+            "file_meta_ms": 0.0,
+        }
 
         def build_node(path: str, depth: int) -> dict:
             rel_path = os.path.relpath(path, workspace_root)
@@ -1477,6 +1503,7 @@ class Orchestrator:
             name = os.path.basename(path) or "workspace"
 
             if os.path.isdir(path):
+                stats["dirs"] += 1
                 node = {
                     "name": name,
                     "path": node_path,
@@ -1488,7 +1515,10 @@ class Orchestrator:
                     return node
 
                 try:
+                    listdir_started = time.time()
                     entries = sorted(os.listdir(path), key=lambda x: (not os.path.isdir(os.path.join(path, x)), x.lower()))
+                    listdir_elapsed = (time.time() - listdir_started) * 1000
+                    stats["listdir_ms"] += listdir_elapsed
                 except OSError:
                     return node
 
@@ -1501,9 +1531,12 @@ class Orchestrator:
 
             size = 0
             try:
+                file_meta_started = time.time()
                 size = os.path.getsize(path)
+                stats["file_meta_ms"] += (time.time() - file_meta_started) * 1000
             except OSError:
                 pass
+            stats["files"] += 1
             mime_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
             return {
                 "name": name,
@@ -1514,7 +1547,22 @@ class Orchestrator:
                 "extension": os.path.splitext(path)[1].lstrip("."),
             }
 
-        return {"root": root, "tree": build_node(real_root, 0)}
+        tree = build_node(real_root, 0)
+        total_ms = round((time.time() - started_at) * 1000, 1)
+        log_event(
+            "list_tree_timing",
+            root=root,
+            real_root=real_root,
+            resolve_ms=resolve_ms,
+            total_ms=total_ms,
+            dirs=stats["dirs"],
+            files=stats["files"],
+            listdir_ms=round(stats["listdir_ms"], 1),
+            file_meta_ms=round(stats["file_meta_ms"], 1),
+            max_depth=max_depth,
+            include_hidden=include_hidden,
+        )
+        return {"root": root, "tree": tree}
 
     # ---- Stop agent ----
 

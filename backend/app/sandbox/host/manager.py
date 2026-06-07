@@ -11,22 +11,50 @@ All files stay inside the container — no host volume mounts.
 
 import io
 import json
+import mimetypes
 import os
 import posixpath
+import re
 import secrets
 import socket
 import tarfile
 import threading
 import time
+import zipfile
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .client import OrchestratorClient
 
 
 # Lock for thread safety
 _lock = threading.Lock()
+
+_EXPORT_EXCLUDED_BASENAMES = {
+    "CLAUDE.md",
+    "agent.md",
+    "config.json",
+    "latest.txt",
+    "meta.json",
+    "previous.txt",
+    "sandbox.log",
+    "settings.local.json",
+    "weagent-report.log",
+}
+_EXPORT_EXCLUDED_SUFFIXES = (".jsonl",)
+_EXPORT_EXCLUDED_REGEXES = (
+    re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$", re.IGNORECASE),
+)
+_MIGRATION_EXCLUDED_PARTS = {
+    ".session",
+    ".weagent",
+    ".weagent_history",
+    ".weagent_claude_session",
+    "__pycache__",
+    "node_modules",
+    ".git",
+}
 
 
 def _clean_config_value(value: str = "") -> str:
@@ -63,6 +91,20 @@ def _merge_no_proxy(value: str = "") -> str:
 
 def _default_host_callback_url() -> str:
     return f"http://host.docker.internal:{os.getenv('PORT', '5002')}"
+
+
+def _should_skip_export_member(path_parts: list[str]) -> bool:
+    clean_parts = [part for part in path_parts if part not in {"", ".", ".."}]
+    if not clean_parts:
+        return True
+    if any(part.startswith(".") for part in clean_parts):
+        return True
+    basename = clean_parts[-1]
+    if basename in _EXPORT_EXCLUDED_BASENAMES:
+        return True
+    if basename.endswith(_EXPORT_EXCLUDED_SUFFIXES):
+        return True
+    return any(pattern.match(basename) for pattern in _EXPORT_EXCLUDED_REGEXES)
 
 
 class DockerNotAvailableError(RuntimeError):
@@ -321,6 +363,9 @@ class DockerContainerManager:
             pass
 
     def get_session(self, session_id: str) -> Optional[SessionContainer]:
+        session = self._sessions.get(session_id)
+        if session is not None:
+            return session
         self.recover_sessions()
         return self._sessions.get(session_id)
 
@@ -550,7 +595,9 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.read_raw_file(agent_id, path)
+        workspace_name = self._workspace_name_for_agent(session, agent_id)
+        normalized_path = self._normalize_agent_workspace_path(agent_id, path, workspace_name)
+        return self._read_workspace_file_from_container(session, normalized_path)
 
     def upload_agent_file(self, session_id: str, agent_id: str, path: str,
                           filename: str, content: bytes,
@@ -608,26 +655,411 @@ class DockerContainerManager:
             return {"status": "error", "error": str(e)}
         return {"status": "ok", "path": normalized_path}
 
-    def get_file_tree(self, session_id: str, root: str = "/workspace") -> dict:
+    def get_file_tree(self, session_id: str, root: str = "/workspace",
+                      include_hidden: bool = False, max_depth: int = 8) -> dict:
         """Return the session workspace file tree."""
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.list_file_tree(root=root)
+        try:
+            return self._build_workspace_tree_in_container(
+                session,
+                root=root,
+                include_hidden=include_hidden,
+                max_depth=max_depth,
+            )
+        except Exception:
+            return session.client.list_file_tree(
+                root=root,
+                include_hidden=include_hidden,
+                max_depth=max_depth,
+            )
 
     def get_raw_file(self, session_id: str, path: str) -> tuple[bytes, str]:
         """Read a raw workspace file without requiring an agent id."""
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.read_session_raw_file(path)
+        normalized_path = "/" + str(path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        return self._read_workspace_file_from_container(session, normalized_path)
 
     def download_file(self, session_id: str, path: str) -> tuple[bytes, str, str]:
         """Read a workspace file for download."""
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
-        return session.client.download_file(path)
+        normalized_path = "/" + str(path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if not normalized_path.startswith("/workspace/"):
+            raise FileNotFoundError(path)
+
+        try:
+            content_bytes, mime_type = self._read_workspace_file_from_container(session, normalized_path)
+            filename = posixpath.basename(normalized_path) or "download"
+            encoded_name = quote(filename)
+            disposition = f"attachment; filename=\"download\"; filename*=UTF-8''{encoded_name}"
+            return content_bytes, mime_type, disposition
+        except Exception:
+            pass
+
+        return session.client.download_file(normalized_path)
+
+    def export_zip(self, session_id: str, path: str = "/workspace",
+                   mode: str = "directory",
+                   selected_paths: Optional[list[str]] = None) -> tuple[bytes, str, str]:
+        """Export a workspace directory as a ZIP archive."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        normalized_path = "/" + str(path or "/workspace").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if normalized_path == "/workspace":
+            export_path = normalized_path
+        elif normalized_path.startswith("/workspace/"):
+            export_path = normalized_path
+        else:
+            raise ValueError("Export path must be under /workspace/")
+
+        try:
+            container = self.docker.containers.get(session.container_id)
+            stream, stat = container.get_archive(export_path)
+            tar_bytes = b"".join(chunk for chunk in stream)
+        except Exception as e:
+            raise FileNotFoundError(export_path) from e
+
+        tar_buffer = io.BytesIO(tar_bytes)
+        zip_buffer = io.BytesIO()
+        top_name = posixpath.basename(export_path.rstrip("/")) or "workspace"
+
+        with tarfile.open(fileobj=tar_buffer, mode="r:*") as tar, zipfile.ZipFile(
+            zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zip_file:
+            members = tar.getmembers()
+            member_names = [member.name.lstrip("./") for member in members]
+            stat_is_dir = bool(stat.get("mode", 0) & 0o040000) if isinstance(stat, dict) else False
+            inferred_is_dir = any(
+                name == top_name or name.startswith(top_name.rstrip("/") + "/")
+                for name in member_names
+            ) and any("/" in name for name in member_names if name)
+            is_dir = stat_is_dir or inferred_is_dir
+
+            selected_relative_paths = None
+            selected_relative_prefixes = None
+            if selected_paths:
+                if not is_dir:
+                    raise ValueError("Selected export requires a directory path")
+                selected_relative_paths = set()
+                selected_relative_prefixes = set()
+                for raw_path in selected_paths:
+                    normalized_selected = "/" + str(raw_path or "").replace("\\", "/").lstrip("/")
+                    normalized_selected = posixpath.normpath(normalized_selected)
+                    if normalized_selected == export_path:
+                        continue
+                    if not normalized_selected.startswith(export_path.rstrip("/") + "/"):
+                        raise ValueError("Selected export path must stay under the current directory")
+                    relative_selected = posixpath.relpath(normalized_selected, export_path)
+                    if relative_selected in {"", ".", ".."}:
+                        continue
+                    selected_relative_paths.add(relative_selected)
+                    selected_relative_prefixes.add(relative_selected.rstrip("/") + "/")
+
+            for member in members:
+                if member.isdir() or member.issym() or member.islnk():
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                member_name = member.name.lstrip("./")
+                if is_dir:
+                    member_prefix = top_name.rstrip("/") + "/"
+                    if member_name == top_name:
+                        continue
+                    if member_name.startswith(member_prefix):
+                        relative_name = member_name[len(member_prefix):]
+                    else:
+                        relative_name = member_name
+                else:
+                    relative_name = posixpath.basename(member_name)
+                path_parts = [part for part in relative_name.split("/") if part]
+                if not path_parts:
+                    continue
+                if _should_skip_export_member(path_parts):
+                    continue
+                if selected_relative_paths is not None:
+                    normalized_relative = "/".join(path_parts)
+                    if normalized_relative not in selected_relative_paths and not any(
+                        normalized_relative.startswith(prefix) for prefix in selected_relative_prefixes
+                    ):
+                        continue
+                archive_name = posixpath.join(top_name, relative_name) if is_dir else relative_name
+                zip_file.writestr(archive_name, extracted.read())
+
+        zip_bytes = zip_buffer.getvalue()
+        zip_name = f"{top_name}.zip"
+        encoded_name = quote(zip_name)
+        disposition = f"attachment; filename=\"export.zip\"; filename*=UTF-8''{encoded_name}"
+        return zip_bytes, "application/zip", disposition
+
+    def write_workspace_file(self, session_id: str, file_path: str,
+                             content_bytes: bytes) -> dict:
+        """Write a file to any path under /workspace/ in the container."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+
+        normalized_path = "/" + str(file_path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if not normalized_path.startswith("/workspace/"):
+            return {"status": "error", "error": "File path must be under /workspace/"}
+
+        directory = posixpath.dirname(normalized_path)
+        target_name = posixpath.basename(normalized_path)
+
+        try:
+            container = self.docker.containers.get(session.container_id)
+            mkdir_result = container.exec_run(["mkdir", "-p", directory])
+            if getattr(mkdir_result, "exit_code", 1) != 0:
+                output = self._decode_exec_output(getattr(mkdir_result, "output", b""))
+                return {"status": "error", "error": output or "Failed to create directory"}
+
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+                info = tarfile.TarInfo(name=target_name)
+                info.size = len(content_bytes)
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(content_bytes))
+            tar_stream.seek(0)
+
+            if not container.put_archive(directory, tar_stream.getvalue()):
+                return {"status": "error", "error": "Failed to write file into container"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+        return {"status": "ok", "path": normalized_path, "size": len(content_bytes)}
+
+    def _read_workspace_file_from_container(self, session: SessionContainer,
+                                            normalized_path: str) -> tuple[bytes, str]:
+        normalized_path = "/" + str(normalized_path or "").replace("\\", "/").lstrip("/")
+        normalized_path = posixpath.normpath(normalized_path)
+        if not normalized_path.startswith("/workspace/"):
+            raise FileNotFoundError(normalized_path)
+
+        container = self.docker.containers.get(session.container_id)
+        stream, _ = container.get_archive(normalized_path)
+        tar_bytes = b"".join(chunk for chunk in stream)
+        tar_buffer = io.BytesIO(tar_bytes)
+        with tarfile.open(fileobj=tar_buffer, mode="r:*") as tar:
+            for member in tar.getmembers():
+                if member.isdir() or member.issym() or member.islnk():
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                content_bytes = extracted.read()
+                filename = posixpath.basename(normalized_path) or posixpath.basename(member.name)
+                mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                return content_bytes, mime_type
+        raise FileNotFoundError(normalized_path)
+
+    def _build_workspace_tree_in_container(self, session: SessionContainer, root: str = "/workspace",
+                                           include_hidden: bool = False,
+                                           max_depth: int = 8) -> dict:
+        container = self.docker.containers.get(session.container_id)
+        script = r"""
+import json, mimetypes, os, sys
+
+root = sys.argv[1] if len(sys.argv) > 1 else "/workspace"
+include_hidden = (sys.argv[2].lower() == "true") if len(sys.argv) > 2 else False
+max_depth = int(sys.argv[3]) if len(sys.argv) > 3 else 8
+
+workspace_root = os.path.realpath("/workspace")
+if root.startswith("/workspace"):
+    full_path = root
+else:
+    full_path = os.path.join("/workspace", root.lstrip("/"))
+real_root = os.path.realpath(full_path)
+if real_root != workspace_root and not real_root.startswith(workspace_root + os.sep):
+    print(json.dumps({"error": "Access denied: path outside workspace"}))
+    raise SystemExit(0)
+if not os.path.exists(real_root):
+    print(json.dumps({"error": f"Path not found: {root}"}))
+    raise SystemExit(0)
+
+def build_node(path, depth):
+    rel_path = os.path.relpath(path, workspace_root)
+    node_path = "/workspace" if rel_path == "." else f"/workspace/{rel_path.replace(os.sep, '/')}"
+    name = os.path.basename(path) or "workspace"
+    if os.path.isdir(path):
+        node = {"name": name, "path": node_path, "type": "directory", "children": []}
+        if depth >= max_depth:
+            node["truncated"] = True
+            return node
+        try:
+            entries = sorted(os.listdir(path), key=lambda x: (not os.path.isdir(os.path.join(path, x)), x.lower()))
+        except OSError:
+            return node
+        for entry in entries:
+            if not include_hidden and entry.startswith("."):
+                continue
+            node["children"].append(build_node(os.path.join(path, entry), depth + 1))
+        return node
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    return {
+        "name": name,
+        "path": node_path,
+        "type": "file",
+        "size": size,
+        "mime_type": mimetypes.guess_type(path)[0] or "application/octet-stream",
+        "extension": os.path.splitext(path)[1].lstrip("."),
+    }
+
+print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=False))
+"""
+        result = container.exec_run(
+            ["python", "-c", script, root, "true" if include_hidden else "false", str(max_depth)]
+        )
+        if getattr(result, "exit_code", 1) != 0:
+            output = self._decode_exec_output(getattr(result, "output", b""))
+            raise RuntimeError(output or "Failed to build workspace tree")
+        output = self._decode_exec_output(getattr(result, "output", b""))
+        return json.loads(output or "{}")
+
+    def preview_files_between_sessions(
+        self,
+        source_session_id: str,
+        target_session_id: str,
+        root: str = "/workspace/agents",
+        paths: Optional[list[str]] = None,
+        path_mapping: Optional[dict[str, str]] = None,
+        overwrite: bool = False,
+        include_hidden: bool = False,
+    ) -> dict:
+        source_session = self.get_session(source_session_id)
+        if not source_session:
+            raise KeyError(f"Session '{source_session_id}' not found")
+        target_session = self.get_session(target_session_id)
+        if not target_session:
+            raise KeyError(f"Session '{target_session_id}' not found")
+
+        normalized_root = self._normalize_workspace_path(root, allowed_root="/workspace/agents")
+        selected_paths = [
+            self._normalize_workspace_path(item, allowed_root=normalized_root)
+            for item in (paths or [])
+        ]
+        candidate_paths, skipped = self._collect_migration_candidates(
+            source_session,
+            normalized_root,
+            selected_paths or None,
+            include_hidden=include_hidden,
+        )
+        resolved_mapping = self._resolve_migration_path_mapping(
+            source_session,
+            target_session,
+            candidate_paths,
+            path_mapping=path_mapping,
+        )
+
+        conflicts = []
+        for source_path in candidate_paths:
+            target_path = self._map_target_path(source_path, resolved_mapping)
+            if not overwrite and self._target_path_exists(target_session, target_path):
+                conflicts.append({
+                    "source_path": source_path,
+                    "target_path": target_path,
+                    "reason": "target exists and overwrite=false",
+                })
+
+        return {
+            "source_session_id": source_session_id,
+            "target_session_id": target_session_id,
+            "root": normalized_root,
+            "total_candidates": len(candidate_paths),
+            "path_mapping": resolved_mapping,
+            "conflicts": conflicts,
+            "skipped": skipped,
+        }
+
+    def copy_files_between_sessions(
+        self,
+        source_session_id: str,
+        target_session_id: str,
+        root: str = "/workspace/agents",
+        paths: Optional[list[str]] = None,
+        path_mapping: Optional[dict[str, str]] = None,
+        overwrite: bool = False,
+        include_hidden: bool = False,
+    ) -> dict:
+        started_at = time.perf_counter()
+        source_session = self.get_session(source_session_id)
+        if not source_session:
+            raise KeyError(f"Session '{source_session_id}' not found")
+        target_session = self.get_session(target_session_id)
+        if not target_session:
+            raise KeyError(f"Session '{target_session_id}' not found")
+
+        preview = self.preview_files_between_sessions(
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            root=root,
+            paths=paths,
+            path_mapping=path_mapping,
+            overwrite=overwrite,
+            include_hidden=include_hidden,
+        )
+        candidate_paths, skipped = self._collect_migration_candidates(
+            source_session,
+            preview["root"],
+            [
+                self._normalize_workspace_path(item, allowed_root=preview["root"])
+                for item in (paths or [])
+            ] or None,
+            include_hidden=include_hidden,
+        )
+        conflicts = list(preview.get("conflicts") or [])
+        conflict_sources = {item["source_path"] for item in conflicts}
+        resolved_mapping = preview["path_mapping"]
+        errors = []
+        migrated = 0
+        skipped_items = list(skipped)
+
+        for source_path in candidate_paths:
+            target_path = self._map_target_path(source_path, resolved_mapping)
+            if source_path in conflict_sources:
+                continue
+            try:
+                self._copy_one_path_between_sessions(
+                    source_session,
+                    target_session,
+                    source_path,
+                    target_path,
+                )
+                migrated += 1
+            except Exception as exc:
+                errors.append({
+                    "source_path": source_path,
+                    "target_path": target_path,
+                    "reason": str(exc),
+                })
+
+        return {
+            "source_session_id": source_session_id,
+            "target_session_id": target_session_id,
+            "root": preview["root"],
+            "total_candidates": len(candidate_paths),
+            "migrated": migrated,
+            "skipped": len(skipped_items),
+            "skipped_items": skipped_items,
+            "errors": errors,
+            "conflicts": conflicts,
+            "path_mapping": resolved_mapping,
+            "message": f"migrated {migrated} files, skipped {len(skipped_items)} files",
+            "elapsed_ms": int((time.perf_counter() - started_at) * 1000),
+        }
 
     # ---- Agent control ----
 
@@ -928,6 +1360,17 @@ class DockerContainerManager:
             return False
 
     @staticmethod
+    def _normalize_agent_workspace_path(agent_id: str, path: str,
+                                        workspace_name: str = "") -> str:
+        workspace_name = workspace_name or agent_id
+        root = posixpath.normpath(f"/workspace/agents/{workspace_name}")
+        normalized = "/" + str(path or "").replace("\\", "/").lstrip("/")
+        normalized = posixpath.normpath(normalized)
+        if normalized == root or normalized.startswith(root + "/"):
+            return normalized
+        raise ValueError("Path must stay inside the agent workspace directory")
+
+    @staticmethod
     def _normalize_agent_user_input_path(agent_id: str, path: str,
                                          workspace_name: str = "") -> str:
         workspace_name = workspace_name or agent_id
@@ -950,6 +1393,175 @@ class DockerContainerManager:
         if isinstance(output, bytes):
             return output.decode("utf-8", errors="replace").strip()
         return str(output or "").strip()
+
+    @staticmethod
+    def _normalize_workspace_path(path: str, allowed_root: str = "/workspace") -> str:
+        normalized = "/" + str(path or "").replace("\\", "/").lstrip("/")
+        normalized = posixpath.normpath(normalized)
+        allowed = posixpath.normpath(allowed_root or "/workspace")
+        if allowed == "/workspace":
+            if normalized != allowed and not normalized.startswith(allowed + "/"):
+                raise ValueError("Path must stay under /workspace/")
+            return normalized
+        if normalized != allowed and not normalized.startswith(allowed + "/"):
+            raise ValueError(f"Path must stay under {allowed}")
+        return normalized
+
+    def _collect_migration_candidates(
+        self,
+        source_session: SessionContainer,
+        root: str,
+        selected_paths: Optional[list[str]] = None,
+        include_hidden: bool = False,
+    ) -> tuple[list[str], list[dict]]:
+        paths = selected_paths or [root]
+        candidates: list[str] = []
+        skipped: list[dict] = []
+        seen: set[str] = set()
+
+        def walk(node):
+            if not isinstance(node, dict):
+                return
+            node_path = self._normalize_workspace_path(node.get("path") or root, allowed_root="/workspace")
+            if self._should_exclude_migration_path(node_path, include_hidden=include_hidden):
+                skipped.append({"source_path": node_path, "reason": "excluded path"})
+                return
+            if node.get("type") == "directory":
+                children = node.get("children") or []
+                if not children:
+                    skipped.append({"source_path": node_path, "reason": "empty directory"})
+                    return
+                for child in children:
+                    walk(child)
+                return
+            if node_path not in seen:
+                seen.add(node_path)
+                candidates.append(node_path)
+
+        for path in paths:
+            tree_result = self.get_file_tree(
+                source_session.session_id,
+                root=path,
+                include_hidden=include_hidden,
+                max_depth=32,
+            )
+            if tree_result.get("error"):
+                raise ValueError(tree_result["error"])
+            tree = tree_result.get("tree")
+            if not tree:
+                skipped.append({"source_path": path, "reason": "path has no readable tree"})
+                continue
+            walk(tree)
+
+        return candidates, skipped
+
+    def _resolve_migration_path_mapping(
+        self,
+        source_session: SessionContainer,
+        target_session: SessionContainer,
+        candidate_paths: list[str],
+        path_mapping: Optional[dict[str, str]] = None,
+    ) -> dict[str, str]:
+        provided = {}
+        for source_prefix, target_prefix in (path_mapping or {}).items():
+            normalized_source = self._normalize_workspace_path(source_prefix, allowed_root="/workspace/agents")
+            normalized_target = self._normalize_workspace_path(target_prefix, allowed_root="/workspace/agents")
+            provided[normalized_source] = normalized_target
+
+        target_workspaces = {
+            str(agent.get("workspace_name") or agent.get("role") or agent.get("agent_id") or ""): agent
+            for agent in (target_session.agents_config or [])
+        }
+        resolved: dict[str, str] = {}
+
+        for source_path in candidate_paths:
+            source_prefix = self._source_workspace_prefix(source_path)
+            if not source_prefix or source_prefix in resolved:
+                continue
+            if source_prefix in provided:
+                resolved[source_prefix] = provided[source_prefix]
+                continue
+            workspace_name = source_prefix.split("/")[3] if len(source_prefix.split("/")) > 3 else ""
+            if workspace_name and self._is_ascii_name(workspace_name) and workspace_name in target_workspaces:
+                resolved[source_prefix] = f"/workspace/agents/{workspace_name}"
+            else:
+                resolved[source_prefix] = (
+                    f"/workspace/agents/migrated_from_{source_session.session_id[:8]}/{workspace_name or 'workspace'}"
+                )
+        return resolved
+
+    @staticmethod
+    def _source_workspace_prefix(source_path: str) -> str:
+        parts = [part for part in str(source_path or "").split("/") if part]
+        if len(parts) >= 3 and parts[0] == "workspace" and parts[1] == "agents":
+            return f"/workspace/agents/{parts[2]}"
+        return ""
+
+    @staticmethod
+    def _is_ascii_name(text: str) -> bool:
+        try:
+            str(text or "").encode("ascii")
+            return True
+        except UnicodeEncodeError:
+            return False
+
+    @staticmethod
+    def _map_target_path(source_path: str, resolved_mapping: dict[str, str]) -> str:
+        normalized_source = "/" + str(source_path or "").replace("\\", "/").lstrip("/")
+        normalized_source = posixpath.normpath(normalized_source)
+        for source_prefix in sorted(resolved_mapping.keys(), key=len, reverse=True):
+            if normalized_source == source_prefix or normalized_source.startswith(source_prefix + "/"):
+                suffix = normalized_source[len(source_prefix):].lstrip("/")
+                target_prefix = resolved_mapping[source_prefix].rstrip("/")
+                return target_prefix if not suffix else f"{target_prefix}/{suffix}"
+        return normalized_source
+
+    @staticmethod
+    def _should_exclude_migration_path(path: str, include_hidden: bool = False) -> bool:
+        parts = [part for part in str(path or "").split("/") if part]
+        if not include_hidden and any(part.startswith(".") for part in parts):
+            return True
+        return any(part in _MIGRATION_EXCLUDED_PARTS for part in parts)
+
+    def _target_path_exists(self, target_session: SessionContainer, target_path: str) -> bool:
+        normalized = self._normalize_workspace_path(target_path, allowed_root="/workspace")
+        container = self.docker.containers.get(target_session.container_id)
+        result = container.exec_run([
+            "python",
+            "-c",
+            "import os, sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)",
+            normalized,
+        ])
+        return getattr(result, "exit_code", 1) == 0
+
+    def _copy_one_path_between_sessions(
+        self,
+        source_session: SessionContainer,
+        target_session: SessionContainer,
+        source_path: str,
+        target_path: str,
+    ) -> None:
+        normalized_source = self._normalize_workspace_path(source_path, allowed_root="/workspace")
+        normalized_target = self._normalize_workspace_path(target_path, allowed_root="/workspace")
+        content_bytes, _ = self._read_workspace_file_from_container(source_session, normalized_source)
+        result = self.write_workspace_file(target_session.session_id, normalized_target, content_bytes)
+        if result.get("status") == "error":
+            raise RuntimeError(result.get("error") or "Failed to write target file")
+
+    def _is_empty_directory(self, session: SessionContainer, path: str) -> bool:
+        normalized = self._normalize_workspace_path(path, allowed_root="/workspace")
+        container = self.docker.containers.get(session.container_id)
+        result = container.exec_run([
+            "python",
+            "-c",
+            (
+                "import os, sys; "
+                "p=sys.argv[1]; "
+                "sys.exit(0 if os.path.isdir(p) and len(os.listdir(p))==0 else 1)"
+            ),
+            normalized,
+        ])
+        return getattr(result, "exit_code", 1) == 0
 
     def to_dict(self) -> dict:
         self.recover_sessions()

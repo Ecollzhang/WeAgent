@@ -72,176 +72,208 @@
 
       <!-- Artifact rendering -->
       <div v-if="artifactElements.length" class="bubble-elements artifact-section">
-        <div class="section-title">产物</div>
+        <div class="artifact-section-header">
+          <div class="section-title">产物</div>
+          <button class="preview-toggle-chip" @click="togglePreviewVisibility">
+            <span>显示所有预览</span>
+            <span class="preview-toggle-box" :class="{ checked: showAllPreviews }">
+              <i v-if="showAllPreviews" class="el-icon-check"></i>
+            </span>
+          </button>
+        </div>
         <div
-          v-for="(el, i) in artifactElements"
-          :key="i"
-          class="el-block"
-          :class="'el-' + el.type"
-          >
-          <div v-if="el.type === 'code'" class="artifact-block code-card">
-            <div class="artifact-header">
-              <i class="el-icon-tickets"></i>
-              <span>{{ elementData(el).title || elementData(el).filename || '代码产物' }}</span>
-              <span class="artifact-meta">{{ elementData(el).language || 'code' }}</span>
-              <div class="code-actions">
-                <el-button size="mini" type="text" @click="copyCode(elementContent(el))">复制</el-button>
-                <el-button size="mini" type="text" @click="previewCode(normalizeElementForPreview(el))">预览</el-button>
+          v-for="group in artifactGroups"
+          :key="group.key"
+          class="artifact-group"
+          :data-artifact-group-key="group.key"
+        >
+          <div v-if="isSummaryTableGroup(group)" class="artifact-summary-wrap">
+            <div class="artifact-summary-title">文件清单</div>
+            <div>
+              <div class="table-meta-row summary-table-meta-row">
+                <span class="table-meta-summary">{{ artifactGroupTableRowCount(group) }} rows</span>
+                <span class="table-meta-summary">{{ artifactGroupTableHeaders(group).length }} cols</span>
+              </div>
+              <div class="table-scroll summary-table-scroll summary-table-plain">
+                <el-table
+                  v-if="artifactGroupTableHeaders(group).length"
+                  :data="artifactGroupTableRows(group)"
+                  size="small"
+                  border
+                  stripe
+                  style="width: 100%"
+                >
+                  <el-table-column
+                    v-if="shouldShowSummaryIndexColumn(group)"
+                    type="index"
+                    label="序号"
+                    width="72"
+                  ></el-table-column>
+                  <el-table-column
+                    v-for="(h, hi) in artifactGroupTableHeaders(group)"
+                    :key="hi"
+                    :prop="'col' + hi"
+                    :label="h"
+                    min-width="140"
+                  ></el-table-column>
+                </el-table>
+                <div v-else class="el-text" v-html="renderText(elementContent(group.tableElement || group.primaryElement))"></div>
               </div>
             </div>
-            <pre class="code-body"><code>{{ elementContent(el) }}</code></pre>
           </div>
 
-          <div v-else-if="el.type === 'table'" class="artifact-block table-block">
-            <div class="artifact-header">
-              <i class="el-icon-s-grid"></i>
-              <span>{{ elementData(el).title || '表格产物' }}</span>
-              <span class="artifact-meta">{{ tableHeaders(el).length }} 列</span>
-            </div>
-            <div class="table-scroll">
-              <el-table
-                v-if="tableHeaders(el).length"
-                :data="normalizeTable(el)"
-                size="small"
-                border
-                stripe
-                style="width: 100%"
-              >
-                <el-table-column
-                  v-for="(h, hi) in tableHeaders(el)"
-                  :key="hi"
-                  :prop="'col' + hi"
-                  :label="h"
-                  min-width="120"
-                ></el-table-column>
-              </el-table>
-              <div v-else class="el-text" v-html="renderText(elementContent(el))"></div>
-            </div>
-          </div>
-
-          <div v-else-if="el.type === 'image'" class="artifact-block image-block">
-            <div class="artifact-header">
-              <i class="el-icon-picture-outline"></i>
+          <template v-else>
+          <div class="artifact-file-row" :class="{ 'summary-file-row': isSummaryTableGroup(group) }" @click="openArtifactGroup(group)">
+            <div class="artifact-file-mainline" @click.stop="toggleArtifactGroup(group.key)">
               <button
-                v-if="imagePath(el)"
-                class="artifact-title-btn"
-                @click="openFilePath(imagePath(el))"
+                class="artifact-toggle-btn"
               >
-                {{ elementData(el).name || elementData(el).alt || imagePath(el) }}
+                <i :class="isArtifactGroupExpanded(group.key, group) ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
               </button>
-              <span v-else>{{ elementData(el).name || elementData(el).alt || '图片' }}</span>
-              <span class="artifact-meta">image</span>
-            </div>
-            <div class="image-frame">
-              <img
-                class="artifact-image"
-                :src="imageSrc(el)"
-                :alt="elementData(el).alt || elementData(el).name || ''"
-                @click="previewImage(imageSrc(el))"
-              />
-            </div>
-          </div>
-
-          <div v-else-if="el.type === 'file' && isImageElement(el)" class="artifact-block image-block">
-            <div class="artifact-header">
-              <i class="el-icon-picture-outline"></i>
-              <button class="artifact-title-btn" @click="openFileElement(elementData(el))">
-                {{ elementData(el).name || elementContent(el) }}
-              </button>
-              <span class="artifact-meta">image</span>
-            </div>
-            <div class="image-frame">
-              <img
-                class="artifact-image"
-                :src="imageSrc(el)"
-                :alt="elementData(el).name || ''"
-                @click="previewImage(imageSrc(el))"
-              />
-            </div>
-          </div>
-
-          <div v-else-if="el.type === 'file'" class="artifact-block file-card" @click="openFileElement(elementData(el))">
-            <div class="file-icon"><i :class="fileIcon(el)"></i></div>
-            <div class="file-main">
-              <button class="file-link-btn">{{ elementData(el).name || elementContent(el) }}</button>
-              <span class="file-path">{{ elementData(el).path || elementData(el).url || elementContent(el) }}</span>
-            </div>
-            <span v-if="elementData(el).size" class="file-size">{{ formatFileSize(elementData(el).size) }}</span>
-          </div>
-
-          <div v-else-if="el.type === 'service'" class="artifact-block service-card">
-            <div class="service-card-header">
-              <div class="service-icon"><i class="el-icon-monitor"></i></div>
-              <div class="service-title-wrap">
-                <div class="service-card-title">{{ serviceTitle(el) }}</div>
-                <div class="service-subtitle">
-                  <span v-if="serviceInfo(el).port">端口 {{ serviceInfo(el).port }}</span>
-                  <span v-if="serviceInfo(el).type">{{ serviceInfo(el).type }}</span>
-                  <span v-if="serviceInfo(el).id">{{ serviceInfo(el).id }}</span>
+              <div class="file-icon"><i :class="fileIcon(group.fileElement || group.primaryElement)"></i></div>
+              <div class="file-main">
+                <div class="file-info-row">
+                  <div class="file-info-stack">
+                    <div class="file-title-line">
+                      <button class="file-link-btn">{{ artifactGroupName(group) }}</button>
+                    </div>
+                    <div class="file-meta-line">
+                      <span class="file-path">{{ artifactGroupSubtitle(group) }}</span>
+                    </div>
+                  </div>
+                  <div class="file-attr-group">
+                    <span class="artifact-kind-chip">{{ artifactGroupKindLabel(group) }}</span>
+                    <span v-if="artifactGroupSizeText(group)" class="file-size-inline-text">{{ artifactGroupSizeText(group) }}</span>
+                  </div>
+                  <div class="artifact-row-actions" @click.stop>
+                    <el-button
+                      v-if="canCopyArtifactGroup(group)"
+                      size="mini"
+                      type="text"
+                      class="artifact-action-btn"
+                      @click="copyArtifactGroup(group)"
+                    >复制</el-button>
+                    <el-button
+                      v-if="canPreviewArtifactGroup(group)"
+                      size="mini"
+                      type="text"
+                      class="artifact-action-btn"
+                      @click="openArtifactGroup(group, group.type === 'workflow' ? 'preview' : 'edit')"
+                    >{{ group.type === 'workflow' ? '预览' : '编辑' }}</el-button>
+                  </div>
+                </div>
+                <div v-if="artifactGroupResolvedDiff(group)" class="file-diff-inline-row" :data-diff-row-key="group.key" @click.stop>
+                  <div class="file-diff-inline-main">
+                    <div class="file-diff-label">变更</div>
+                    <div class="file-diff-stats">
+                      <span class="diff-stat diff-add">+{{ diffAdditions(artifactGroupResolvedDiff(group)) }}</span>
+                      <span class="diff-stat diff-del">-{{ diffDeletions(artifactGroupResolvedDiff(group)) }}</span>
+                    </div>
+                  </div>
+                  <div class="file-diff-actions">
+                    <template v-if="supportsInlineArtifactDiff(group)">
+                      <el-button
+                        size="mini"
+                        type="text"
+                        class="artifact-action-btn"
+                        @click="toggleArtifactDiff(group.key)"
+                      >{{ isArtifactDiffVisible(group.key) ? '收起Diff' : '展示Diff' }}</el-button>
+                      <el-button
+                        size="mini"
+                        type="text"
+                        :loading="diffBusyKey === group.key"
+                        class="artifact-action-btn"
+                        :disabled="!canRevertArtifactGroup(group)"
+                        @click="revertArtifactDiff(group)"
+                      >撤销</el-button>
+                    </template>
+                    <span v-else class="file-diff-note">详情请在工作台查看</span>
+                  </div>
                 </div>
               </div>
-              <el-tag size="mini" :type="serviceStatusType(serviceInfo(el).status)">
-                {{ serviceStatusLabel(serviceInfo(el).status) }}
-              </el-tag>
-            </div>
-            <div v-if="elementContent(el)" class="service-description" v-html="renderText(elementContent(el))"></div>
-            <div class="service-url-row" v-if="serviceUrl(el)">
-              <i class="el-icon-link"></i>
-              <a :href="serviceUrl(el)" target="_blank" rel="noopener">{{ serviceUrl(el) }}</a>
-            </div>
-            <div v-if="serviceInfo(el).cwd || serviceInfo(el).command" class="service-meta-grid">
-              <div v-if="serviceInfo(el).cwd" class="service-meta-item">
-                <span>目录</span>
-                <code>{{ serviceInfo(el).cwd }}</code>
-              </div>
-              <div v-if="serviceInfo(el).command" class="service-meta-item">
-                <span>命令</span>
-                <code>{{ serviceInfo(el).command }}</code>
-              </div>
-            </div>
-            <div class="service-actions">
-              <el-button
-                size="mini"
-                type="primary"
-                plain
-                icon="el-icon-position"
-                :disabled="!serviceUrl(el)"
-                @click="openService(el)"
-              >打开</el-button>
-              <el-button
-                size="mini"
-                icon="el-icon-view"
-                :disabled="!serviceUrl(el)"
-                @click="previewService(el)"
-              >预览</el-button>
-              <el-button
-                size="mini"
-                icon="el-icon-document-copy"
-                :disabled="!serviceUrl(el)"
-                @click="copyServiceUrl(serviceUrl(el))"
-              >复制</el-button>
-              <el-button
-                size="mini"
-                icon="el-icon-document"
-                :loading="serviceBusyKey === serviceActionKey(el, 'logs')"
-                @click="loadServiceLogs(el)"
-              >日志</el-button>
-              <el-button
-                size="mini"
-                icon="el-icon-refresh"
-                :loading="serviceBusyKey === serviceActionKey(el, 'restart')"
-                @click="restartServiceCard(el)"
-              >重启</el-button>
-              <el-button
-                size="mini"
-                type="danger"
-                plain
-                icon="el-icon-video-pause"
-                :loading="serviceBusyKey === serviceActionKey(el, 'stop')"
-                @click="stopServiceCard(el)"
-              >停止</el-button>
             </div>
           </div>
+
+            <div v-if="isArtifactGroupExpanded(group.key, group)" class="artifact-detail-pane">
+            <div v-if="group.type === 'workflow'" class="artifact-block artifact-detail-card code-card detail-card">
+              <pre class="code-body code-body-soft"><code>{{ workflowRawJson(group) }}</code></pre>
+            </div>
+
+            <div v-else-if="group.type === 'code' || group.type === 'text'" class="artifact-block artifact-detail-card code-card detail-card">
+              <div v-if="isArtifactGroupPreviewLoading(group)" class="artifact-inline-loading"><i class="el-icon-loading"></i> 加载中...</div>
+              <template v-else>
+                <pre class="code-body code-body-soft"><code>{{ artifactGroupCodeContent(group) }}</code></pre>
+              </template>
+                <div v-if="supportsInlineArtifactDiff(group) && artifactGroupResolvedDiff(group) && isArtifactDiffVisible(group.key)" class="artifact-attached-diff">
+                  <DiffViewCard
+                    :element="artifactGroupResolvedDiff(group)"
+                    :session-id="sessionId"
+                    compact
+                    @applied="onWorkbenchDiffApplied"
+                  />
+              </div>
+            </div>
+
+            <div v-else-if="group.type === 'webpage'" class="artifact-block artifact-detail-card webpage-card detail-card">
+              <div v-if="artifactGroupPath(group)" class="file-path webpage-path">{{ artifactGroupPath(group) }}</div>
+              <div class="webpage-preview">
+                <iframe
+                  v-if="!isWorkbenchPreviewingPath(artifactGroupPath(group))"
+                  class="webpage-frame"
+                  :src="webpagePreviewSrc(group)"
+                  title="webpage-preview"
+                ></iframe>
+                <div v-else class="webpage-preview-paused">已在统一编辑平台中打开</div>
+              </div>
+            </div>
+
+            <div v-else-if="group.type === 'table'" class="artifact-block artifact-detail-card table-block detail-card" :class="{ 'summary-table-card': isSummaryTableGroup(group) }">
+              <div class="table-meta-row">
+                <span class="table-meta-summary">{{ artifactGroupTableRowCount(group) }} rows</span>
+                <span class="table-meta-summary">{{ artifactGroupTableHeaders(group).length }} cols</span>
+              </div>
+              <div class="table-scroll">
+                <div v-if="isArtifactGroupPreviewLoading(group)" class="artifact-inline-loading"><i class="el-icon-loading"></i> 加载中...</div>
+                <el-table
+                  v-else-if="artifactGroupTableHeaders(group).length"
+                  :data="artifactGroupTableRows(group)"
+                  size="small"
+                  border
+                  stripe
+                  style="width: 100%"
+                >
+                  <el-table-column
+                    v-for="(h, hi) in artifactGroupTableHeaders(group)"
+                    :key="hi"
+                    :prop="'col' + hi"
+                    :label="h"
+                    min-width="120"
+                  ></el-table-column>
+                </el-table>
+                <div v-else class="el-text" v-html="renderText(artifactGroupCodeContent(group))"></div>
+              </div>
+            </div>
+
+            <div v-else-if="group.type === 'image'" class="artifact-block artifact-detail-card image-block detail-card">
+              <div class="image-frame">
+                <img
+                  class="artifact-image artifact-image-compact"
+                  :src="imageSrc(group.imageElement || group.fileElement)"
+                  :alt="artifactGroupName(group)"
+                  @click="openArtifactGroup(group)"
+                />
+              </div>
+            </div>
+
+            <div v-else-if="group.type === 'diff'" class="artifact-block artifact-detail-card diff-card detail-card">
+              <DiffViewCard
+                :element="artifactGroupResolvedDiff(group)"
+                :session-id="sessionId"
+                @applied="onWorkbenchDiffApplied"
+              />
+            </div>
+          </div>
+          </template>
         </div>
       </div>
 
@@ -255,7 +287,7 @@
                 <button
                   v-if="step.path"
                   class="step-file"
-                  @click="openFilePath(step.path)"
+                  @click="emitOpenFilePath(step.path)"
                 >
                   {{ normalizeWorkspacePath(step.path) }}
                 </button>
@@ -306,37 +338,15 @@
       </el-tag>
     </div>
 
-    <!-- Code Preview Dialog -->
-    <el-dialog
-      title="代码预览"
-      :visible.sync="codePreviewVisible"
-      width="700px"
-      top="5vh"
-      custom-class="code-preview-dialog"
-    >
-      <div class="code-preview-body">
-        <div class="preview-meta" v-if="previewData">
-          <span class="preview-filename" v-if="previewData.filename">
-            <i class="el-icon-document"></i> {{ previewData.filename }}
-          </span>
-          <el-tag size="mini" type="primary" v-if="previewData.language">
-            {{ previewData.language }}
-          </el-tag>
-        </div>
-        <pre class="preview-code"><code>{{ previewData?.content }}</code></pre>
-      </div>
-    </el-dialog>
-    <el-dialog
-      title="图片预览"
-      :visible.sync="imagePreviewVisible"
-      width="78%"
-      top="5vh"
-      custom-class="image-preview-dialog"
-    >
-      <div class="image-preview-body">
-        <img v-if="previewImageUrl" :src="previewImageUrl" class="preview-image" />
-      </div>
-    </el-dialog>
+    <ArtifactWorkbench
+      v-if="workbenchVisible && workbenchArtifact"
+      :visible.sync="workbenchVisible"
+      :artifact="workbenchArtifact"
+      :session-id="sessionId"
+      @saved="onWorkbenchSaved"
+      @diff-applied="onWorkbenchDiffApplied"
+    />
+
     <el-dialog
       title="服务预览"
       :visible.sync="servicePreviewVisible"
@@ -350,6 +360,7 @@
       </div>
       <iframe v-if="servicePreviewUrl" class="service-preview-frame" :src="servicePreviewUrl"></iframe>
     </el-dialog>
+
     <el-dialog
       title="服务日志"
       :visible.sync="serviceLogsVisible"
@@ -377,10 +388,13 @@
 
 <script>
 import { formatTime } from '../../utils/format'
-import { getServiceLogs, restartService, stopService } from '../../api/sandbox'
+import { getFileTree, getSessionRawFileUrl, getWorkspaceFileUrl, getServiceLogs, restartService, stopService, writeFile } from '@/api/sandbox'
+import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
+import DiffViewCard from '@/components/DiffViewCard/index.vue'
 
 export default {
   name: 'MessageBubble',
+  components: { ArtifactWorkbench, DiffViewCard },
   props: {
     message: Object,
     isOwn: Boolean,
@@ -388,10 +402,16 @@ export default {
   },
   data() {
     return {
-      codePreviewVisible: false,
-      previewData: null,
-      imagePreviewVisible: false,
-      previewImageUrl: '',
+      workbenchVisible: false,
+      workbenchArtifact: null,
+      artifactExpanded: {},
+      artifactDiffExpanded: {},
+      showAllPreviews: true,
+      artifactPreviewCache: {},
+      artifactPreviewLoading: {},
+      artifactMetaLoading: {},
+      diffBusyKey: '',
+
       servicePreviewVisible: false,
       servicePreviewUrl: '',
       serviceLogsVisible: false,
@@ -399,6 +419,20 @@ export default {
       serviceLogsData: null,
       serviceBusyKey: '',
     }
+  },
+  watch: {
+    artifactGroups: {
+      handler() {
+        this.$nextTick(() => {
+          this.ensureVisibleArtifactPreviews()
+        })
+      },
+      immediate: true,
+      deep: false,
+    },
+    showAllPreviews() {
+      this.$nextTick(() => this.ensureVisibleArtifactPreviews())
+    },
   },
   computed: {
     hasElements() {
@@ -470,7 +504,10 @@ export default {
       return null
     },
     artifactElements() {
-      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file', 'service'].includes(el?.type))
+      const artifacts = this.renderedElements.filter(el => {
+        if (this.isModeratorPlanArtifact(el)) return false
+        return ['code', 'webpage', 'table', 'image', 'file', 'service', 'workflow'].includes(el?.type) || this.looksLikeDiffElement(el)
+      })
       const seen = new Set()
       return artifacts.filter(el => {
         const key = this.artifactKey(el)
@@ -478,6 +515,50 @@ export default {
         seen.add(key)
         return true
       })
+    },
+    artifactGroups() {
+      const groups = new Map()
+      this.artifactElements.forEach((el, index) => {
+        const normalizedPath = this.normalizeWorkspacePath(this.elementWorkspacePath(el) || '')
+        const fallbackKey = `${el?.type || 'artifact'}:${index}`
+        const key = normalizedPath || fallbackKey
+        if (!groups.has(key)) {
+          groups.set(key, {
+            key,
+            path: normalizedPath,
+            firstIndex: index,
+            fileElement: null,
+            codeElement: null,
+            webpageElement: null,
+            tableElement: null,
+            imageElement: null,
+            diffElement: null,
+            workflowElement: null,
+            primaryElement: el,
+          })
+        }
+        const group = groups.get(key)
+        if (el.type === 'file' && !group.fileElement) group.fileElement = el
+        if ((el.type === 'code' || el.type === 'text') && !group.codeElement) group.codeElement = el
+        if (el.type === 'webpage' && !group.webpageElement) group.webpageElement = el
+        if (el.type === 'table' && !group.tableElement) group.tableElement = el
+        if (el.type === 'image' && !group.imageElement) group.imageElement = el
+        if (el.type === 'workflow' && !group.workflowElement) group.workflowElement = el
+        if (this.looksLikeDiffElement(el) && !group.diffElement) group.diffElement = el
+      })
+      return Array.from(groups.values())
+        .map(group => ({
+          ...group,
+          type: this.artifactGroupType(group),
+          primaryElement: this.artifactGroupPrimaryElement(group),
+        }))
+        .sort((a, b) => {
+          const aSummary = this.isSummaryTableGroup(a)
+          const bSummary = this.isSummaryTableGroup(b)
+          if (aSummary && !bSummary) return 1
+          if (!aSummary && bSummary) return -1
+          return (a.firstIndex || 0) - (b.firstIndex || 0)
+        })
     },
     isTempMessage() {
       return this.message && typeof this.message.id === 'string' && this.message.id.startsWith('temp_')
@@ -539,6 +620,9 @@ export default {
       return [...progressSteps, ...eventSteps]
     },
   },
+  mounted() {
+    this.ensureVisibleArtifactPreviews()
+  },
   methods: {
     formatTime,
     formatRawOutputForDisplay(raw) {
@@ -555,6 +639,23 @@ export default {
       return /["']?type["']?\s*:\s*["']?plan/.test(lowered) ||
         /["']?parallel_groups["']?\s*:/.test(lowered) ||
         /["']?selected_agents["']?\s*:/.test(lowered)
+    },
+    isModeratorPlanArtifact(el) {
+      if (!el || el.type === 'workflow') return false
+      const data = this.elementData(el)
+      const values = [
+        data.path,
+        data.file_path,
+        data.filePath,
+        data.file,
+        data.url,
+        data.src,
+        data.name,
+        data.filename,
+        data.title,
+        this.elementContent(el),
+      ]
+      return values.some(value => String(value || '').toLowerCase().includes('moderator-plan.json'))
     },
     isPlaceholderProgress(el) {
       const text = this.normalizeDisplayText(this.elementContent(el))
@@ -599,17 +700,373 @@ export default {
     artifactKey(el) {
       const data = this.elementData(el)
       return [
-        el?.type || '',
+        this.looksLikeDiffElement(el) ? 'diff' : (el?.type || ''),
         data.url || '',
         data.proxy_url || '',
         data.service_id || '',
         data.id || '',
         data.path || '',
+        data.data?.path || '',
         data.file || '',
+        data.data?.file || '',
         data.name || '',
         data.title || '',
+        data.diff_text || '',
         this.elementContent(el).slice(0, 160),
       ].join('|')
+    },
+    artifactGroupType(group) {
+      if (group.workflowElement) return 'workflow'
+      if (group.webpageElement) return 'webpage'
+      if (group.tableElement) return 'table'
+      if (group.imageElement || (group.fileElement && this.isImageElement(group.fileElement))) return 'image'
+      if (group.codeElement) return 'code'
+      const path = this.artifactGroupPath(group)
+      if (/\.csv$/i.test(path)) return 'table'
+      if (/\.(html?)$/i.test(path)) return 'webpage'
+      if (/\.(txt|log)$/i.test(path)) return 'text'
+      if (/\.(css|scss|less|js|jsx|ts|tsx|py|md|sql|json|xml|yaml|yml|toml|vue|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart)$/i.test(path)) return 'code'
+      if (group.diffElement) return 'diff'
+      return group.fileElement?.type || group.primaryElement?.type || 'file'
+    },
+    artifactGroupPrimaryElement(group) {
+      return group.workflowElement
+        || group.webpageElement
+        || group.tableElement
+        || group.imageElement
+        || group.codeElement
+        || group.fileElement
+        || group.diffElement
+        || group.primaryElement
+        || null
+    },
+    artifactGroupName(group) {
+      const source = group.fileElement || group.primaryElement
+      const data = source ? this.elementData(source) : {}
+      if (group.type === 'workflow') {
+        return data.name || data.title || '任务分配工作流'
+      }
+      if (this.isSummaryTableGroup(group)) {
+        return '文件清单'
+      }
+      const basename = this.pathBasename(this.artifactGroupPath(group))
+      if (basename) return basename
+      const dataDerivedBasename = this.pathBasename(
+        data.path || data.file || this.pathFromUrl(data.url || data.src) || data.name || data.filename || ''
+      )
+      if (dataDerivedBasename) return dataDerivedBasename
+      return data.name || data.filename || data.title || '产物文件'
+    },
+    artifactGroupSubtitle(group) {
+      if (group.type === 'workflow') {
+        const data = this.elementData(group.workflowElement || group.primaryElement)
+        const nodeCount = Array.isArray(data.nodes) ? data.nodes.length : 0
+        const edgeCount = Array.isArray(data.edges) ? data.edges.length : 0
+        return `${nodeCount} 节点 · ${edgeCount} 连线`
+      }
+      return this.artifactGroupPath(group)
+    },
+    artifactGroupPath(group) {
+      return group.path || this.normalizeWorkspacePath(this.elementWorkspacePath(group.primaryElement) || '')
+    },
+    artifactGroupSize(group) {
+      const groupSize = Number(group?.size || group?.file_size || group?.bytes || 0) || 0
+      if (groupSize > 0) return groupSize
+      const candidates = [
+        group.fileElement,
+        group.primaryElement,
+        group.imageElement,
+        group.webpageElement,
+        group.codeElement,
+        group.tableElement,
+      ].filter(Boolean)
+      for (const candidate of candidates) {
+        const data = this.elementData(candidate)
+        const size = Number(
+          data.size
+          || data.file_size
+          || data.bytes
+          || data.data?.size
+          || data.data?.file_size
+          || data.data?.bytes
+          || candidate?.size
+          || candidate?.file_size
+          || candidate?.bytes
+          || 0
+        ) || 0
+        if (size > 0) return size
+      }
+      return 0
+    },
+    artifactGroupSizeText(group) {
+      const size = this.artifactGroupSize(group)
+      if (size > 0) return this.formatFileSize(size)
+      this.ensureArtifactGroupMetadata(group)
+      return ''
+    },
+    artifactGroupKindLabel(group) {
+      return {
+        code: '代码',
+        webpage: '网页',
+        table: '表格',
+        image: '图片',
+        workflow: '工作流',
+        diff: 'Diff',
+        file: '文件',
+      }[group.type] || '文件'
+    },
+    isSummaryTableGroup(group) {
+      const data = this.elementData(group.tableElement || group.primaryElement || {})
+      const title = String(data.title || data.name || '').trim()
+      return group.type === 'table' && (!this.artifactGroupPath(group) || /文件清单|summary|总结/i.test(title))
+    },
+    isArtifactGroupExpanded(key, group = null) {
+      if (group && this.isSummaryTableGroup(group)) return true
+      if (Object.prototype.hasOwnProperty.call(this.artifactExpanded, key)) {
+        return this.artifactExpanded[key]
+      }
+      return this.showAllPreviews
+    },
+    togglePreviewVisibility() {
+      this.showAllPreviews = !this.showAllPreviews
+      this.artifactExpanded = {}
+    },
+    toggleArtifactGroup(key) {
+      const next = !this.isArtifactGroupExpanded(key)
+      this.$set(this.artifactExpanded, key, next)
+      if (next) {
+        const group = this.artifactGroups.find(item => item.key === key)
+        if (group) {
+          this.ensureArtifactGroupPreview(group)
+        }
+      }
+    },
+    isArtifactDiffVisible(key) {
+      return Boolean(this.artifactDiffExpanded[key])
+    },
+    toggleArtifactDiff(key) {
+      this.$set(this.artifactDiffExpanded, key, !this.isArtifactDiffVisible(key))
+      if (!this.isArtifactGroupExpanded(key)) {
+        this.$set(this.artifactExpanded, key, true)
+      }
+    },
+    artifactGroupResolvedDiff(group) {
+      if (!group) return null
+      if (group.diffElement) return group.diffElement
+      const related = this.findRelatedArtifactElements(
+        this.artifactGroupPath(group),
+        group.primaryElement || group.fileElement || group.codeElement || null,
+      )
+      if (related.diffElement) return related.diffElement
+      const targetPath = this.normalizeWorkspacePath(this.artifactGroupPath(group))
+      return (this.renderedElements || []).find(el => {
+        if (!this.looksLikeDiffElement(el)) return false
+        const elPath = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        return !!elPath && elPath === targetPath
+      }) || null
+    },
+    canRevertArtifactGroup(group) {
+      const diffData = this.elementData(this.artifactGroupResolvedDiff(group))
+      return typeof diffData.before === 'string' && !!this.sessionId && !!this.artifactGroupPath(group)
+    },
+    supportsInlineArtifactDiff(group) {
+      return group?.type === 'code'
+    },
+    async revertArtifactDiff(group) {
+      if (!this.canRevertArtifactGroup(group)) return
+      const path = this.artifactGroupPath(group)
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      const diffElement = this.artifactGroupResolvedDiff(group)
+      const diffData = this.elementData(diffElement)
+      this.diffBusyKey = group.key
+      try {
+        await writeFile(this.sessionId, normalizedPath, diffData.before)
+        this.$set(diffElement, 'data', {
+          ...diffData,
+          applied: false,
+          after: diffData.after,
+          after_preview: diffData.after_preview,
+        })
+        this.onWorkbenchSaved({ path: normalizedPath, content: diffData.before })
+        this.$message.success('已撤销到变更前内容')
+      } catch (error) {
+        this.$message.error(error?.message || '撤销失败')
+      } finally {
+        this.diffBusyKey = ''
+      }
+    },
+    openArtifactGroup(group, mode = 'view') {
+      if (group?.type === 'workflow') {
+        const workflow = this.elementData(group.workflowElement || group.primaryElement)
+        this.$emit('preview-workflow', {
+          ...workflow,
+          name: workflow.name || '任务分配工作流',
+        })
+        return
+      }
+      const path = this.artifactGroupPath(group)
+      const primary = group.primaryElement
+      if (!path || !primary) return
+      const data = this.elementData(primary)
+      this.workbenchArtifact = {
+        ...this.buildWorkbenchPayload(path, primary, data, group),
+        openMode: mode,
+      }
+      this.workbenchVisible = true
+    },
+    canPreviewArtifactGroup(group) {
+      if (this.isSummaryTableGroup(group)) return false
+      if (group.type === 'workflow') return true
+      return ['code', 'webpage', 'table', 'image'].includes(group.type)
+    },
+    canCopyArtifactGroup(group) {
+      if (this.isSummaryTableGroup(group)) return false
+      return Boolean(this.artifactGroupCopyContent(group))
+    },
+    copyArtifactGroup(group) {
+      const content = this.artifactGroupCopyContent(group)
+      if (content) this.copyCode(content)
+    },
+    artifactGroupCodeContent(group) {
+      const path = this.artifactGroupPath(group)
+      const cached = path ? this.artifactPreviewCache[path]?.text : ''
+      return cached || this.elementContent(group.codeElement || group.webpageElement || group.primaryElement)
+    },
+    isArtifactPlaceholderText(group, text) {
+      const trimmed = String(text || '').trim()
+      if (!trimmed) return true
+      const name = String(this.artifactGroupName(group) || '').trim()
+      const subtitle = String(this.artifactGroupSubtitle(group) || '').trim()
+      return trimmed === name || trimmed === subtitle
+    },
+    artifactGroupCopyContent(group) {
+      if (group?.type === 'workflow') {
+        return this.workflowRawJson(group)
+      }
+      const diffElement = this.artifactGroupResolvedDiff(group)
+      if (diffElement) return this.diffText(diffElement)
+      return this.artifactGroupCodeContent(group)
+    },
+    workflowRawJson(group) {
+      const data = this.elementData(group?.workflowElement || group?.primaryElement)
+      const raw = data.raw_plan || data.plan || data
+      try {
+        return JSON.stringify(raw, null, 2)
+      } catch (error) {
+        return String(raw || '')
+      }
+    },
+    artifactGroupTableHeaders(group) {
+      if (group.tableElement) return this.tableHeaders(group.tableElement)
+      if (/\.csv$/i.test(this.artifactGroupPath(group))) {
+        const text = this.artifactGroupCodeContent(group)
+        if (this.isArtifactPlaceholderText(group, text)) return []
+        return this.parseCsvContent(text).headers
+      }
+      return []
+    },
+    artifactGroupTableRows(group) {
+      if (group.tableElement) return this.normalizeTable(group.tableElement)
+      if (/\.csv$/i.test(this.artifactGroupPath(group))) {
+        const text = this.artifactGroupCodeContent(group)
+        if (this.isArtifactPlaceholderText(group, text)) return []
+        return this.parseCsvContent(text).rows
+      }
+      return []
+    },
+    artifactGroupTableRowCount(group) {
+      return this.artifactGroupTableRows(group).length
+    },
+    hasUsefulArtifactPreview(group) {
+      const path = this.artifactGroupPath(group)
+      if (!path) return false
+      if (group.type === 'table') {
+        const text = this.artifactGroupCodeContent(group)
+        if (this.isArtifactPlaceholderText(group, text)) return false
+        return this.artifactGroupTableHeaders(group).length > 0
+      }
+      if (group.type === 'webpage') {
+        return Boolean(this.webpagePreviewSrc(group))
+      }
+      if (!['code', 'text'].includes(group.type)) return true
+      const text = this.artifactGroupCodeContent(group)
+      return !this.isArtifactPlaceholderText(group, text)
+    },
+    webpagePreviewSrc(group) {
+      const path = this.artifactGroupPath(group)
+      if (path && this.sessionId) {
+        return this.appendVersionQuery(
+          getWorkspaceFileUrl(this.sessionId, path),
+          this.elementData(group.webpageElement || group.primaryElement)._htmlVersion,
+        )
+      }
+      return this.webpageSrc(group.webpageElement || group.primaryElement)
+    },
+    isArtifactGroupPreviewLoading(group) {
+      const path = this.artifactGroupPath(group)
+      return Boolean(path && this.artifactPreviewLoading[path])
+    },
+    ensureVisibleArtifactPreviews() {
+      this.artifactGroups.forEach(group => {
+        if (this.isSummaryTableGroup(group)) return
+        if (this.isArtifactGroupExpanded(group.key, group)) {
+          this.ensureArtifactGroupPreview(group)
+        }
+      })
+    },
+    async ensureArtifactGroupPreview(group) {
+      const path = this.artifactGroupPath(group)
+      if (!path || !this.sessionId) return
+      if (!['code', 'text', 'table', 'webpage'].includes(group.type)) return
+      if (this.hasUsefulArtifactPreview(group)) return
+      if (this.artifactPreviewLoading[path]) return
+      this.$set(this.artifactPreviewLoading, path, true)
+      try {
+        const response = await fetch(getSessionRawFileUrl(this.sessionId, path), { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`Failed to load preview: ${response.status}`)
+        const text = await response.text()
+        this.$set(this.artifactPreviewCache, path, { text })
+      } catch (error) {
+        console.warn('[ArtifactPreview] failed to load raw preview', { path, error })
+      } finally {
+        this.$delete(this.artifactPreviewLoading, path)
+      }
+    },
+    async ensureArtifactGroupMetadata(group) {
+      const path = this.normalizeWorkspacePath(this.artifactGroupPath(group))
+      if (!path || !this.sessionId || this.artifactMetaLoading[path]) return
+      if (this.artifactGroupSize(group) > 0) return
+      this.$set(this.artifactMetaLoading, path, true)
+      try {
+        const res = await getFileTree(this.sessionId, path)
+        const tree = res?.data?.tree || null
+        const size = Number(tree?.size || 0) || 0
+        if (size > 0) this.applyArtifactSize(path, size)
+      } catch (error) {
+        console.warn('[ArtifactMeta] failed to load file metadata', { path, error })
+      } finally {
+        this.$delete(this.artifactMetaLoading, path)
+      }
+    },
+    applyArtifactSize(path, size) {
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      this.artifactElements.forEach(el => {
+        const elementPath = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (elementPath !== normalizedPath) return
+        const data = this.elementData(el)
+        this.$set(el, 'data', {
+          ...data,
+          size,
+          file_size: size,
+          bytes: size,
+        })
+      })
+      if (this.workbenchArtifact && this.normalizeWorkspacePath(this.workbenchArtifact.path) === normalizedPath) {
+        this.workbenchArtifact = {
+          ...this.workbenchArtifact,
+          size,
+        }
+      }
     },
     normalizeDisplayText(text) {
       return String(text || '').replace(/\s+/g, ' ').trim()
@@ -818,13 +1275,21 @@ export default {
       return {}
     },
     tableHeaders(el) {
-      const payload = this.tablePayload(el)
-      return Array.isArray(payload.headers) ? payload.headers.map(h => String(h || '')) : []
+      return this.normalizedTablePayload(el).headers
+    },
+    tableRowCount(el) {
+      return this.normalizedTablePayload(el).rows.length
+    },
+    tablePath(el) {
+      const data = this.elementData(el)
+      return data.path || data.file || this.workspacePathFromContent(this.elementContent(el)) || ''
+    },
+    codePath(el) {
+      const data = this.elementData(el)
+      return data.path || data.file || this.workspacePathFromContent(this.elementContent(el)) || ''
     },
     normalizeTable(el) {
-      const payload = this.tablePayload(el)
-      const headers = this.tableHeaders(el)
-      const rows = Array.isArray(payload.rows) ? payload.rows : []
+      const { headers, rows } = this.normalizedTablePayload(el)
       if (!headers.length) return []
       return rows.map(row => {
         const cells = Array.isArray(row) ? row : headers.map(h => row?.[h])
@@ -834,6 +1299,54 @@ export default {
         })
         return obj
       })
+    },
+    normalizedTablePayload(el) {
+      const payload = this.tablePayload(el)
+      const headers = Array.isArray(payload.headers) ? payload.headers.map(h => String(h || '')) : []
+      const rows = Array.isArray(payload.rows) ? payload.rows : []
+      return this.removeDuplicateIndexColumn(headers, rows)
+    },
+    removeDuplicateIndexColumn(headers, rows) {
+      if (!Array.isArray(headers) || headers.length < 2) return { headers, rows }
+      const normalizedHeaders = headers.map(h => this.normalizeIndexHeaderLabel(h))
+      const isIndexLike = label => ['#', '序号', 'index', 'idx', 'no', 'no.', 'number'].includes(label)
+      if (!(isIndexLike(normalizedHeaders[0]) && isIndexLike(normalizedHeaders[1]))) {
+        return { headers, rows }
+      }
+
+      const materializedRows = rows.map(row => (
+        Array.isArray(row) ? row.slice() : headers.map(h => row?.[h])
+      ))
+      if (!materializedRows.length) return { headers, rows }
+
+      const sameSequence = materializedRows.every((cells, index) => {
+        const left = String(cells?.[0] ?? '').trim()
+        const right = String(cells?.[1] ?? '').trim()
+        const expected = String(index + 1)
+        return left && right && left === right && left === expected
+      })
+      if (!sameSequence) return { headers, rows }
+
+      const dropIndex = normalizedHeaders[0] === '序号' ? 1 : 0
+      return {
+        headers: headers.filter((_, index) => index !== dropIndex),
+        rows: materializedRows.map(cells => cells.filter((_, index) => index !== dropIndex)),
+      }
+    },
+    normalizeIndexHeaderLabel(label) {
+      const text = String(label || '').trim().toLowerCase()
+      if (!text) return ''
+      if (text === '#') return '#'
+      if (['序号', '序列', '编号'].includes(text)) return '序号'
+      if (['index', 'idx'].includes(text)) return 'index'
+      if (['no', 'no.', 'number'].includes(text)) return 'no'
+      return text
+    },
+    shouldShowSummaryIndexColumn(group) {
+      const firstHeader = this.artifactGroupTableHeaders(group)[0] || ''
+      return !['#', '序号', 'index', 'idx', 'no', 'no.', 'number'].includes(
+        this.normalizeIndexHeaderLabel(firstHeader)
+      )
     },
     elementData(el) {
       return el?.data || {}
@@ -851,16 +1364,34 @@ export default {
       const fenceCount = (content.match(/```/g) || []).length
       return fileDumpCount >= 1 || fenceCount >= 4
     },
-    normalizeElementForPreview(el) {
-      return {
-        ...this.elementData(el),
-        content: this.elementContent(el),
-      }
-    },
     imageSrc(el) {
       const data = this.elementData(el)
       const candidate = data.url || data.src || data.path || data.file || data.name || this.elementContent(el)
-      return this.resolveFileUrl(candidate)
+      return this.appendVersionQuery(this.resolveFileUrl(candidate), data._imageVersion)
+    },
+    appendVersionQuery(url, version) {
+      if (!url || !version || /^data:|^blob:/i.test(String(url))) return url
+      return `${url}${String(url).includes('?') ? '&' : '?'}v=${encodeURIComponent(version)}`
+    },
+    pathBasename(path) {
+      const normalized = String(path || '').replace(/\\/g, '/')
+      if (!normalized) return ''
+      return normalized.split('/').filter(Boolean).pop() || ''
+    },
+    webpagePath(el) {
+      const data = this.elementData(el)
+      return data.path || data.file || this.workspacePathFromContent(this.elementContent(el)) || ''
+    },
+    webpageSrc(el) {
+      const path = this.webpagePath(el)
+      if (path && this.sessionId) {
+        return getWorkspaceFileUrl(this.sessionId, this.normalizeWorkspacePath(path))
+      }
+      return this.resolveFileUrl(path)
+    },
+    isWorkbenchPreviewingPath(path) {
+      if (!this.workbenchVisible || !this.workbenchArtifact?.path) return false
+      return this.normalizeWorkspacePath(path) === this.normalizeWorkspacePath(this.workbenchArtifact.path)
     },
     imagePath(el) {
       const data = this.elementData(el)
@@ -881,11 +1412,6 @@ export default {
         return `/api/sandbox/sessions/${encodeURIComponent(this.sessionId)}/files/raw?path=${encodeURIComponent(path)}`
       }
       return text
-    },
-    previewImage(url) {
-      if (!url) return
-      this.previewImageUrl = url
-      this.imagePreviewVisible = true
     },
     async copyCode(content) {
       try {
@@ -921,6 +1447,46 @@ export default {
       }
       return size.toFixed(1) + ' ' + units[i]
     },
+    diffText(el) {
+      const data = this.elementData(el)
+      return data.diff_text || data.data?.diff_text || this.elementContent(el) || ''
+    },
+    diffPath(el) {
+      const data = this.elementData(el)
+      return data.path || data.file || data.data?.path || data.data?.file || this.workspacePathFromContent(this.diffText(el)) || ''
+    },
+    diffFilename(el) {
+      const data = this.elementData(el)
+      if (data.filename || data.data?.filename) return data.filename || data.data?.filename
+      const path = this.diffPath(el)
+      if (!path) return ''
+      const normalized = String(path).replace(/\\/g, '/')
+      return normalized.split('/').filter(Boolean).pop() || normalized
+    },
+    diffAdditions(el) {
+      const data = this.elementData(el)
+      return Number(data?.diff_stat?.additions || data?.data?.diff_stat?.additions || 0)
+    },
+    diffDeletions(el) {
+      const data = this.elementData(el)
+      return Number(data?.diff_stat?.deletions || data?.data?.diff_stat?.deletions || 0)
+    },
+    looksLikeDiffElement(el) {
+      if (!el) return false
+      if (el.type === 'diff') return true
+      const data = this.elementData(el)
+      return Boolean(
+        data.diff_text
+        || data.data?.diff_text
+        || data.diff_stat
+        || data.data?.diff_stat
+        || typeof data.before === 'string'
+        || typeof data.data?.before === 'string'
+        || typeof data.after === 'string'
+        || typeof data.data?.after === 'string'
+      )
+    },
+
     serviceInfo(el) {
       const data = this.elementData(el)
       const nested = data.service || data.data || {}
@@ -1055,18 +1621,318 @@ export default {
       if (/\.(css|js|ts|tsx|jsx|json|py|java|go|rs)$/.test(value)) return 'el-icon-tickets'
       return 'el-icon-folder-opened'
     },
-    openFileElement(data) {
+    openFileElement(data, element = null) {
       if (!data) return
       const path = data.path || data.file || this.pathFromUrl(data.url) || this.pathFromUrl(data.src) || this.workspacePathFromContent(data.content) || data.name
-      this.openFilePath(path)
+      this.openFilePath(path, element || data)
     },
-    openFilePath(path) {
-      this.$emit('open-file', { path: this.normalizeWorkspacePath(path) })
+    openArtifactElement(data, element = null) {
+      if (!data) return
+      const path = data.path || data.file || this.pathFromUrl(data.url) || this.pathFromUrl(data.src) || this.workspacePathFromContent(data.content) || data.name
+      this.openArtifactPath(path, element || data)
+    },
+    openArtifactPath(path, element = null) {
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      if (!normalizedPath) return
+      const related = this.findRelatedArtifactElements(normalizedPath, element)
+      const primaryElement = related.codeElement || related.tableElement || related.webpageElement || related.imageElement || related.fileElement || related.diffElement || element
+      const data = primaryElement ? this.elementData(primaryElement) : {}
+      this.workbenchArtifact = this.buildWorkbenchPayload(normalizedPath, primaryElement, data, related)
+      this.workbenchVisible = true
+    },
+    emitOpenFilePath(path) {
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      if (!normalizedPath) return
+      this.$emit('open-file', { path: normalizedPath })
+    },
+    openFilePath(path, element = null) {
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      const related = this.findRelatedArtifactElements(normalizedPath, element)
+      const primaryElement = related.codeElement || related.tableElement || related.webpageElement || related.imageElement || related.fileElement || related.diffElement || element
+      const data = primaryElement ? this.elementData(primaryElement) : {}
+      this.$emit('open-file', this.buildWorkbenchPayload(normalizedPath, primaryElement, data, related))
+    },
+    buildWorkbenchPayload(normalizedPath, element, data = {}, related = null) {
+      const context = related || this.findRelatedArtifactElements(normalizedPath, element)
+      const primaryType = element?.type || context.codeElement?.type || context.tableElement?.type || context.webpageElement?.type || context.imageElement?.type || context.fileElement?.type || context.diffElement?.type || ''
+      const type = primaryType === 'file' ? this.inferWorkbenchTypeFromContext(context, normalizedPath) : primaryType
+      const payload = {
+        path: normalizedPath,
+        type,
+        name: data.name || data.filename || normalizedPath.split('/').pop() || '',
+        diffElement: context.diffElement || null,
+        diffMap: this.buildWorkbenchDiffMap(),
+        fileMap: this.buildWorkbenchFileMap(),
+      }
+      if ((type === 'code' || type === 'text') && context.codeElement) {
+        payload.codeContent = this.elementContent(context.codeElement)
+      }
+      if (type === 'table' && context.tableElement) {
+        payload.tableHeaders = this.tableHeaders(context.tableElement)
+        payload.tableRows = this.normalizeTable(context.tableElement)
+      }
+      if (type === 'image' && context.imageElement) {
+        payload.imageUrl = this.imageSrc(context.imageElement)
+      }
+      if (type === 'webpage') {
+        payload.codeContent = this.elementContent(context.webpageElement || element)
+        payload.previewUrl = this.webpagePreviewSrc({
+          ...context,
+          primaryElement: element,
+          path: normalizedPath,
+        })
+      }
+      return payload
+    },
+    buildWorkbenchDiffMap() {
+      const map = {}
+      ;(this.artifactElements || []).forEach(el => {
+        if (!this.looksLikeDiffElement(el)) return
+        const path = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (!path || map[path]) return
+        map[path] = el
+      })
+      return map
+    },
+    buildWorkbenchFileMap() {
+      const map = {}
+      ;(this.artifactElements || []).forEach(el => {
+        if (!['file', 'image', 'code', 'webpage', 'table'].includes(el?.type)) return
+        const path = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (!path || map[path]) return
+        map[path] = true
+      })
+      return map
+    },
+    inferWorkbenchTypeFromContext(context, normalizedPath) {
+      if (context.codeElement) return 'code'
+      if (context.tableElement) return 'table'
+      if (context.webpageElement) return 'webpage'
+      if (context.imageElement) return 'image'
+      if (/\.csv$/i.test(normalizedPath)) return 'table'
+      if (/\.(html?)$/i.test(normalizedPath)) return 'webpage'
+      if (/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(normalizedPath)) return 'image'
+      if (/\.(css|scss|less|js|jsx|ts|tsx|py|md|sql|json|xml|yaml|yml|toml|vue|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart)$/i.test(normalizedPath)) return 'code'
+      if (/\.(txt|log)$/i.test(normalizedPath)) return 'text'
+      return 'file'
+    },
+    findRelatedArtifactElements(normalizedPath, seedElement = null) {
+      const result = {
+        codeElement: null,
+        tableElement: null,
+        webpageElement: null,
+        imageElement: null,
+        fileElement: null,
+        diffElement: null,
+      }
+      const targetPath = this.normalizeWorkspacePath(normalizedPath)
+      const elements = this.artifactElements
+      if (seedElement) {
+        if (this.looksLikeDiffElement(seedElement)) result.diffElement = seedElement
+        if (seedElement.type === 'file') result.fileElement = seedElement
+        if (seedElement.type === 'image') result.imageElement = seedElement
+        if (seedElement.type === 'table') result.tableElement = seedElement
+        if (seedElement.type === 'webpage') result.webpageElement = seedElement
+        if (seedElement.type === 'code' || seedElement.type === 'text') result.codeElement = seedElement
+      }
+      elements.forEach(el => {
+        const elPath = this.elementWorkspacePath(el)
+        if (!elPath || this.normalizeWorkspacePath(elPath) !== targetPath) return
+        if (this.looksLikeDiffElement(el) && !result.diffElement) result.diffElement = el
+        if (el.type === 'file' && !result.fileElement) result.fileElement = el
+        if (el.type === 'image' && !result.imageElement) result.imageElement = el
+        if (el.type === 'table' && !result.tableElement) result.tableElement = el
+        if (el.type === 'webpage' && !result.webpageElement) result.webpageElement = el
+        if ((el.type === 'code' || el.type === 'text') && !result.codeElement) result.codeElement = el
+      })
+      return result
+    },
+    elementWorkspacePath(el) {
+      if (!el) return ''
+      if (el.type === 'table') return this.tablePath(el)
+      if (el.type === 'webpage') return this.webpagePath(el)
+      if (el.type === 'image') return this.imagePath(el)
+      if (this.looksLikeDiffElement(el)) return this.diffPath(el)
+      const data = this.elementData(el)
+      return data.path || data.file || data.data?.path || data.data?.file || this.pathFromUrl(data.url) || this.pathFromUrl(data.src) || this.workspacePathFromContent(this.elementContent(el)) || ''
     },
     normalizeWorkspacePath(path) {
       if (!path) return ''
       const clean = String(path).replace(/\\/g, '/').replace(/^\/+/, '')
       return clean.startsWith('workspace/') ? `/${clean}` : `/workspace/${clean}`
+    },
+    estimateContentSize(content) {
+      if (typeof content !== 'string' || !content) return 0
+      if (content.startsWith('data:image/')) {
+        const base64 = content.split(',')[1] || ''
+        return Math.max(0, Math.floor((base64.length * 3) / 4))
+      }
+      if (typeof TextEncoder !== 'undefined') {
+        return new TextEncoder().encode(content).length
+      }
+      return unescape(encodeURIComponent(content)).length
+    },
+    onWorkbenchSaved({ path, content }) {
+      if (!path) return
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      const isImageContent = typeof content === 'string' && content.startsWith('data:image/')
+      const isCsvPath = /\.csv$/i.test(normalizedPath)
+      const isHtmlPath = /\.(html?|svg)$/i.test(normalizedPath)
+      const estimatedSize = this.estimateContentSize(content)
+      if (typeof content === 'string' && !content.startsWith('data:image/')) {
+        this.$set(this.artifactPreviewCache, normalizedPath, { text: content })
+      }
+      if (this.workbenchArtifact && this.workbenchArtifact.path === normalizedPath) {
+        const next = { ...this.workbenchArtifact }
+        if (isImageContent) {
+          next.imageUrl = content
+          next._imageVersion = Date.now()
+        } else if (isCsvPath) {
+          const { headers, rows } = this.parseCsvContent(content)
+          next.tableHeaders = headers
+          next.tableRows = rows
+        } else {
+          next.codeContent = content
+          if (isHtmlPath) {
+            next._htmlVersion = Date.now()
+          }
+        }
+        if (estimatedSize > 0) next.size = estimatedSize
+        this.workbenchArtifact = next
+      }
+      this.artifactElements.forEach(el => {
+        const elementPath = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (elementPath !== normalizedPath) return
+        const data = this.elementData(el)
+        const nextData = { ...data }
+        if (estimatedSize > 0) {
+          nextData.size = estimatedSize
+          nextData.file_size = estimatedSize
+          nextData.bytes = estimatedSize
+        }
+        if (isImageContent && (el.type === 'image' || el.type === 'file' || this.isImageElement(el))) {
+          this.$set(el, 'data', { ...nextData, url: content, src: content, _imageVersion: Date.now() })
+          return
+        }
+        if (isCsvPath && (el.type === 'table' || el.type === 'file')) {
+          const { headers, rows } = this.parseCsvContent(content)
+          this.$set(el, 'content', content)
+          this.$set(el, 'data', { ...nextData, headers, rows, content })
+          return
+        }
+        if (el.type === 'code' || el.type === 'text' || el.type === 'webpage' || el.type === 'file') {
+          const patch = (el.type === 'webpage' || (el.type === 'file' && isHtmlPath))
+            ? { ...nextData, content, _htmlVersion: Date.now() }
+            : { ...nextData, content }
+          this.$set(el, 'content', content)
+          this.$set(el, 'data', patch)
+          return
+        }
+      })
+    },
+    onWorkbenchDiffApplied({ path, content }) {
+      if (!path) return
+      const normalizedPath = this.normalizeWorkspacePath(path)
+      this.artifactElements.forEach(el => {
+        const elementPath = this.normalizeWorkspacePath(this.elementWorkspacePath(el))
+        if (elementPath !== normalizedPath || el.type !== 'diff') return
+        const data = this.elementData(el)
+        this.$set(el, 'data', { ...data, applied: true, after: content, after_preview: content })
+      })
+      this.onWorkbenchSaved({ path: normalizedPath, content })
+    },
+    parseCsvContent(text) {
+      const source = String(text || '').replace(/^\uFEFF/, '')
+      const delimiter = this.detectCsvDelimiter(source)
+      const rows = []
+      let row = []
+      let value = ''
+      let inQuotes = false
+      for (let i = 0; i < source.length; i += 1) {
+        const ch = source[i]
+        const next = source[i + 1]
+        if (inQuotes) {
+          if (ch === '"' && next === '"') {
+            value += '"'
+            i += 1
+          } else if (ch === '"') {
+            inQuotes = false
+          } else {
+            value += ch
+          }
+          continue
+        }
+        if (ch === '"') {
+          inQuotes = true
+        } else if (ch === delimiter) {
+          row.push(value)
+          value = ''
+        } else if (ch === '\n') {
+          row.push(value.replace(/\r$/, ''))
+          if (row.some(cell => String(cell).length > 0)) {
+            rows.push(row)
+          }
+          row = []
+          value = ''
+        } else {
+          value += ch
+        }
+      }
+      row.push(value.replace(/\r$/, ''))
+      if (row.some(cell => String(cell).length > 0)) {
+        rows.push(row)
+      }
+      const normalizedRows = rows
+        .map(cells => cells.map(cell => String(cell == null ? '' : cell).trim()))
+        .filter(cells => cells.some(cell => cell !== ''))
+      const maxCols = normalizedRows.reduce((max, cells) => Math.max(max, cells.length), 0)
+      const paddedRows = normalizedRows.map(cells => {
+        const next = cells.slice()
+        while (next.length < maxCols) next.push('')
+        return next
+      })
+      const headers = (paddedRows[0] || Array.from({ length: maxCols }, (_, index) => `列${index + 1}`))
+        .map((header, index) => String(header || '').trim() || `列${index + 1}`)
+      const body = paddedRows.slice(1).map(cells => {
+        const item = {}
+        headers.forEach((header, index) => {
+          item[`col${index}`] = cells[index] || ''
+        })
+        return item
+      })
+      return { headers, rows: body }
+    },
+    detectCsvDelimiter(text) {
+      const sampleLines = String(text || '')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .slice(0, 5)
+      const candidates = [',', ';', '\t']
+      const score = delimiter => sampleLines.reduce((total, line) => {
+        let count = 0
+        let inQuotes = false
+        for (let i = 0; i < line.length; i += 1) {
+          const ch = line[i]
+          const next = line[i + 1]
+          if (ch === '"') {
+            if (inQuotes && next === '"') {
+              i += 1
+            } else {
+              inQuotes = !inQuotes
+            }
+            continue
+          }
+          if (!inQuotes && ch === delimiter) count += 1
+        }
+        return total + count
+      }, 0)
+      return candidates.reduce((best, delimiter) => {
+        const nextScore = score(delimiter)
+        if (nextScore > best.score) return { delimiter, score: nextScore }
+        return best
+      }, { delimiter: ',', score: -1 }).delimiter
     },
     pathFromUrl(url) {
       if (!url) return ''
@@ -1550,8 +2416,8 @@ export default {
 .code-body {
   padding: 12px;
   margin: 0;
-  background: #111827;
-  color: #e5e7eb;
+  background: #f3f6fb;
+  color: #111827;
   font-size: 12px;
   line-height: 1.5;
   text-align: left;
@@ -1559,6 +2425,52 @@ export default {
   overflow-x: auto;
   max-height: 360px;
   overflow-y: auto;
+  border: 1px solid #dde6f2;
+}
+
+.code-body,
+.table-scroll,
+.raw-output,
+.service-log-section pre,
+.service-preview-frame,
+.webpage-frame {
+  scrollbar-width: thin;
+  scrollbar-color: #c7d3e4 transparent;
+}
+
+.code-body::-webkit-scrollbar,
+.table-scroll::-webkit-scrollbar,
+.raw-output::-webkit-scrollbar,
+.service-log-section pre::-webkit-scrollbar,
+.service-preview-frame::-webkit-scrollbar,
+.webpage-frame::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+.code-body::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-track,
+.raw-output::-webkit-scrollbar-track,
+.service-log-section pre::-webkit-scrollbar-track,
+.service-preview-frame::-webkit-scrollbar-track,
+.webpage-frame::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.code-body::-webkit-scrollbar-thumb,
+.table-scroll::-webkit-scrollbar-thumb,
+.raw-output::-webkit-scrollbar-thumb,
+.service-log-section pre::-webkit-scrollbar-thumb,
+.service-preview-frame::-webkit-scrollbar-thumb,
+.webpage-frame::-webkit-scrollbar-thumb {
+  background: #c7d3e4;
+  border-radius: 999px;
+}
+
+.code-body-soft {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: #111827;
 }
 
 .code-body code {
@@ -1573,6 +2485,176 @@ export default {
   border-radius: 8px;
   background: #fbfdff;
   overflow: hidden;
+}
+
+.artifact-group {
+  margin-bottom: 14px;
+}
+
+.artifact-group:last-child {
+  margin-bottom: 0;
+}
+
+.artifact-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.preview-toggle-chip {
+  border: 1px solid #d7dfeb;
+  background: #ffffff;
+  color: #475569;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.preview-toggle-chip:hover {
+  background: #f8fbff;
+  border-color: #bcd2f7;
+}
+
+.preview-toggle-box {
+  width: 16px;
+  height: 16px;
+  border: 1px solid #d7dfeb;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #2563eb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.preview-toggle-box.checked {
+  border-color: #9fc7ff;
+  background: #eff6ff;
+}
+
+.preview-toggle-box i {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.artifact-file-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.artifact-file-mainline {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+
+.artifact-file-row:hover {
+  border-color: #9fc7ff;
+  background: #f8fbff;
+  box-shadow: 0 2px 8px rgba(64, 128, 255, 0.08);
+}
+
+.artifact-toggle-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.artifact-toggle-btn:hover {
+  background: #e6edf5;
+}
+
+.artifact-toggle-spacer {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.artifact-kind-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #5b6b8c;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.file-size-inline-text {
+  color: #7b8aa5;
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.artifact-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.artifact-detail-pane {
+  margin-top: 8px;
+  margin-left: 18px;
+}
+
+.artifact-detail-card {
+  border-radius: 9px;
+  background: #f9fbff;
+}
+
+.artifact-inline-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 16px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.summary-file-row {
+  border-style: dashed;
+  background: #fcfdff;
+}
+
+.artifact-summary-wrap {
+  padding: 4px 0 2px;
+  background: #ffffff;
+}
+
+.artifact-summary-title {
+  padding: 6px 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #334155;
+  text-align: center;
 }
 
 .artifact-header {
@@ -1626,6 +2708,41 @@ export default {
   padding: 10px;
 }
 
+.table-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 0;
+}
+
+.table-path-btn {
+  max-width: calc(100% - 72px);
+}
+
+.table-meta-summary {
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.summary-table-meta-row {
+  padding: 0 0 8px;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.summary-table-scroll {
+  padding: 0;
+}
+
+.summary-table-plain {
+  padding: 0;
+}
+
+.summary-table-plain :deep(.el-table th.el-table__cell) {
+  background: #eef6ff;
+}
+
 .table-block :deep(.el-table) {
   border-radius: 6px;
   overflow: hidden;
@@ -1640,6 +2757,40 @@ export default {
 .image-frame {
   padding: 10px;
   background: #ffffff;
+}
+
+.artifact-image-compact {
+  max-height: 280px;
+}
+
+.webpage-path {
+  padding: 8px 10px 0;
+}
+
+.webpage-preview {
+  padding: 10px;
+  background: #ffffff;
+}
+
+.webpage-frame {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.webpage-preview-paused {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  border: 1px dashed #d0d7e2;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #6b7280;
+  font-size: 13px;
 }
 
 .artifact-image {
@@ -1698,7 +2849,46 @@ export default {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
+  flex: 1;
+}
+
+.file-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.file-info-stack {
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.file-attr-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 130px;
+  flex: 0 0 auto;
+  margin-left: 30px;
+  margin-right: auto;
+  flex-shrink: 0;
+}
+
+.file-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .file-link-btn {
@@ -1706,8 +2896,9 @@ export default {
   background: transparent;
   padding: 0;
   color: #1e293b;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 700;
   cursor: pointer;
   text-align: left;
   overflow: hidden;
@@ -1716,17 +2907,157 @@ export default {
 }
 
 .file-path {
-  color: #94a3b8;
-  font-size: 11px;
+  color: #8fa0b7;
+  font-size: 12px;
+  line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.file-meta-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.file-diff-inline-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eef2f7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.file-diff-inline-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.file-diff-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.file-diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-diff-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text) {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  min-height: auto;
+  line-height: 1.2;
+  border: 1px solid #d8e6ff;
+  border-radius: 999px;
+  background: #f8fbff;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text:hover),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text:hover) {
+  color: #1d4ed8;
+  border-color: #bfd5ff;
+  background: #eef5ff;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text + .artifact-action-btn.el-button--text),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text + .artifact-action-btn.el-button--text) {
+  margin-left: 0;
+}
+
+.file-diff-note {
+  color: #7b8aa5;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.file-meta-line .file-path {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .file-size {
   font-size: 11px;
   color: #94a3b8;
-  margin-left: auto;
+}
+
+.file-size-inline {
+  flex-shrink: 0;
+}
+
+.artifact-attached-diff {
+  margin-top: 12px;
+  padding-top: 4px;
+}
+
+.diff-card {
+  padding: 10px 12px;
+  border: 1px solid #dbe7f3;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f5f9ff 100%);
+}
+
+.diff-path {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  word-break: break-all;
+}
+
+.diff-body {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-stat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.diff-add {
+  background: #e8f8ee;
+  color: #1f8f55;
+}
+
+.diff-del {
+  background: #fff0f0;
+  color: #d14343;
 }
 
 .service-card {
@@ -2166,62 +3497,6 @@ export default {
   margin-top: 4px;
 }
 
-/* Code Preview Dialog */
-.code-preview-dialog :deep(.el-dialog__body) {
-  padding: 16px 20px;
-}
-
-.preview-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.preview-filename {
-  font-size: 13px;
-  color: #1e293b;
-  font-weight: 500;
-}
-
-.preview-code {
-  margin: 0;
-  padding: 16px;
-  background: #1e293b;
-  color: #e2e8f0;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.5;
-  overflow-x: auto;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
-.preview-code code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  white-space: pre;
-}
-
-.image-preview-dialog :deep(.el-dialog__body) {
-  padding: 12px;
-  background: #0f172a;
-}
-
-.image-preview-body {
-  min-height: 60vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.preview-image {
-  max-width: 100%;
-  max-height: 76vh;
-  object-fit: contain;
-}
-
 .service-preview-dialog :deep(.el-dialog) {
   border-radius: 18px;
   overflow: hidden;
@@ -2312,13 +3587,4 @@ export default {
   white-space: pre-wrap;
 }
 
-.message-bubble :deep(pre),
-.message-bubble :deep(pre code),
-.message-bubble .code-body,
-.message-bubble .code-body code,
-.message-bubble .raw-output,
-.service-log-section pre {
-  text-align: left;
-  white-space: pre;
-}
 </style>

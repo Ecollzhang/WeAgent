@@ -206,6 +206,7 @@
               :is-own="isOwnMessage(message)"
               :server-url="serverUrl"
               @open-file="handleOpenMessageFile"
+              @preview-artifact="openArtifactPreview"
               @preview-workflow="openWorkflowPreview"
             />
           </div>
@@ -572,63 +573,6 @@
       </section>
     </div>
 
-    <div v-if="workspaceVisible" class="desktop-modal-backdrop" @click.self="workspaceVisible = false">
-      <section class="desktop-modal workspace-modal">
-        <header class="desktop-modal-header">
-          <div>
-            <h2>容器文件夹</h2>
-            <p>{{ fileTreeRoot }}</p>
-          </div>
-          <button class="icon-close" @click="workspaceVisible = false"><i class="el-icon-close"></i></button>
-        </header>
-        <div class="workspace-browser">
-          <aside class="workspace-tree">
-            <div class="workspace-tree-actions">
-              <button @click="switchFileScope('workspace')">全部</button>
-              <button @click="switchFileScope('shared')">公共</button>
-              <button
-                v-for="agent in currentSessionAgents"
-                :key="agent.agent_id"
-                @click="switchFileScope(`agent:${agent.agent_id}`)"
-              >{{ mentionName(agent) }}</button>
-            </div>
-            <button class="workspace-refresh" @click="loadFileTree(fileTreeRoot)">
-              <i class="el-icon-refresh"></i>
-              刷新
-            </button>
-            <div v-if="previewLoading" class="mini-state"><i class="el-icon-loading"></i> 正在读取...</div>
-            <div v-else class="file-tree-list">
-              <button
-                v-for="node in flatFileTree"
-                :key="node.path"
-                class="file-tree-row"
-                :style="{ paddingLeft: `${8 + node.depth * 16}px` }"
-                @click="handleFileNodeClick(node)"
-              >
-                <i :class="node.type === 'directory' ? 'el-icon-folder' : getFileIcon(node.path)"></i>
-                <span>{{ node.name }}</span>
-              </button>
-            </div>
-          </aside>
-          <section class="workspace-preview">
-            <div v-if="selectedFilePath" class="file-preview-toolbar">
-              <span>{{ selectedFilePath }}</span>
-              <button @click="copyFilePath(selectedFilePath)">复制路径</button>
-              <button @click="openWorkspaceFile(selectedFilePath)">打开</button>
-            </div>
-            <div v-if="!selectedFilePath" class="file-preview-empty">
-              <i class="el-icon-folder-opened"></i>
-              <span>选择左侧文件查看内容</span>
-            </div>
-            <iframe v-else-if="previewType === 'html' || previewType === 'pdf'" class="file-preview-frame" :src="previewUrl"></iframe>
-            <div v-else-if="previewType === 'image'" class="file-preview-image-wrap">
-              <img :src="previewUrl" class="file-preview-image" />
-            </div>
-            <pre v-else class="file-preview-code">{{ previewContent }}</pre>
-          </section>
-        </div>
-      </section>
-    </div>
 
     <div v-if="showCreate" class="desktop-modal-backdrop" @click.self="cancelCreate">
       <section class="desktop-modal create-agent-dialog">
@@ -686,6 +630,15 @@
         </footer>
       </section>
     </div>
+
+    <ArtifactWorkbench
+      :visible.sync="artifactWorkbenchVisible"
+      :session-id="currentSessionId"
+      :initial-root="artifactWorkbenchRoot"
+      :initial-path="artifactWorkbenchPath"
+      :initial-agent-id="artifactWorkbenchAgentId"
+      :initial-artifact="artifactWorkbenchArtifact"
+    />
   </main>
 </template>
 
@@ -695,7 +648,6 @@ import {
   deleteConversation,
   deleteConversationAttachment,
   getConversationAttachments,
-  getAgentFileUrl,
   getAgents,
   getConversations,
   getFileTree,
@@ -714,11 +666,14 @@ import {
 import { backendUrl, getServerUrl } from '../services/config'
 import { clearAuth } from '../services/session'
 import socketClient from '../services/socket'
+import { getAgentFileUrl } from '../services/sandbox'
+import ArtifactWorkbench from '../components/ArtifactWorkbench/index.vue'
 import MessageBubble from '../components/MessageBubble.vue'
 
 export default {
   name: 'Conversations',
   components: {
+    ArtifactWorkbench,
     MessageBubble,
   },
   data() {
@@ -778,15 +733,11 @@ export default {
       attachments: [],
       selectedUploadFile: null,
       attachmentAgentId: '',
-      workspaceVisible: false,
-      previewLoading: false,
-      fileTreeData: [],
-      fileTreeRoot: '/workspace',
-      fileScope: 'workspace',
-      selectedFilePath: '',
-      previewAgentId: '',
-      previewContent: '',
-      previewType: 'text',
+      artifactWorkbenchVisible: false,
+      artifactWorkbenchArtifact: null,
+      artifactWorkbenchPath: '',
+      artifactWorkbenchRoot: '/workspace',
+      artifactWorkbenchAgentId: '',
       previewUrl: '',
       tabs: [
         { key: 'chat', label: '对话' },
@@ -865,6 +816,7 @@ export default {
         const elements = Array.isArray(message.elements) ? message.elements : []
         elements.forEach(element => {
           if (!element || !['code', 'table', 'image', 'file', 'service'].includes(element.type)) return
+          if (this.isModeratorPlanArtifact(element)) return
           const data = this.elementData(element)
           const content = this.elementContent(element)
           const key = [
@@ -998,16 +950,6 @@ export default {
     },
     currentSessionId() {
       return (this.currentConversation && (this.currentConversation.sandbox_session_id || this.currentConversation.id)) || ''
-    },
-    flatFileTree() {
-      const rows = []
-      const visit = (node, depth = 0) => {
-        if (!node) return
-        rows.push({ ...node, depth })
-        ;(node.children || []).forEach(child => visit(child, depth + 1))
-      }
-      this.fileTreeData.forEach(node => visit(node, 0))
-      return rows
     },
   },
   watch: {
@@ -1907,6 +1849,23 @@ export default {
       if (type === 'service') return 'el-icon-monitor'
       return 'el-icon-document'
     },
+    isModeratorPlanArtifact(element) {
+      if (!element || element.type === 'workflow') return false
+      const data = this.elementData(element)
+      const values = [
+        data.path,
+        data.file_path,
+        data.filePath,
+        data.file,
+        data.url,
+        data.src,
+        data.name,
+        data.filename,
+        data.title,
+        this.elementContent(element),
+      ]
+      return values.some(value => String(value || '').toLowerCase().includes('moderator-plan.json'))
+    },
     artifactTypeLabel(artifact) {
       const map = {
         code: '代码',
@@ -2009,7 +1968,7 @@ export default {
         if (url) window.open(url, '_blank')
         return
       }
-      if (artifact.type === 'table') {
+      if (artifact.type === 'table' || artifact.type === 'code') {
         this.openArtifactPreview(artifact)
         return
       }
@@ -2192,18 +2151,34 @@ export default {
     },
     previewAttachment(file) {
       if (!file || !file.path) return
-      this.previewAgentId = file.agent_id || this.attachmentAgentId || ''
-      this.previewFile(file.path)
+      this.openArtifactWorkbench({
+        path: file.path,
+        root: this.fileRootForPath(file.path),
+        agentId: file.agent_id || this.attachmentAgentId || '',
+        artifact: file,
+      })
+    },
+    openArtifactWorkbench(options = {}) {
+      const path = this.normalizeWorkspaceFilePath(options.path || '')
+      this.artifactWorkbenchVisible = false
+      this.artifactWorkbenchPath = path
+      this.artifactWorkbenchRoot = options.root || (path ? this.fileRootForPath(path) : '/workspace')
+      this.artifactWorkbenchAgentId = options.agentId || options.agent_id || ''
+      this.artifactWorkbenchArtifact = options.artifact || null
+      this.$nextTick(() => {
+        this.artifactWorkbenchVisible = true
+      })
     },
     async handleOpenMessageFile(file) {
       const filePath = this.normalizeWorkspaceFilePath(file && (file.path || file.url || file.raw || file.name))
-      if (!filePath) return
+      if (!filePath && !(file && file.type === 'diff')) return
       const agentId = (file && (file.agent_id || file.agentId)) || this.inferAgentIdFromFilePath(filePath) || ''
-      this.workspaceVisible = true
-      this.previewAgentId = agentId
-      this.fileScope = agentId ? `agent:${agentId}` : 'workspace'
-      await this.loadFileTree(this.fileRootForPath(filePath))
-      await this.previewFile(filePath)
+      this.openArtifactWorkbench({
+        path: filePath,
+        root: filePath ? this.fileRootForPath(filePath) : '/workspace',
+        agentId,
+        artifact: file,
+      })
     },
     normalizeWorkspaceFilePath(value) {
       let path = String(value || '').trim()
@@ -2247,17 +2222,12 @@ export default {
     async handleOpenWorkspace(scope = 'workspace') {
       if (!this.currentConversation) return
       const nextScope = typeof scope === 'string' ? scope : 'workspace'
-      this.workspaceVisible = true
-      this.fileTreeData = []
-      await this.switchFileScope(nextScope)
-    },
-    async switchFileScope(scope) {
-      scope = typeof scope === 'string' ? scope : 'workspace'
       let root = '/workspace'
-      if (scope === 'shared') {
+      let agentId = ''
+      if (nextScope === 'shared') {
         root = '/workspace/shared'
-      } else if (scope && scope.startsWith('agent:')) {
-        const agentId = scope.slice('agent:'.length)
+      } else if (nextScope && nextScope.startsWith('agent:')) {
+        agentId = nextScope.slice('agent:'.length)
         const agent = this.currentSessionAgents.find(item => item.agent_id === agentId)
         root = `/workspace/agents/${(agent && agent.workspace_name) || this.safeWorkspaceName((agent && agent.role) || agentId)}`
       }

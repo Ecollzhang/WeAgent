@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="message-bubble web-message-bubble" :class="{ own: isOwn }">
     <div class="bubble-sender" v-if="message.sender_type === 'agent'">
       <span class="agent-tag">{{ getSenderName() }}</span>
@@ -96,33 +96,54 @@
           </div>
 
           <div
-            v-else-if="el.type === 'image' || (el.type === 'file' && isImageElement(el))"
-            class="artifact-block image-block artifact-openable"
-            @click="openArtifactFile(el)"
-          >
-            <div class="artifact-header">
-              <i class="el-icon-picture-outline"></i>
-              <span>{{ elementData(el).name || elementData(el).alt || elementContent(el) || '图片' }}</span>
-              <span class="artifact-meta">image</span>
-            </div>
-            <div class="image-frame">
-              <img class="artifact-image" :src="imageSrc(el)" :alt="elementData(el).alt || elementData(el).name || ''" />
-            </div>
-          </div>
-
-          <div
-            v-else-if="el.type === 'file'"
+            v-else-if="el.type === 'file' || el.type === 'image'"
             class="artifact-block file-card artifact-openable"
             @click="openArtifactFile(el)"
           >
             <div class="file-icon"><i :class="fileIcon(el)"></i></div>
             <div class="file-main">
               <button type="button" class="file-link-btn" @click.stop="openArtifactFile(el)">
-                {{ elementData(el).name || elementContent(el) }}
+                {{ displayFileName(el) }}
               </button>
               <span class="file-path">{{ elementData(el).path || elementData(el).url || elementContent(el) }}</span>
             </div>
             <span v-if="elementData(el).size" class="file-size">{{ formatFileSize(elementData(el).size) }}</span>
+          </div>
+
+          <div
+            v-else-if="el.type === 'diff'"
+            class="artifact-block diff-card artifact-openable"
+            @click="openArtifactFile(el)"
+          >
+            <div class="artifact-header">
+              <i class="el-icon-document-checked"></i>
+              <span>{{ elementData(el).filename || elementData(el).path || 'Diff 产物' }}</span>
+              <span class="artifact-meta">diff</span>
+            </div>
+            <div class="diff-summary">
+              <span class="diff-stat add">+{{ (elementData(el).diff_stat && elementData(el).diff_stat.additions) || 0 }}</span>
+              <span class="diff-stat del">-{{ (elementData(el).diff_stat && elementData(el).diff_stat.deletions) || 0 }}</span>
+              <span class="diff-path">{{ elementData(el).path || '点击在工作台打开' }}</span>
+            </div>
+          </div>
+
+          <div
+            v-else-if="el.type === 'workflow'"
+            class="artifact-block file-card artifact-openable"
+            @click="previewWorkflow(el)"
+          >
+            <div class="file-icon"><i class="el-icon-share"></i></div>
+            <div class="file-main">
+              <button type="button" class="file-link-btn" @click.stop="previewWorkflow(el)">
+                {{ elementData(el).name || '任务分配工作流' }}
+              </button>
+              <span class="file-path">{{ workflowSubtitle(el) }}</span>
+              <pre class="workflow-json-preview" @click.stop>{{ workflowRawJson(el) }}</pre>
+            </div>
+            <div class="workflow-actions" @click.stop>
+              <button type="button" class="workflow-preview-btn" @click="copyCode(workflowRawJson(el))">复制</button>
+              <button type="button" class="workflow-preview-btn" @click="previewWorkflow(el)">预览</button>
+            </div>
           </div>
 
           <div v-else-if="el.type === 'service'" class="artifact-block service-card">
@@ -255,7 +276,10 @@ export default {
       return null
     },
     artifactElements() {
-      const artifacts = this.renderedElements.filter(el => ['code', 'table', 'image', 'file', 'service'].includes(el && el.type))
+      const artifacts = this.renderedElements.filter(el => {
+        if (this.isModeratorPlanArtifact(el)) return false
+        return ['code', 'table', 'image', 'file', 'service', 'diff', 'workflow'].includes(el && el.type)
+      })
       const seen = new Set()
       return artifacts.filter(el => {
         const key = this.artifactKey(el)
@@ -293,8 +317,9 @@ export default {
       return Boolean(this.visibleRawOutput)
     },
     executionEvents() {
-      const events = (this.message && this.message.meta && this.message.meta.execution_events)
+      const events = (this.message && this.message.meta && (this.message.meta.execution_events || this.message.meta.events))
         || (this.message && this.message.execution_events)
+        || (this.message && this.message.events)
         || []
       return Array.isArray(events) ? events : []
     },
@@ -330,6 +355,23 @@ export default {
         /["']?parallel_groups["']?\s*:/.test(lowered) ||
         /["']?selected_agents["']?\s*:/.test(lowered)
     },
+    isModeratorPlanArtifact(el) {
+      if (!el || el.type === 'workflow') return false
+      const data = this.elementData(el)
+      const values = [
+        data.path,
+        data.file_path,
+        data.filePath,
+        data.file,
+        data.url,
+        data.src,
+        data.name,
+        data.filename,
+        data.title,
+        this.elementContent(el),
+      ]
+      return values.some(value => String(value || '').toLowerCase().includes('moderator-plan.json'))
+    },
     getSenderName() {
       return (this.message && (this.message.sender_name || this.message.sender_id)) || '智能体'
     },
@@ -337,6 +379,41 @@ export default {
       const data = this.elementData(el)
       if (data.workflow) {
         this.$emit('preview-workflow', data.workflow)
+        return
+      }
+      const payload = this.artifactFilePayload(el)
+      if (payload.path) {
+        this.$emit('open-file', payload)
+      } else {
+        this.$emit('preview-artifact', {
+          id: this.artifactKey(el),
+          type: 'code',
+          data,
+          element: el,
+          message: this.message || {},
+        })
+      }
+    },
+    previewWorkflow(el) {
+      const workflow = this.elementData(el)
+      this.$emit('preview-workflow', {
+        ...workflow,
+        name: workflow.name || '任务分配工作流',
+      })
+    },
+    workflowSubtitle(el) {
+      const data = this.elementData(el)
+      const nodeCount = Array.isArray(data.nodes) ? data.nodes.length : 0
+      const edgeCount = Array.isArray(data.edges) ? data.edges.length : 0
+      return `${nodeCount} 节点 · ${edgeCount} 连线`
+    },
+    workflowRawJson(el) {
+      const data = this.elementData(el)
+      const raw = data.raw_plan || data.plan || data
+      try {
+        return JSON.stringify(raw, null, 2)
+      } catch (error) {
+        return String(raw || '')
       }
     },
     statusLabel(status) {
@@ -513,6 +590,7 @@ export default {
         agent_id: data.agent_id || data.agentId || data.owner_agent_id || data.ownerAgentId || '',
         type: el && el.type ? el.type : 'file',
         data,
+        element: el,
       }
     },
     normalizeArtifactFilePath(value) {
@@ -536,6 +614,12 @@ export default {
     fileNameFromPath(value) {
       const parts = String(value || '').split(/[\\/]/).filter(Boolean)
       return parts.length ? parts[parts.length - 1] : String(value || '')
+    },
+    displayFileName(el) {
+      const data = this.elementData(el)
+      const preferred = data.name || data.filename || data.title || this.elementContent(el)
+      const normalizedPath = data.path || data.file || data.url || preferred
+      return this.fileNameFromPath(preferred) || this.fileNameFromPath(normalizedPath) || '文件'
     },
     artifactKey(el) {
       const data = this.elementData(el)
@@ -628,3 +712,64 @@ export default {
   },
 }
 </script>
+
+<style scoped>
+.workflow-json-preview {
+  width: 100%;
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #dde6f2;
+  border-radius: 8px;
+  background: #f3f6fb;
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  overflow: auto;
+  white-space: pre;
+  scrollbar-width: thin;
+  scrollbar-color: #c7d3e4 transparent;
+}
+
+.workflow-json-preview::-webkit-scrollbar,
+.code-body::-webkit-scrollbar,
+.table-scroll::-webkit-scrollbar,
+.raw-output::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+.workflow-json-preview::-webkit-scrollbar-track,
+.code-body::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-track,
+.raw-output::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.workflow-json-preview::-webkit-scrollbar-thumb,
+.code-body::-webkit-scrollbar-thumb,
+.table-scroll::-webkit-scrollbar-thumb,
+.raw-output::-webkit-scrollbar-thumb {
+  background: #c7d3e4;
+  border-radius: 999px;
+}
+
+.workflow-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.workflow-preview-btn {
+  border: 1px solid #d8e6ff;
+  border-radius: 999px;
+  background: #f8fbff;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+}
+</style>

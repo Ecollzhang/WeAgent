@@ -8,10 +8,12 @@ These endpoints call DockerContainerManager which talks to containers.
 
 import os
 import re
+import time
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from flask import Blueprint, request, jsonify, Response
 import simple_websocket
+from app.services.conversation_service import conversation_service
 
 try:
     from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
@@ -45,6 +47,13 @@ def _mgr():
         from ..host.manager import DockerContainerManager
         _manager = DockerContainerManager()
     return _manager
+
+
+def _with_timing_headers(response, route_name: str, started_at: float):
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    response.headers["X-WeAgent-Route"] = route_name
+    response.headers["X-WeAgent-Elapsed-Ms"] = str(elapsed_ms)
+    return response
 
 
 def _service_proxy_prefix(session_id: str, service_id: str) -> str:
@@ -177,6 +186,13 @@ def _current_user_id_optional() -> str | None:
         return get_jwt_identity()
     except Exception:
         return None
+
+
+def _current_user_id_required() -> str:
+    if not verify_jwt_in_request or not get_jwt_identity:
+        raise RuntimeError("JWT auth not available")
+    verify_jwt_in_request()
+    return get_jwt_identity()
 
 
 def _session_access_allowed(session_id: str, user_id: str | None) -> bool:
@@ -550,35 +566,39 @@ def read_agent_raw_file(session_id: str, agent_id: str):
 @sandbox_bp.route("/sessions/<session_id>/files/tree", methods=["GET"])
 def file_tree(session_id: str):
     """Return the session workspace file tree."""
+    started_at = time.perf_counter()
     root = request.args.get("root", "/workspace")
+    include_hidden = request.args.get("include_hidden", "false").lower() == "true"
+    max_depth = request.args.get("max_depth", 8, type=int)
     try:
         mgr = _mgr()
-        result = mgr.get_file_tree(session_id, root=root)
+        result = mgr.get_file_tree(session_id, root=root, include_hidden=include_hidden, max_depth=max_depth)
         if "error" in result:
-            return jsonify({"code": 400, "data": result, "message": result["error"]}), 400
-        return jsonify({"code": 200, "data": result})
+            return _with_timing_headers(jsonify({"code": 400, "data": result, "message": result["error"]}), "files/tree", started_at), 400
+        return _with_timing_headers(jsonify({"code": 200, "data": result}), "files/tree", started_at)
     except KeyError as e:
-        return jsonify({"code": 404, "message": str(e)}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": str(e)}), "files/tree", started_at), 404
     except Exception as e:
-        return jsonify({"code": 400, "message": str(e)}), 400
+        return _with_timing_headers(jsonify({"code": 400, "message": str(e)}), "files/tree", started_at), 400
 
 
 @sandbox_bp.route("/sessions/<session_id>/files/raw", methods=["GET"])
 def read_session_raw_file(session_id: str):
     """Serve raw workspace file content with proper MIME type."""
+    started_at = time.perf_counter()
     path = request.args.get("path", "")
     if not path:
-        return jsonify({"code": 400, "message": "path query parameter required"}), 400
+        return _with_timing_headers(jsonify({"code": 400, "message": "path query parameter required"}), "files/raw", started_at), 400
     try:
         mgr = _mgr()
         content_bytes, mime_type = mgr.get_raw_file(session_id, path)
-        return Response(content_bytes, mimetype=mime_type)
+        return _with_timing_headers(Response(content_bytes, mimetype=mime_type), "files/raw", started_at)
     except FileNotFoundError:
-        return jsonify({"code": 404, "message": "File not found"}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": "File not found"}), "files/raw", started_at), 404
     except KeyError as e:
-        return jsonify({"code": 404, "message": str(e)}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": str(e)}), "files/raw", started_at), 404
     except Exception as e:
-        return jsonify({"code": 400, "message": str(e)}), 400
+        return _with_timing_headers(jsonify({"code": 400, "message": str(e)}), "files/raw", started_at), 400
 
 
 @sandbox_bp.route("/sessions/<session_id>/files/download", methods=["GET"])
@@ -602,6 +622,34 @@ def download_session_file(session_id: str):
         return jsonify({"code": 400, "message": str(e)}), 400
 
 
+@sandbox_bp.route("/sessions/<session_id>/files/export-zip", methods=["GET"])
+def export_session_zip(session_id: str):
+    """Export a workspace directory as ZIP."""
+    path = request.args.get("path", "/workspace")
+    mode = request.args.get("mode", "directory")
+    selected_paths = [item for item in request.args.getlist("selected_path") if str(item or "").strip()]
+    try:
+        mgr = _mgr()
+        content_bytes, mime_type, disposition = mgr.export_zip(
+            session_id,
+            path,
+            mode=mode,
+            selected_paths=selected_paths or None,
+        )
+        response = Response(content_bytes, mimetype=mime_type)
+        if disposition:
+            response.headers["Content-Disposition"] = disposition
+        return response
+    except FileNotFoundError:
+        return jsonify({"code": 404, "message": "File or directory not found"}), 404
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+
+
 @sandbox_bp.route("/sessions/<session_id>/workspace/<path:filepath>", methods=["GET"])
 def serve_workspace_file(session_id: str, filepath: str):
     """Serve a file from the container's /workspace/ with proper MIME type.
@@ -613,27 +661,150 @@ def serve_workspace_file(session_id: str, filepath: str):
       GET /api/sandbox/sessions/{sid}/workspace/index.html
       GET /api/sandbox/sessions/{sid}/workspace/css/style.css
     """
+    started_at = time.perf_counter()
     mgr = _mgr()
     session = mgr.get_session(session_id)
     if not session:
-        return jsonify({"code": 404, "message": "Session not found"}), 404
-
-    # Pick the first agent (orchestrator read_file doesn't restrict by agent)
-    agent_id = session.agents_config[0]["agent_id"] if session.agents_config else ""
-    if not agent_id:
-        return jsonify({"code": 400, "message": "No agents in session"}), 400
+        return _with_timing_headers(jsonify({"code": 404, "message": "Session not found"}), "workspace/file", started_at), 404
 
     try:
         workspace_path = f"/workspace/{filepath}"
-        content_bytes, mime_type = mgr.get_agent_raw_file(session_id, agent_id, workspace_path)
+        content_bytes, mime_type = mgr.get_raw_file(session_id, workspace_path)
         normalized_mime = (mime_type or "").split(";", 1)[0].strip().lower()
         if normalized_mime in {"text/html", "application/xhtml+xml"}:
             content_bytes = _inject_html_base(content_bytes, session_id, workspace_path)
         elif normalized_mime == "text/css":
             content_bytes = _rewrite_workspace_css(content_bytes, session_id, workspace_path)
-        return Response(content_bytes, mimetype=mime_type)
+        return _with_timing_headers(Response(content_bytes, mimetype=mime_type), "workspace/file", started_at)
     except FileNotFoundError:
-        return jsonify({"code": 404, "message": "File not found"}), 404
+        return _with_timing_headers(jsonify({"code": 404, "message": "File not found"}), "workspace/file", started_at), 404
+    except Exception as e:
+        return _with_timing_headers(jsonify({"code": 400, "message": str(e)}), "workspace/file", started_at), 400
+
+
+@sandbox_bp.route("/sessions/<session_id>/files/write", methods=["PUT"])
+def write_workspace_file(session_id: str):
+    """Write a file back to the container workspace."""
+    data = request.get_json(silent=True) or {}
+    path = (data.get("path") or "").strip()
+    content = data.get("content")
+    if not path or content is None:
+        return jsonify({"code": 400, "message": "path and content are required"}), 400
+
+    if isinstance(content, str) and content.startswith("data:"):
+        import base64
+        _, encoded = content.split(",", 1)
+        content_bytes = base64.b64decode(encoded)
+    elif isinstance(content, str):
+        content_bytes = content.encode("utf-8")
+    elif isinstance(content, list):
+        content_bytes = bytes(content)
+    else:
+        return jsonify({"code": 400, "message": "content must be a string or data URL"}), 400
+
+    try:
+        result = _mgr().write_workspace_file(session_id, path, content_bytes)
+        if result.get("status") == "error":
+            return jsonify({"code": 400, "data": result, "message": result.get("error")}), 400
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+    except Exception as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+
+
+@sandbox_bp.route("/conversations/<source_conversation_id>/files/migrate-preview", methods=["GET"])
+def preview_conversation_file_migration(source_conversation_id: str):
+    try:
+        user_id = _current_user_id_required()
+        target_conversation_id = (request.args.get("target_conversation_id") or "").strip()
+        if not target_conversation_id:
+            return jsonify({"code": 400, "message": "target_conversation_id is required"}), 400
+        if target_conversation_id == source_conversation_id:
+            return jsonify({"code": 400, "message": "source and target conversations must differ"}), 400
+        source_conversation, error = conversation_service.get_owned_conversation_or_error(
+            source_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        target_conversation, error = conversation_service.get_owned_conversation_or_error(
+            target_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        source_session_id = conversation_service.resolve_sandbox_session_id(source_conversation)
+        target_session_id = conversation_service.resolve_sandbox_session_id(target_conversation)
+        result = _mgr().preview_files_between_sessions(
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            root=request.args.get("root", "/workspace/agents"),
+            paths=[
+                item for item in (
+                    request.args.getlist("paths")
+                    + request.args.getlist("paths[]")
+                ) if str(item or "").strip()
+            ] or None,
+            include_hidden=request.args.get("include_hidden", "false").lower() == "true",
+        )
+        result["source_conversation_id"] = source_conversation_id
+        result["target_conversation_id"] = target_conversation_id
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
+    except Exception as e:
+        return jsonify({"code": 400, "message": str(e)}), 400
+
+
+@sandbox_bp.route("/conversations/<source_conversation_id>/files/migrate", methods=["POST"])
+def migrate_conversation_files(source_conversation_id: str):
+    data = request.get_json(silent=True) or {}
+    try:
+        user_id = _current_user_id_required()
+        target_conversation_id = (data.get("target_conversation_id") or "").strip()
+        if not target_conversation_id:
+            return jsonify({"code": 400, "message": "target_conversation_id is required"}), 400
+        if target_conversation_id == source_conversation_id:
+            return jsonify({"code": 400, "message": "source and target conversations must differ"}), 400
+        source_conversation, error = conversation_service.get_owned_conversation_or_error(
+            source_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        target_conversation, error = conversation_service.get_owned_conversation_or_error(
+            target_conversation_id, user_id
+        )
+        if error:
+            return jsonify({"code": 404 if error == "Conversation not found" else 403, "message": error}), 404 if error == "Conversation not found" else 403
+        source_session_id = conversation_service.resolve_sandbox_session_id(source_conversation)
+        target_session_id = conversation_service.resolve_sandbox_session_id(target_conversation)
+        result = _mgr().copy_files_between_sessions(
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            root=data.get("root", "/workspace/agents"),
+            paths=data.get("paths") or None,
+            path_mapping=data.get("path_mapping") or None,
+            overwrite=bool(data.get("overwrite")),
+            include_hidden=bool(data.get("include_hidden")),
+        )
+        result["source_conversation_id"] = source_conversation_id
+        result["target_conversation_id"] = target_conversation_id
+
+        summary = (
+            f"已从旧会话迁移 {result.get('migrated', 0)} 个文件，"
+            f"跳过 {result.get('skipped', 0)} 个文件，"
+            f"失败 {len(result.get('errors') or [])} 个文件"
+        )
+        title = source_conversation.title or source_conversation_id
+        result_text = f"已从旧会话「{title}」迁移 {result.get('migrated', 0)} 个文件到当前会话"
+        conversation_service.create_migration_result_message(
+            target_conversation.id,
+            summary,
+            result_text=result_text,
+            status="done" if not result.get("errors") else "error",
+        )
+        return jsonify({"code": 200, "data": result})
+    except KeyError as e:
+        return jsonify({"code": 404, "message": str(e)}), 404
     except Exception as e:
         return jsonify({"code": 400, "message": str(e)}), 400
 

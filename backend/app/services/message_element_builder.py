@@ -39,8 +39,8 @@ def file_event_element(session_id, file_data):
     if not path:
         return None
 
-    normalized_path = str(path).replace('\\', '/')
-    if not (normalized_path.startswith('/workspace/') or normalized_path.startswith('workspace/')):
+    normalized_path = _normalize_workspace_event_path(path)
+    if not normalized_path:
         return None
 
     clean_path = normalized_path.lstrip('/')
@@ -48,9 +48,13 @@ def file_event_element(session_id, file_data):
         clean_path = clean_path[len('workspace/'):]
 
     name = os.path.basename(clean_path) or clean_path
+    if name.startswith('.'):
+        return None
     url_path = clean_path.replace('\\', '/')
     url = f'/api/sandbox/sessions/{session_id}/workspace/{url_path}'
     ext = os.path.splitext(name)[1].lower()
+    workspace_name = _workspace_name_from_clean_path(clean_path)
+    agent_meta = {'workspace_name': workspace_name} if workspace_name else {}
 
     if ext in IMAGE_EXTS:
         return {
@@ -60,6 +64,7 @@ def file_event_element(session_id, file_data):
                 'url': url,
                 'alt': name,
                 'path': f'/workspace/{clean_path}',
+                **agent_meta,
             },
         }
 
@@ -71,6 +76,7 @@ def file_event_element(session_id, file_data):
             'url': url,
             'size': (file_data or {}).get('size'),
             'path': f'/workspace/{clean_path}',
+            **agent_meta,
         },
     }
 
@@ -136,6 +142,26 @@ def mentioned_file_elements(session_id, text):
         if element:
             elements.append(element)
     return elements
+
+
+def _normalize_workspace_event_path(path):
+    normalized_path = str(path or '').replace('\\', '/').strip()
+    if not normalized_path:
+        return ''
+    if normalized_path.startswith('/workspace/'):
+        return normalized_path
+    if normalized_path.startswith('workspace/'):
+        return '/' + normalized_path
+    if normalized_path.startswith('/agents/') or normalized_path.startswith('agents/'):
+        return '/workspace/' + normalized_path.lstrip('/')
+    return ''
+
+
+def _workspace_name_from_clean_path(clean_path):
+    parts = [part for part in str(clean_path or '').split('/') if part]
+    if len(parts) >= 3 and parts[0] == 'agents':
+        return parts[1]
+    return ''
 
 
 def text_delta_element(chunk):

@@ -23,6 +23,9 @@ service.interceptors.request.use(
 // Response interceptor - handle errors
 service.interceptors.response.use(
   response => {
+    if (response.config && response.config.returnFullResponse) {
+      return response
+    }
     return response.data
   },
   error => {

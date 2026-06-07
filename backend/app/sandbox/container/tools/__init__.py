@@ -7,6 +7,7 @@ The orchestrator intercepts tool calls and executes them.
 
 import json
 import os
+import re
 import subprocess
 from typing import Any, Callable
 
@@ -17,7 +18,11 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, dict] = {}
 
+    TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
     def register(self, name: str, fn: Callable, description: str = ""):
+        if not self.TOOL_NAME_RE.match(name):
+            raise ValueError(f"Invalid tool name: '{name}'. Must match {self.TOOL_NAME_RE.pattern}")
         self._tools[name] = {"fn": fn, "description": description or name}
 
     def execute(self, name: str, **kwargs) -> Any:

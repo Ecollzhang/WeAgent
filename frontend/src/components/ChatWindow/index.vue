@@ -24,6 +24,9 @@
         <el-dropdown trigger="click" @command="handleMoreCommand">
           <el-button size="mini" icon="el-icon-more" type="text" title="更多"></el-button>
           <el-dropdown-menu slot="dropdown">
+            <el-dropdown-item command="migrate" v-if="conversation.owner_id === userId">
+              <i class="el-icon-copy-document"></i> 迁移文件
+            </el-dropdown-item>
             <el-dropdown-item command="delete" v-if="conversation.owner_id === userId">
               <i class="el-icon-delete"></i> 删除会话
             </el-dropdown-item>
@@ -630,6 +633,7 @@ export default {
         const elements = Array.isArray(message.elements) ? message.elements : []
         elements.forEach(element => {
           if (!element || !['code', 'table', 'image', 'file', 'service'].includes(element.type)) return
+          if (this.isModeratorPlanArtifact(element)) return
           const data = this.elementData(element)
           const content = this.elementContent(element)
           const key = [
@@ -1223,7 +1227,9 @@ export default {
       }
     },
     handleMoreCommand(command) {
-      if (command === 'delete') {
+      if (command === 'migrate') {
+        this.$emit('open-migration')
+      } else if (command === 'delete') {
         this.$emit('delete-conversation')
       }
     },
@@ -1323,6 +1329,23 @@ export default {
         }
       }
       return String(value || '')
+    },
+    isModeratorPlanArtifact(element) {
+      if (!element || element.type === 'workflow') return false
+      const data = this.elementData(element)
+      const values = [
+        data.path,
+        data.file_path,
+        data.filePath,
+        data.file,
+        data.url,
+        data.src,
+        data.name,
+        data.filename,
+        data.title,
+        this.elementContent(element),
+      ]
+      return values.some(value => String(value || '').toLowerCase().includes('moderator-plan.json'))
     },
     artifactIcon(artifact) {
       const type = artifact?.type

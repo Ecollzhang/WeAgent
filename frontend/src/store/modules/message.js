@@ -33,6 +33,17 @@ function elementKey(element) {
   if (!element) return ''
   const content = element.content || element?.data?.content || ''
   const title = element?.data?.title || element.title || ''
+  const type = element?.type || ''
+  const isDiff = type === 'diff'
+    || element?.data?.diff_text
+    || element?.data?.data?.diff_text
+    || element?.data?.diff_stat
+    || element?.data?.data?.diff_stat
+  if (isDiff) {
+    const diffPath = element?.data?.path || element?.data?.data?.path || ''
+    const diffSnippet = String(element?.data?.diff_text || element?.data?.data?.diff_text || element.content || '').slice(0, 60)
+    return `diff::${diffPath}::${diffSnippet}`
+  }
   return (
     element?.data?.progress_key ||
     element?.detail?.progress_key ||
@@ -40,12 +51,7 @@ function elementKey(element) {
     element?.data?.url ||
     element?.data?.path ||
     element?.data?.name ||
-    [
-      element.type || '',
-      element.status || '',
-      title,
-      String(content).slice(0, 240),
-    ].join('|')
+    [type, element.status || '', title, String(content).slice(0, 240)].join('|')
   )
 }
 
