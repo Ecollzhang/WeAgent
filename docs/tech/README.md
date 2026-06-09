@@ -1,44 +1,79 @@
-# AgentHub 技术方案文档
+# WeAgent 技术文档
 
-本文档是 AgentHub 多 Agent 协作平台的技术方案总入口。原命题以 `AgentHub- 多Agent协作平台设计-feishu.pdf` 为最高优先级，其他研究报告和草案只作为参考材料。
+`docs/tech/` 存放 WeAgent 的技术方案、模块设计和实现约束。这里的文档用于解释“为什么这样设计”和“模块之间如何协作”，不替代根目录 README 的启动说明。
 
-AgentHub 的核心形态是一个 IM 聊天式多 Agent 协作平台。用户通过新建对话、选择 Agent、发送消息、群聊 @Agent 的方式，让 Claude Code、Codex、OpenCode 或自建 Agent 协作完成网页、Workflow、代码、文档等产物。系统需要同时支持聊天体验、Agent 调度、流式输出、产物预览、上下文连续和 AI 协作规范沉淀。
+## 当前技术基线
 
-## 推荐阅读路径
+| 层级 | 技术 |
+|---|---|
+| 后端 | Flask, SQLAlchemy, JWT, Socket.IO |
+| Web | Vue 2, Vuex, Vue Router, Element UI |
+| Desktop | Electron, Vite, Vue 2 |
+| Android | Capacitor, Vite, Vue 2 |
+| 沙箱 | Docker, Orchestrator Server, Claude Code, Codex, OpenCode |
+| 数据 | MySQL, Redis |
 
-1. 先读 [总规则文件](./00_agenthub_rules.md)，明确方案边界、技术栈和文档规则。
-2. 再读 [原命题拆解与 MVP 范围](./01_problem_scope.md)，确认哪些是 P0，哪些是 P1/P2。
-3. 然后读 [总体架构方案](./02_architecture_overview.md)，理解前端、后端、中台和 Agent 的关系。
-4. 开发或答辩时使用 [模块索引](./03_module_index.md)，按模块跳转到对应方案。
+## 推荐阅读顺序
+
+1. `00_agenthub_rules.md`：总体规则、范围和技术边界。
+2. `01_problem_scope.md`：问题拆解、MVP 范围和优先级。
+3. `02_architecture_overview.md`：整体架构、主链路和数据流。
+4. `03_module_index.md`：模块索引和上下游关系。
+5. `modules/`：具体模块方案。
+6. `appendices/`：API、事件、数据库、演示脚本、风险兜底等补充资料。
+
+如果旧文档中仍出现 `AgentHub`、`FastAPI`、`Vue 3` 等早期方案名称，请以当前代码和根 README 为准。当前项目名称为 `WeAgent`，主技术栈是 Flask + Vue 2。
 
 ## 文档结构
 
-| 文件 | 作用 |
-|---|---|
-| [00_agenthub_rules.md](./00_agenthub_rules.md) | 总规则文件，约束技术选型、模块写法、AI 协作沉淀和验收口径 |
-| [01_problem_scope.md](./01_problem_scope.md) | 原命题拆解、MVP 范围、P0/P1/P2 分层 |
-| [02_architecture_overview.md](./02_architecture_overview.md) | 总体架构、主链路、技术栈、核心数据流 |
-| [03_module_index.md](./03_module_index.md) | 全部模块功能清单、模块链接、上下游关系 |
-| [modules/](./modules/) | 每个模块的详细解决方案 |
-| [appendices/](./appendices/) | API、事件协议、数据库、Demo 脚本、风险兜底等附录 |
+```text
+docs/tech/
+├─ 00_agenthub_rules.md
+├─ 01_problem_scope.md
+├─ 02_architecture_overview.md
+├─ 03_module_index.md
+├─ modules/
+└─ appendices/
+```
 
-## 技术栈总览
+## 重点模块
 
-| 层级 | 技术选择 | 说明 |
-|---|---|---|
-| 前端 | Vue 3 + Vite + TypeScript | 承载 IM 聊天、Agent 联系人、产物预览和可视化状态 |
-| 后端 | Python + FastAPI | 承载 REST API、数据模型、持久化、文件访问和基础业务服务 |
-| 中台 | Python 调度中台 | 承载 Orchestrator、Agent Adapter、事件归一化、SSE 推送和运行时管理 |
-| 数据库 | SQLite 开发期，Postgres 正式化 | 先保证 12 天内可复现，后续具备迁移空间 |
-| 实时通信 | SSE 优先，WebSocket 预留 | MVP 优先解决 Agent 流式输出 |
-| Agent 接入 | Codex + Claude Code + Mock Adapter | 至少接入两个主流 Agent，Mock 作为 Demo 兜底 |
-| 产物展示 | Monaco Editor + iframe + 文件卡片 | 支持代码、网页、文件三类核心产物 |
+- 会话与消息：Conversation、Message、Socket.IO、结构化元素流。
+- Agent 管理：Agent CRUD、能力标签、Skill、会话级配置。
+- 工具集能力：Skill/Tool/Plugin/MCP 导入、审计、配置、绑定、沙箱投影。
+- 沙箱容器：每会话独立容器、文件树、服务代理、日志、产物上报。
+- 多端客户端：Web 主站、Electron 桌面端、Capacitor Android 端。
+- 产物系统：文件、表格、HTML、Raw Output、Diff、工作流图。
 
-## 核心交付目标
+## 写作约定
 
-- 一个可运行的 Web Demo。
-- 一套可解释的技术架构。
-- 一套可复现的模块接口和协议。
-- 一套可答辩的风险与降级方案。
-- 一套 AI 协作开发规范，包括 Spec、rules、skills、开发记录。
+- 技术文档应区分“已实现”“进行中”“计划中”。
+- 涉及接口时写清请求路径、关键字段、错误处理和回归测试点。
+- 涉及多端时写清 Web、Desktop、Android 的差异。
+- 涉及沙箱时写清宿主端和容器端的边界。
+- 若方案与当前代码不一致，应在文档开头标注“历史方案”或更新为当前实现。
 
+## 功能图引用
+
+可以复用 Web 手册中的图片：
+
+```text
+frontend/src/assets/登录.png
+frontend/src/assets/模型设置.png
+frontend/src/assets/对话.png
+frontend/src/assets/主持人Agent.png
+frontend/src/assets/前端Agent.png
+```
+
+示例：
+
+```markdown
+![对话界面](../../frontend/src/assets/对话.png)
+```
+
+## 维护建议
+
+- 新增大功能时同步补充模块文档。
+- 合并远程分支后先分析功能冲突，再更新技术文档。
+- 完成阶段工作后，记录验收标准和回归范围。
+- 文档和代码不一致时，优先修正文档，不要让旧方案继续误导后续开发。

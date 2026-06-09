@@ -1,139 +1,181 @@
-# WeAgent Sandbox — Docker 容器化多 Agent 沙箱
+# WeAgent Sandbox
 
-## 架构概述
+`backend/app/sandbox/` 是 WeAgent 的 Docker 沙箱模块。正式 Agent 会话会创建独立容器，容器内运行 Orchestrator Server，宿主后端通过 HTTP 调用容器内接口。
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ 宿主机 (你的系统)                                                    │
-│                                                                     │
-│  Flask API ←→ Docker SDK ←→ Docker Container(s)                     │
-│                                                                     │
-│  POST /api/sandbox/sessions  ──→ docker run ...                      │
-│  POST /api/sandbox/sessions/xxx/send ──→ HTTP → localhost:17xxx     │
-└──────────────────┬──────────────────────────────────────────────────┘
-                   │
-                   ▼ (docker run, port mapping)
-┌─────────────────────────────────────────────────────────────────────┐
-│ Docker 容器 (1 会话 = 1 容器)                                        │
-│                                                                     │
-│  Port 8080 ──→ Orchestrator Server (Flask)                          │
-│                  │                                                   │
-│               Agent 管理器                                           │
-│               ├── Agent A (产品经理)  → claude 持久进程              │
-│               ├── Agent B (前端)      → claude 持久进程              │
-│               └── Agent C (后端)      → claude 持久进程              │
-│                  │                                                   │
-│              工具注册表 ←→ 工具脚本 (web_search, progress, ...)      │
-│                  │                                                   │
-│              会话持久化 → /workspace/.session/history.jsonl          │
-│                                                                     │
-│  Volume: /workspace/ ←→ 宿主机 /data/weagent/sessions/{conv_id}/   │
-│    ├── projects/     Agent 创建的前后端项目                          │
-│    ├── tools/        注入的工具脚本                                  │
-│    ├── outputs/      Agent 输出产物                                  │
-│    └── .session/     持久化对话历史 (容器删了还在)                   │
-└─────────────────────────────────────────────────────────────────────┘
+## 核心模型
+
+```text
+用户创建会话
+  -> Flask 后端创建 Conversation
+  -> DockerContainerManager 创建 Docker 容器
+  -> 容器内启动 Orchestrator Server (:8080)
+  -> 宿主端注入能力投影和 Agent 配置
+  -> 用户消息通过 Socket.IO / REST 进入容器
+  -> Agent 在 /workspace 下生成文件、表格、服务和日志
 ```
 
-## 核心原则
+## 目录说明
 
-- **1 会话 = 1 Docker 容器**：每个对话窗口对应一个独立容器
-- **Agent = `claude` 持久进程**：每个 Agent 是一个 `claude` 子进程，通过 stdin/stdout 通信
-- **Volume 持久化**：项目文件、对话历史、Agent 配置全部存在 volume 中，容器销毁不丢失
-- **工具注入**：通过 volume 或 `put_archive` 将工具脚本传入容器
-- **Orchestrator 内部路由**：Agent 间不直接通信，通过 Orchestrator 中转
-
-## 数据流
-
-### 创建会话
-```
-用户 → POST /api/sandbox/sessions
-  → DockerManager.create_session(user_id, conv_id, agents_config)
-    → docker run -d --rm -p 8080 -v /data/...:/workspace weagent-sandbox
-    → 容器内 OrchestratorServer 启动 (Flask :8080)
-    → DockerManager 为每个 agent 调用 POST /agents/create
-      → 容器内启动 claude 子进程
-  → 返回 container_id, port, agents
-```
-
-### 发送消息
-```
-用户 → POST /api/sandbox/sessions/{id}/send {agent_id, message}
-  → DockerManager.send_message(session_id, agent_id, message)
-    → HTTP POST localhost:{port}/api/agents/{agent_id}/send {message}
-    → 容器内 Orchestrator 查找 agent
-      → 构建上下文 (其他 agent 的最新输出)
-      → 拼接完整 prompt → 发给 Claude 进程 (stdin)
-      → 从 stdout 读取回复
-      → 保存到 .session/history.jsonl
-    → HTTP 返回回复文本
-  → 返回给用户
-```
-
-### Agent 间协作
-```
-用户请求 "做一个登录功能"
-  → 发给 Agent A (产品经理)
-    → A 输出 PRD
-    → Orchestrator 保存到 history
-  → 把 A 的输出作为 context，发给 Agent B (前端)
-    → B 输出前端代码
-  → 把 A 的输出作为 context，发给 Agent C (后端)
-    → C 输出后端代码
-  → 汇总返回
-```
-
-### 持久会话 (下次继续问)
-```
-用户再次打开会话
-  → DockerManager 检查容器是否在运行
-    → 是 → 直接复用
-    → 否 → docker start 或重跑容器
-      → 容器启动 → Orchestrator 读取 .session/config.json
-      → 重新创建 Agent 进程 (传入角色 prompt)
-      → 从 .session/history.jsonl 重放历史给 Claude
-      → 可以继续对话
-```
-
-## 目录结构
-
-```
+```text
 backend/app/sandbox/
-├── __init__.py              模块入口
-├── host/
-│   ├── __init__.py
-│   ├── manager.py           Docker 容器生命周期管理
-│   └── client.py            宿主机→容器的 HTTP 客户端
-├── container/               以下代码会被打包进 Docker 镜像
-│   ├── __init__.py
-│   ├── server.py            容器内 Orchestrator HTTP 服务
-│   ├── agent.py             ClaudeRuntime (claude 持久进程)
-│   ├── orchestrator.py      多 Agent 管理器 + 路由
-│   ├── tools.py             工具注册与执行
-│   └── session.py           会话持久化
-├── api/
-│   ├── __init__.py
-│   └── routes.py            宿主机端 Flask 蓝图
-├── Dockerfile               容器镜像定义
-└── tools/
-    └── builtin/              内置工具脚本 (注入到容器)
-        ├── web_search.py
-        └── progress.py
+├─ api/routes.py              # 宿主后端暴露给前端的沙箱 API
+├─ host/
+│  ├─ manager.py              # Docker 生命周期、文件读写、服务代理
+│  └─ client.py               # 宿主端访问容器 Orchestrator 的 HTTP client
+├─ container/
+│  ├─ server.py               # 容器内 Flask Orchestrator HTTP 服务
+│  ├─ orchestrator.py         # 多 Agent 管理、消息路由、产物上报
+│  ├─ agent.py                # Agent Runtime
+│  ├─ capabilities.py         # 能力投影、Skill/Tool/Plugin/MCP 运行时
+│  ├─ providers/              # Claude Code / Codex / OpenCode runner
+│  ├─ tools/                  # 内置工具实现
+│  └─ service_manager.py      # 容器内预览服务管理
+├─ bin/
+│  ├─ weagent-report          # Agent 上报结构化产物
+│  └─ weagent-service         # 启动/上报预览服务
+└─ Dockerfile
 ```
 
-## 容器镜像依赖
+## 构建镜像
 
-| 组件 | 安装方式 |
-|------|---------|
-| Python 3.11 | 基础镜像 `python:3.11-slim` |
-| Node.js | apt-get |
-| Claude CLI | `npm install -g @anthropic-ai/claude-code` |
-| Flask | pip install (供 orchestrator server 使用) |
-| requests | pip install (供工具脚本 HTTP 回调) |
+```powershell
+cd backend
+python -c "from app.sandbox import build_image; build_image()"
+```
 
-## 宿主机依赖
+等价命令：
 
-| 组件 | 用途 |
-|------|------|
-| Python `docker` SDK | 管理容器生命周期 |
-| Docker Desktop | 运行容器 |
+```powershell
+cd backend
+docker build -t weagent-sandbox:latest -f app/sandbox/Dockerfile app/sandbox
+```
+
+修改以下内容后需要重建镜像：
+
+- `backend/app/sandbox/Dockerfile`
+- `backend/app/sandbox/container/**`
+- `backend/app/sandbox/bin/**`
+- 容器内 Python/Node/CLI 依赖
+
+## 容器运行时
+
+镜像内包含：
+
+- Python 3.11
+- Node.js 20
+- Claude Code CLI
+- OpenAI Codex CLI
+- OpenCode CLI
+- `codex-relay`
+- Flask / requests / simple-websocket
+
+容器工作目录：
+
+```text
+/workspace
+├─ agents/<workspace_name>/   # 每个 Agent 的工作目录
+├─ shared/                    # 多 Agent 可共享目录
+└─ .weagent/                  # 平台内部状态和日志
+```
+
+## 宿主端 API
+
+前端访问宿主后端：
+
+```text
+/api/sandbox/sessions/<session_id>/files/tree
+/api/sandbox/sessions/<session_id>/files/raw
+/api/sandbox/sessions/<session_id>/services
+/api/sandbox/sessions/<session_id>/services/<service_id>/logs
+/api/sandbox/sessions/<session_id>/services/<service_id>/proxy/
+```
+
+这些路由在 `api/routes.py` 中定义，实际读写由 `host/manager.py` 完成。
+
+## 容器内 Orchestrator API
+
+宿主端通过 `host/client.py` 调用容器内接口：
+
+```text
+GET  /api/health
+POST /api/capabilities/projection
+POST /api/agents/create
+POST /api/agents/<agent_id>/send
+POST /api/agents/delegate
+GET  /api/files/tree
+GET  /api/files/raw
+GET  /api/services
+POST /api/services/start
+GET  /api/services/<service_id>/logs
+```
+
+注意：如果当前 `weagent-sandbox:latest` 是旧镜像，可能缺少 `/api/capabilities/projection`。宿主端已对这个可选接口做兼容跳过，但工具集能力完整投影需要重建镜像。
+
+## 常见问题
+
+### Docker image not found
+
+错误：
+
+```text
+Docker image 'weagent-sandbox:latest' not found
+```
+
+处理：
+
+```powershell
+cd backend
+python -c "from app.sandbox import build_image; build_image()"
+```
+
+### 创建容器时 HTTP 404
+
+如果错误类似：
+
+```text
+创建沙箱容器失败：HTTP 404: <!doctype html> ...
+```
+
+通常是宿主后端调用了容器内旧镜像不存在的新接口。处理顺序：
+
+1. 重启后端，确保加载最新 `host/manager.py` 和 `host/client.py`。
+2. 重建 `weagent-sandbox:latest`。
+3. 停掉旧的 `weagent-*` 容器后重试。
+
+排查命令：
+
+```powershell
+docker images weagent-sandbox:latest
+docker ps --filter name=weagent
+curl http://localhost:<orchestrator_port>/api/health
+```
+
+### 容器可以创建，但 Agent 无响应
+
+检查：
+
+- 用户模型配置是否保存。
+- 容器环境变量是否注入。
+- 对应 provider CLI 是否可用。
+- 容器日志和服务日志。
+
+```powershell
+docker logs <container_id>
+docker exec -it <container_id> sh
+```
+
+### 文件或 HTML 预览打不开
+
+检查：
+
+- 文件路径必须在 `/workspace/` 下。
+- 前端请求应走宿主 `/api/sandbox/sessions/...` 代理。
+- HTML 静态资源相对路径应与文件所在目录一致。
+
+## 开发注意事项
+
+- 宿主端 Python 代码修改后需要重启后端。
+- 容器端代码修改后需要重建镜像。
+- 新增容器内接口时，建议在 `host/client.py` 增加清晰错误处理。
+- 对旧镜像可选功能应做兼容，但核心接口失败应抛出明确错误。
+- 涉及沙箱的改动，需要回归：创建会话、发送消息、文件查看、HTML 预览、服务日志、工作流展示。

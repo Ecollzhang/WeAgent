@@ -94,3 +94,81 @@ def test_manager_projects_capabilities_before_creating_container_agents(monkeypa
 
         db.session.remove()
         db.drop_all()
+
+
+def test_manager_skips_capability_projection_when_old_container_lacks_route(monkeypatch):
+    app = create_app("testing")
+    events = []
+
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        user = User(
+            id="user-1",
+            username="legacy-container-user",
+            email="legacy-container@example.com",
+            password_hash="hash",
+        )
+        agent = Agent(
+            id="agent-1",
+            name="Reviewer",
+            agent_type="custom",
+            adapter_name="claude",
+            user_id=user.id,
+            created_by=user.id,
+        )
+        db.session.add_all([user, agent])
+        db.session.commit()
+
+        class FakeContainer:
+            id = "container-1234567890"
+            labels = {}
+            attrs = {"NetworkSettings": {"Ports": {}}}
+
+        class FakeContainers:
+            def run(self, **_kwargs):
+                return FakeContainer()
+
+            def list(self, **_kwargs):
+                return []
+
+        class FakeDocker:
+            containers = FakeContainers()
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def health_check(self):
+                return {"status": "ok"}
+
+            def apply_capability_projection(self, _projection):
+                return {
+                    "status": "error",
+                    "error": "HTTP 404: <!doctype html><title>404 Not Found</title><h1>Not Found</h1>",
+                }
+
+        manager = DockerContainerManager()
+        manager._docker = FakeDocker()
+        monkeypatch.setattr(manager, "ensure_image", lambda: True)
+        monkeypatch.setattr(manager, "_wait_for_ready", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            manager,
+            "_create_agent_in_container",
+            lambda _port, cfg: events.append(("create_agent", cfg["agent_id"])),
+        )
+        monkeypatch.setattr(manager_module, "OrchestratorClient", FakeClient)
+        ports = iter([18080, 13000, 15173, 18000, 18081, 19000])
+        monkeypatch.setattr(manager, "_find_free_port", lambda: next(ports))
+
+        session = manager.create_session(
+            "session-legacy",
+            [{"agent_id": agent.id, "role": agent.name, "system_prompt": ""}],
+            env_vars={},
+        )
+
+        assert session.session_id == "session-legacy"
+        assert events == [("create_agent", agent.id)]
+
+        db.session.remove()
+        db.drop_all()

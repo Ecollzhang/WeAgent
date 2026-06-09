@@ -1393,13 +1393,16 @@ print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=
     def _create_agent_in_container(self, port: int, config: dict):
         """Call orchestrator API to create an agent."""
         client = OrchestratorClient(host="localhost", port=port)
-        client.create_agent(
+        result = client.create_agent(
             agent_id=config["agent_id"],
             role=config.get("role", "助手"),
             system_prompt=config.get("system_prompt", ""),
             workspace_name=config.get("workspace_name") or config.get("role") or config["agent_id"],
             adapter_name=config.get("adapter_name") or config.get("provider") or "claude",
         )
+        if result.get("status") not in {"ok", None} or result.get("error"):
+            raise RuntimeError(result.get("error") or "Failed to create agent in sandbox container")
+        return result
 
     def _project_capabilities_to_container(self, port: int, session_id: str,
                                            agents: list[dict]) -> dict:
@@ -1409,9 +1412,24 @@ print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=
         projection = build_capability_projection(session_id=session_id, agents=agents)
         client = OrchestratorClient(host="localhost", port=port)
         result = client.apply_capability_projection(projection)
+        if self._is_missing_optional_orchestrator_route(result):
+            print(
+                "[SandboxManager] capability_projection_skipped "
+                f"session_id={session_id} reason=container_route_not_found"
+            )
+            return projection
         if result.get("status") not in {"ok", None} or result.get("error"):
             raise RuntimeError(result.get("error") or "Failed to apply capability projection")
         return projection
+
+    @staticmethod
+    def _is_missing_optional_orchestrator_route(result: dict) -> bool:
+        if not isinstance(result, dict):
+            return False
+        error = str(result.get("error") or "")
+        return bool(result.get("optional_route_missing")) or (
+            result.get("status") == "error" and "HTTP 404" in error and "Not Found" in error
+        )
 
     def _sync_skill_drafts_from_result(self, session_id: str, result):
         drafts = self._extract_skill_drafts(result)

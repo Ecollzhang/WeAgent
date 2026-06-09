@@ -28,6 +28,14 @@
       </button>
       <button
         class="sidebar-btn"
+        :class="{ active: isActive('/favorites') }"
+        title="我的收藏"
+        @click="$router.push('/favorites')"
+      >
+        <i class="el-icon-collection-tag"></i>
+      </button>
+      <button
+        class="sidebar-btn"
         :class="{ active: isActive('/settings') }"
         title="设置"
         @click="$router.push('/settings')"

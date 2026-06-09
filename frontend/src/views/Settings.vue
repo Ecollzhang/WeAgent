@@ -190,6 +190,15 @@
                     </ul>
                   </div>
                 </div>
+                <div class="manual-image-grid">
+                  <figure v-for="image in quickStartImages" :key="image.title" class="manual-image-card">
+                    <img :src="image.src" :alt="image.title" />
+                    <figcaption>
+                      <strong>{{ image.title }}</strong>
+                      <span>{{ image.desc }}</span>
+                    </figcaption>
+                  </figure>
+                </div>
                 <div class="image-placeholder large">
                   <i class="el-icon-picture-outline"></i>
                   <div>
@@ -247,12 +256,19 @@
                       <p>{{ tpl.content }}</p>
                     </div>
                   </div>
-                  <div class="image-placeholder">
+                  <!-- <div class="image-placeholder">
                     <i class="el-icon-chat-line-round"></i>
                     <strong>多轮对话截图预留位</strong>
                     <span>建议展示用户消息、Agent 回复、进度和产物。</span>
-                  </div>
+                  </div> -->
                 </div>
+                <figure class="manual-image-card wide conversation-manual-image">
+                  <img :src="manualImages.conversation" alt="对话界面" />
+                  <figcaption>
+                    <strong>对话界面</strong>
+                    <span>展示会话列表、消息区、输入框、侧栏入口和多轮任务推进效果。</span>
+                  </figcaption>
+                </figure>
               </section>
 
               <section id="agents" class="manual-section">
@@ -276,6 +292,15 @@
                     <p>{{ item.desc }}</p>
                     <span>{{ item.example }}</span>
                   </div>
+                </div>
+                <div class="manual-image-grid">
+                  <figure v-for="image in agentImages" :key="image.title" class="manual-image-card">
+                    <img :src="image.src" :alt="image.title" />
+                    <figcaption>
+                      <strong>{{ image.title }}</strong>
+                      <span>{{ image.desc }}</span>
+                    </figcaption>
+                  </figure>
                 </div>
               </section>
 
@@ -309,6 +334,15 @@
                     <p>{{ item.desc }}</p>
                   </div>
                 </div>
+                <div class="manual-image-grid artifact-image-grid">
+                  <figure v-for="image in artifactImages" :key="image.title" class="manual-image-card">
+                    <img :src="image.src" :alt="image.title" />
+                    <figcaption>
+                      <strong>{{ image.title }}</strong>
+                      <span>{{ image.desc }}</span>
+                    </figcaption>
+                  </figure>
+                </div>
               </section>
 
               <section id="faq" class="manual-section">
@@ -331,8 +365,24 @@
 
           <div v-if="activeAboutTab === 'product'" class="product-overview">
             <div class="product-intro">
+              <span class="product-kicker">Product Overview</span>
               <h3>产品介绍</h3>
-              <p>WeAgent 是一个面向多 Agent 协作任务的平台，支持会话管理、Agent 编排、工具调用、产物沉淀和多端使用。</p>
+              <p>WeAgent 是一个面向多 Agent 协作任务的平台，把需求沟通、Agent 编排、容器执行、产物查看和多端使用放到同一条任务链路里。</p>
+              <div class="product-metrics">
+                <div v-for="metric in productMetrics" :key="metric.label" class="product-metric">
+                  <strong>{{ metric.value }}</strong>
+                  <span>{{ metric.label }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="product-flow">
+              <div v-for="step in productFlow" :key="step.title" class="product-flow-step">
+                <span>{{ step.index }}</span>
+                <div>
+                  <h4>{{ step.title }}</h4>
+                  <p>{{ step.desc }}</p>
+                </div>
+              </div>
             </div>
             <div class="highlight-grid">
               <div v-for="item in productHighlights" :key="item.title" class="highlight-card">
@@ -341,25 +391,38 @@
                 <p>{{ item.desc }}</p>
               </div>
             </div>
-            <div class="image-placeholder large product-shot">
-              <i class="el-icon-monitor"></i>
-              <div>
-                <strong>产品总览图预留位</strong>
-                <span>建议放置 Dashboard、Agent、产物抽屉组合截图。</span>
-              </div>
-            </div>
+            <el-carousel class="product-carousel" height="430px" indicator-position="outside" arrow="always">
+              <el-carousel-item v-for="image in productImages" :key="image.title">
+                <div class="product-slide">
+                  <div class="product-slide-copy">
+                    <span>{{ image.label }}</span>
+                    <h4>{{ image.title }}</h4>
+                    <p>{{ image.desc }}</p>
+                  </div>
+                  <div class="product-slide-image">
+                    <img :src="image.src" :alt="image.title" />
+                  </div>
+                </div>
+              </el-carousel-item>
+            </el-carousel>
           </div>
 
           <div v-if="activeAboutTab === 'timeline'" class="timeline-panel">
             <h3>迭代历程</h3>
-            <p class="timeline-desc">记录平台从 Web 单端到桌面端、Android、多 Agent 协作体验的演进。</p>
+            <p class="timeline-desc">基于 Git 提交历史整理 v1.0.0 到 v1.1.1 的主要功能演进，覆盖单 Agent、多 Agent、多端、收藏历史、会话级配置和工作流能力。</p>
             <div class="timeline-list">
               <div v-for="item in timelineItems" :key="item.version" class="timeline-item">
                 <div class="timeline-dot"></div>
                 <div class="timeline-content">
-                  <span class="timeline-version">{{ item.version }}</span>
+                  <div class="timeline-head">
+                    <span class="timeline-version">{{ item.version }}</span>
+                    <span class="timeline-date">{{ item.date }}</span>
+                  </div>
                   <h4>{{ item.title }}</h4>
                   <p>{{ item.desc }}</p>
+                  <ul class="timeline-points">
+                    <li v-for="point in item.points" :key="point">{{ point }}</li>
+                  </ul>
                 </div>
               </div>
             </div>
@@ -374,6 +437,18 @@
 import AppSidebar from '../components/Sidebar/index.vue'
 import { uploadFile } from '../api/upload'
 import { updateProfile } from '../api/settings'
+import loginImage from '../assets/登录.png'
+import modelSettingsImage from '../assets/模型设置.png'
+import conversationImage from '../assets/对话.png'
+import moderatorAgentImage from '../assets/主持人Agent.png'
+import frontendAgentImage from '../assets/前端Agent.png'
+import myAgentImage from '../assets/我的Agent.png'
+import sessionAgentConfigImage from '../assets/会话级Agent配置.png'
+import artifactImageEditImage from '../assets/工作台编辑-图片.png'
+import artifactTableEditImage from '../assets/工作台编辑——表格.png'
+import artifactCodeEditImage from '../assets/工作台编辑-代码.png'
+import artifactDiffImage from '../assets/工作台-diff展示.png'
+import workflowImage from '../assets/工作流图.png'
 
 export default {
   name: 'Settings',
@@ -383,6 +458,20 @@ export default {
       activeSetting: 'model',
       saving: false,
       activeAboutTab: 'manual',
+      manualImages: {
+        login: loginImage,
+        modelSettings: modelSettingsImage,
+        conversation: conversationImage,
+        moderatorAgent: moderatorAgentImage,
+        frontendAgent: frontendAgentImage,
+        myAgent: myAgentImage,
+        sessionAgentConfig: sessionAgentConfigImage,
+        artifactImageEdit: artifactImageEditImage,
+        artifactTableEdit: artifactTableEditImage,
+        artifactCodeEdit: artifactCodeEditImage,
+        artifactDiff: artifactDiffImage,
+        workflow: workflowImage,
+      },
       settingsItems: [
         { key: 'model', label: '模型设置', icon: 'el-icon-connection' },
         { key: 'profile', label: '个人信息', icon: 'el-icon-user' },
@@ -400,6 +489,16 @@ export default {
         { id: 'agents', title: 'Agent 配置' },
         { id: 'artifacts', title: '产物与文件' },
         { id: 'faq', title: '常见问题' },
+      ],
+      quickStartImages: [
+        { title: '登录入口', desc: '输入账号信息后进入 WeAgent 平台。', src: loginImage },
+        { title: '模型设置', desc: '配置模型、API Key 和 Base URL。', src: modelSettingsImage },
+        { title: '会话首页', desc: '查看会话列表、创建新会话并进入任务执行。', src: conversationImage },
+        { title: '我的 Agent', desc: '管理 Agent 能力、Skill、提示词和工具配置。', src: myAgentImage },
+      ],
+      agentImages: [
+        { title: '我的 Agent（全局配置）', desc: '集中查看、创建、编辑和维护全局 Agent，作为会话选择 Agent 的基础配置。', src: myAgentImage },
+        { title: '会话级 Agent 配置', desc: '在当前会话中临时调整 Agent 的能力、Skill 和提示词，不影响全局 Agent。', src: sessionAgentConfigImage },
       ],
       quickStartSteps: [
         {
@@ -470,9 +569,17 @@ export default {
       ],
       artifactManualItems: [
         { title: '文件产物', desc: '点击文件类型产物后，可打开文件列表并定位到对应内容，适合查看 HTML、Markdown、图片和代码文件。' },
-        { title: '表格产物', desc: '部分表格不在容器目录中，平台会直接使用产物内置的列和行数据展示。' },
-        { title: '进度与历史', desc: '每条 Agent 消息会保留当前进度、进度历史、执行结果和 Raw Output，方便追踪任务过程。' },
+        { title: '表格产物', desc: '部分表格不在容器目录中，平台会直接使用产物内置的列和行数据展示，并支持工作台编辑。' },
+        { title: '图片编辑', desc: '图片类产物可进入工作台查看和编辑，适合处理设计图、截图、生成图和标注图。' },
+        { title: '代码编辑', desc: '代码类产物可在工作台中查看、编辑和复制，保留代码格式并支持后续对比。' },
+        { title: 'Diff 展示', desc: '对修改前后的内容进行差异展示，便于确认 Agent 具体改动了哪里。' },
         { title: '容器文件', desc: '需要上传资料时，可将文件放入 Agent 的容器工作区，再在会话中让 Agent 使用这些文件。' },
+      ],
+      artifactImages: [
+        { title: '图片产物编辑', desc: '在工作台中查看图片产物并进行编辑。', src: artifactImageEditImage },
+        { title: '表格产物编辑', desc: '对内置表格产物进行查看、编辑和整理。', src: artifactTableEditImage },
+        { title: '代码产物编辑', desc: '保留代码格式，支持查看、编辑和复制。', src: artifactCodeEditImage },
+        { title: 'Diff 展示', desc: '展示修改前后的差异，便于复查 Agent 改动。', src: artifactDiffImage },
       ],
       faqItems: [
         { question: 'Agent 没有按预期回答怎么办？', answer: '先检查 Agent 的能力标签、系统提示词和 Skill 是否足够明确；复杂任务建议让 Agent 先给方案再执行。' },
@@ -481,16 +588,116 @@ export default {
         { question: '会话级 Agent 配置会影响全局 Agent 吗？', answer: '不会。会话级配置只在当前会话生效，适合临时调整某个 Agent 在本次任务中的技能和行为。' },
       ],
       productHighlights: [
-        { icon: 'el-icon-chat-line-square', title: '会话驱动', desc: '围绕任务会话沉淀上下文、历史问题、进度和产物。' },
-        { icon: 'el-icon-cpu', title: '多 Agent 编排', desc: '支持单 Agent 和多 Agent 协作，按能力完成复杂任务。' },
-        { icon: 'el-icon-folder-opened', title: '产物管理', desc: '集中展示文件、表格、日志和执行输出，便于复查和复用。' },
-        { icon: 'el-icon-mobile', title: '多端支持', desc: '支持 Web、桌面端和 Android 端分阶段迁移与使用。' },
+        { icon: 'el-icon-chat-line-square', title: '会话驱动任务', desc: '围绕每个任务保留上下文、历史问题、参与者、进度和最终产物。' },
+        { icon: 'el-icon-cpu', title: '多 Agent 协作', desc: '由主持 Agent 理解需求并调度成员，支持单 Agent 直接执行和多 Agent 协同推进。' },
+        { icon: 'el-icon-folder-opened', title: '产物闭环', desc: '把文件、表格、HTML、Raw Output、执行日志和工作流集中到会话侧栏里查看。' },
+        { icon: 'el-icon-mobile', title: '多端访问', desc: 'Web 保持稳定，桌面端全量迁移，Android 端承接登录、会话、Agent 和设置等主流程。' },
+      ],
+      productMetrics: [
+        { value: '3 端', label: 'Web / Desktop / Android' },
+        { value: '12 个版本', label: 'v1.0.0 - v1.1.1' },
+        { value: '多 Agent', label: '主持调度与协作执行' },
+        { value: '产物化', label: '文件、表格、日志、工作流' },
+      ],
+      productFlow: [
+        { index: '01', title: '提出任务', desc: '用户在会话中描述需求，可选择单 Agent 或多 Agent。' },
+        { index: '02', title: '配置能力', desc: '按任务调整 Agent 标签、Skill、系统提示词和会话级配置。' },
+        { index: '03', title: '执行与观察', desc: '查看实时进度、进度历史、Raw Output、容器日志和工作流。' },
+        { index: '04', title: '沉淀产物', desc: '在产物抽屉中分类查看文件、表格、页面和可复用结果。' },
+      ],
+      productImages: [
+        { label: 'Conversation', title: '会话工作台', desc: '在同一个界面里推进多轮对话，查看 Agent 回复、进度、历史问题和产物入口。', src: conversationImage },
+        { label: 'Agent', title: 'Agent 配置中心', desc: '维护全局 Agent，并在会话中使用会话级配置临时调整能力、Skill 和提示词。', src: myAgentImage },
+        { label: 'Session Config', title: '会话级 Agent 配置', desc: '面向单个会话调整参与 Agent 的工作方式，保证实验性修改不会污染全局配置。', src: sessionAgentConfigImage },
+        { label: 'Artifacts', title: '多格式产物工作台', desc: '支持图片、表格、代码、Diff 等产物的查看与编辑，让结果可以继续加工。', src: artifactTableEditImage },
+        { label: 'Workflow', title: '工作流图', desc: '展示主持 Agent 的任务分配计划，把多 Agent 协作过程从文本变成可预览的流程。', src: workflowImage },
+        { label: 'Model', title: '模型设置', desc: '统一配置 API Key、Base URL、模型名称和推理参数，支撑不同 Provider 的 Agent 调用。', src: modelSettingsImage },
       ],
       timelineItems: [
-        { version: '阶段 1', title: 'Web 基础能力', desc: '完成登录注册、会话列表、Agent 管理、个人设置和模型配置。' },
-        { version: '阶段 2', title: '桌面端迁移', desc: '实现桌面端全量功能迁移，支持外部后端配置和桌面应用打包。' },
-        { version: '阶段 3', title: 'Android 主要功能', desc: '基于 Capacitor + Vue 实现 Android 登录、会话、Agent 和设置能力。' },
-        { version: '阶段 4', title: '产物与协作体验', desc: '完善产物抽屉、会话收藏、搜索定位、历史问题和会话级 Agent 配置。' },
+        {
+          version: 'v1.0.0',
+          date: '2026-05-25',
+          title: '单 Agent 与 Docker 沙箱基础',
+          desc: '建立平台基础能力，补充 Docker 环境部署和镜像加载说明。',
+          points: ['单 Agent 任务执行链路成型', '补充部署文档与镜像加载流程'],
+        },
+        {
+          version: 'v1.0.1',
+          date: '2026-05-27',
+          title: '多 Agent 协作与规范化消息',
+          desc: '引入多 Agent 协作，完善 Agent 消息结构化展示。',
+          points: ['支持多 Agent 参与同一会话', '统一进度、结果和产物展示规范'],
+        },
+        {
+          version: 'v1.0.2',
+          date: '2026-05-29',
+          title: 'Claude Code / Codex / OpenCode 适配器',
+          desc: '完成多类编码 Agent Provider 适配，新增 Codex 与 OpenCode Agent。',
+          points: ['完成 Provider 适配器测试', '扩展可接入的编码 Agent 类型'],
+        },
+        {
+          version: 'v1.0.3',
+          date: '2026-05-29',
+          title: '会话计数与消息时间修复',
+          desc: '修复会话参与者计数错误和消息时间显示异常。',
+          points: ['修正参与者数量统计', '修复消息时间显示偏差'],
+        },
+        {
+          version: 'v1.0.4',
+          date: '2026-05-30',
+          title: '@ 指定 Agent 工作',
+          desc: '支持在会话中明确指定 Agent 执行任务。',
+          points: ['提升多 Agent 调度可控性', '让用户能直接指定负责执行的 Agent'],
+        },
+        {
+          version: 'v1.0.5',
+          date: '2026-06-01',
+          title: '容器服务暴露与 Service 消息',
+          desc: '新增 type=service 消息和容器服务启动脚本，后端端口调整到 5002。',
+          points: ['支持访问容器内服务', '增加服务类消息展示基础'],
+        },
+        {
+          version: 'v1.0.6',
+          date: '2026-06-01',
+          title: '桌面端支持',
+          desc: '实现 Electron 桌面端以及绝大部分功能迁移。',
+          points: ['支持桌面端连接外部后端', '迁移会话、Agent、设置和产物相关能力'],
+        },
+        {
+          version: 'v1.0.7',
+          date: '2026-06-03',
+          title: 'Android 端支持',
+          desc: '基于 Android 容器完成主要功能迁移。',
+          points: ['支持 Android 登录和会话主流程', '迁移 Agent 与个人设置核心页面'],
+        },
+        {
+          version: 'v1.0.8',
+          date: '2026-06-04',
+          title: '收藏、历史与搜索',
+          desc: '移除沙箱测试入口，加入我的收藏、对话历史和对话搜索定位。',
+          points: ['收藏会话并集中管理', '支持历史问题跳转与消息搜索定位'],
+        },
+        {
+          version: 'v1.0.9',
+          date: '2026-06-05',
+          title: '会话级 Agent 配置与快捷入口',
+          desc: '新增会话级 Agent 配置、产物列表、日志和工作流快捷入口。',
+          points: ['配置只在当前会话生效', '会话侧栏集中承载产物、日志和配置'],
+        },
+        {
+          version: 'v1.1.0',
+          date: '2026-06-05',
+          title: '自定义工作流图',
+          desc: '多 Agent 使用自定义工作流图进行任务分配，单 Agent 用于工作步骤指导。',
+          points: ['支持任务分配工作流预览', '强化主持 Agent 的计划表达能力'],
+        },
+        {
+          version: 'v1.1.1',
+          date: '2026-06-07',
+          title: '使用手册与产品介绍',
+          desc: '补充平台使用手册、产品介绍、迭代历程和文档入口。',
+          points: ['设置页新增关于我们入口', '使用手册引入页面截图和场景化说明'],
+        },
       ],
       modelConfig: {
         api_key: '',
@@ -1105,6 +1312,63 @@ export default {
   line-height: 1.6;
 }
 
+.manual-image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.manual-image-card {
+  margin: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  overflow: hidden;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+}
+
+.manual-image-card.wide {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+}
+
+.conversation-manual-image {
+  margin-top: 16px;
+}
+
+.manual-image-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: #f8fafc;
+}
+
+.manual-image-card figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid #edf2f7;
+}
+
+.manual-image-card figcaption strong {
+  color: #1e293b;
+  font-size: 13px;
+}
+
+.manual-image-card figcaption span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.manual-image-grid + .image-placeholder,
+.manual-image-card + .image-placeholder {
+  display: none;
+}
+
 .scenario-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1134,7 +1398,7 @@ export default {
 
 .manual-two-column {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -1259,6 +1523,10 @@ export default {
   background: #fbfdff;
 }
 
+.artifact-image-grid {
+  margin-top: 16px;
+}
+
 .product-overview,
 .timeline-panel {
   padding: 22px;
@@ -1268,11 +1536,196 @@ export default {
 }
 
 .product-intro {
+  position: relative;
+  margin-bottom: 18px;
+  padding: 22px;
+  border-radius: 14px;
+  border: 1px solid #dbe8ff;
+  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 54%, #f4f8ff 100%);
+  overflow: hidden;
+}
+
+.product-intro::after {
+  content: '';
+  position: absolute;
+  right: -40px;
+  top: -54px;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  background: rgba(64, 128, 255, 0.09);
+}
+
+.product-kicker {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #4080ff;
+  text-transform: uppercase;
+}
+
+.product-intro h3,
+.product-intro p,
+.product-metrics {
+  position: relative;
+  z-index: 1;
+}
+
+.product-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.product-metric {
+  padding: 13px 14px;
+  border-radius: 11px;
+  border: 1px solid rgba(64, 128, 255, 0.16);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.product-metric strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #1e293b;
+  font-size: 18px;
+}
+
+.product-metric span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.product-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
   margin-bottom: 18px;
 }
 
-.product-shot {
-  margin-top: 16px;
+.product-flow-step {
+  display: flex;
+  gap: 11px;
+  padding: 15px;
+  border-radius: 12px;
+  border: 1px solid #edf1f7;
+  background: #fbfdff;
+}
+
+.product-flow-step > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: #eef5ff;
+  color: #4080ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.product-flow-step h4 {
+  margin: 0 0 5px;
+  color: #1e293b;
+  font-size: 14px;
+}
+
+.product-flow-step p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.product-carousel {
+  margin-top: 18px;
+  padding: 18px 18px 30px;
+  border-radius: 16px;
+  border: 1px solid #edf1f7;
+  background: #fbfdff;
+}
+
+.product-slide {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 20px;
+  height: 100%;
+  min-height: 390px;
+}
+
+.product-slide-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #edf1f7;
+}
+
+.product-slide-copy span {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #4080ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.product-slide-copy h4 {
+  margin: 0 0 10px;
+  color: #1e293b;
+  font-size: 22px;
+}
+
+.product-slide-copy p {
+  margin: 0;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.product-slide-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #edf1f7;
+  overflow: hidden;
+}
+
+.product-slide-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.product-carousel :deep(.el-carousel__container) {
+  border-radius: 14px;
+}
+
+.product-carousel :deep(.el-carousel__arrow) {
+  background: rgba(30, 41, 59, 0.42);
+}
+
+.product-carousel :deep(.el-carousel__indicator--horizontal) {
+  padding: 14px 4px 0;
 }
 
 .timeline-list {
@@ -1295,7 +1748,7 @@ export default {
   position: relative;
   display: flex;
   gap: 14px;
-  padding-bottom: 20px;
+  padding-bottom: 16px;
 }
 
 .timeline-dot {
@@ -1310,19 +1763,38 @@ export default {
 }
 
 .timeline-content {
-  padding: 14px 16px;
+  padding: 16px 18px;
   width: 100%;
-  border-radius: 10px;
-  background: #fbfdff;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   border: 1px solid #edf1f7;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
 .timeline-version {
   display: inline-flex;
-  margin-bottom: 7px;
+  align-items: center;
+  justify-content: center;
+  min-width: 68px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef5ff;
   font-size: 12px;
   font-weight: 700;
   color: #4080ff;
+}
+
+.timeline-date {
+  color: #94a3b8;
+  font-size: 12px;
 }
 
 .timeline-content h4 {
@@ -1336,6 +1808,24 @@ export default {
   font-size: 13px;
   line-height: 1.65;
   color: #64748b;
+}
+
+.timeline-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline-points li {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @media (max-width: 1100px) {
@@ -1356,8 +1846,19 @@ export default {
 
   .step-grid,
   .highlight-grid,
-  .manual-two-column {
+  .manual-two-column,
+  .product-metrics,
+  .product-flow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .product-slide {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .product-slide-copy {
+    padding: 18px;
   }
 }
 
@@ -1384,8 +1885,22 @@ export default {
   }
 
   .step-grid,
-  .highlight-grid {
+  .highlight-grid,
+  .product-metrics,
+  .product-flow {
     grid-template-columns: 1fr;
+  }
+
+  .product-carousel {
+    padding: 12px 12px 28px;
+  }
+
+  .product-slide {
+    gap: 12px;
+  }
+
+  .product-slide-copy h4 {
+    font-size: 18px;
   }
 }
 </style>

@@ -743,9 +743,9 @@ export default {
 .capability-editor {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 14px;
-  padding: 14px;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
   border: 1px solid #e5edf7;
   border-radius: 8px;
   background: #fbfdff;
@@ -761,20 +761,27 @@ export default {
 .capability-editor-head h3 {
   margin: 0;
   color: #172033;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .capability-editor-head span {
   display: block;
-  margin-top: 4px;
+  margin-top: 3px;
   color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.capability-editor .workspace-secondary {
+  min-height: 28px;
+  padding: 0 10px;
   font-size: 12px;
 }
 
 .capability-picker {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .picker-categories,
@@ -787,12 +794,14 @@ export default {
 .picker-category,
 .picker-type {
   flex: 0 0 auto;
-  min-height: 32px;
+  min-height: 28px;
   border: 1px solid #dce5f2;
-  border-radius: 8px;
-  padding: 0 10px;
+  border-radius: 7px;
+  padding: 0 9px;
   background: #ffffff;
   color: #475569;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .picker-category.active,
@@ -803,26 +812,27 @@ export default {
 }
 
 .picker-type b {
-  margin-left: 6px;
+  margin-left: 5px;
   color: #64748b;
+  font-size: 11px;
 }
 
 .picker-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 8px;
-  max-height: 210px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 7px;
+  max-height: 190px;
   overflow-y: auto;
 }
 
 .picker-card {
-  min-height: 68px;
+  min-height: 58px;
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 10px;
+  border-radius: 7px;
+  padding: 8px;
   background: #ffffff;
   color: #1f2937;
   text-align: left;
@@ -844,47 +854,55 @@ export default {
   white-space: nowrap;
 }
 
+.picker-card strong {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
 .picker-card small {
-  margin-top: 4px;
+  margin-top: 3px;
   color: #64748b;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .picker-card em {
   flex: 0 0 auto;
   color: #64748b;
   font-style: normal;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .picker-empty,
 .empty-bindings {
-  padding: 12px;
+  padding: 10px;
   border: 1px dashed #cbd5e1;
   border-radius: 8px;
   color: #64748b;
   background: #ffffff;
+  font-size: 12px;
 }
 
 .binding-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .binding-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
-  gap: 12px;
-  padding: 10px;
+  grid-template-columns: minmax(0, 1fr) 108px;
+  gap: 10px;
+  padding: 8px;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: #ffffff;
 }
 
 .binding-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .binding-title strong,
@@ -897,28 +915,34 @@ export default {
 
 .binding-type {
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 2px 7px;
   background: #eff6ff;
   color: #2563eb;
+  font-size: 11px;
+}
+
+.binding-title strong {
   font-size: 12px;
+  line-height: 1.25;
 }
 
 .binding-title small {
   color: #64748b;
+  font-size: 11px;
 }
 
 .binding-main p {
-  margin: 6px 0;
+  margin: 5px 0;
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .permission-line {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   color: #475569;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .permission-line label,
@@ -932,8 +956,8 @@ export default {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 8px;
+  gap: 6px;
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
 }
 </style>

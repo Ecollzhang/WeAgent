@@ -92,7 +92,11 @@ class OrchestratorClient:
     # ---- Capabilities ----
 
     def apply_capability_projection(self, projection: dict) -> dict:
-        return self._request("POST", "/api/capabilities/projection", projection)
+        result = self._request("POST", "/api/capabilities/projection", projection)
+        error = str(result.get("error") or "") if isinstance(result, dict) else ""
+        if result.get("status") == "error" and "HTTP 404" in error and "Not Found" in error:
+            result["optional_route_missing"] = True
+        return result
 
     def collect_skill_drafts(self, agent_id: str = "") -> dict:
         return self._request("POST", "/api/capabilities/drafts/collect", {

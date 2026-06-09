@@ -2,6 +2,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, create_refresh_token
 from app.repositories.user_repo import user_repo
 
+import base64
+import os
+import re
+import uuid
+from flask import current_app
+
 
 class AuthService:
     """Authentication & authorization service."""
@@ -68,12 +74,45 @@ class AuthService:
         user = user_repo.get_by_id(user_id)
         if not user:
             return None, 'User not found'
+        avatar_url = kwargs.get('avatar_url')
+        if isinstance(avatar_url, str) and avatar_url.startswith('data:image/'):
+            try:
+                kwargs['avatar_url'] = self._store_avatar_data_url(avatar_url)
+            except ValueError as exc:
+                return None, str(exc)
         allowed = {'username', 'email', 'avatar_url'}
         for k, v in kwargs.items():
             if k in allowed and v is not None:
                 setattr(user, k, v)
         user.save()
         return user.to_dict(), None
+
+    def _store_avatar_data_url(self, data_url):
+        match = re.match(r'^data:image/(png|jpe?g|gif|webp);base64,(.+)$', data_url, re.IGNORECASE | re.DOTALL)
+        if not match:
+            raise ValueError('Invalid avatar image data')
+
+        ext = match.group(1).lower()
+        if ext == 'jpeg':
+            ext = 'jpg'
+        encoded = re.sub(r'\s+', '', match.group(2))
+        if len(encoded) > 3 * 1024 * 1024:
+            raise ValueError('Avatar image is too large')
+
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            raise ValueError('Invalid avatar image data') from exc
+
+        if len(content) > 2 * 1024 * 1024:
+            raise ValueError('Avatar image is too large')
+
+        upload_dir = current_app.config['UPLOAD_FOLDER']
+        os.makedirs(upload_dir, exist_ok=True)
+        filename = f'{uuid.uuid4().hex}.{ext}'
+        with open(os.path.join(upload_dir, filename), 'wb') as file:
+            file.write(content)
+        return f'/uploads/{filename}'
 
     def refresh_token(self, identity):
         """Generate a new access token."""
