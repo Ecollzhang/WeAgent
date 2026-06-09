@@ -10,6 +10,7 @@ class UserModelConfig(BaseModel):
     api_key = db.Column(db.Text, nullable=True)
     base_url = db.Column(db.String(500), nullable=True)
     model = db.Column(db.String(100), nullable=False, default='claude-3.5-sonnet')
+    custom_model = db.Column(db.String(100), nullable=False, default='')
     temperature = db.Column(db.Float, nullable=False, default=0.7)
     max_tokens = db.Column(db.Integer, nullable=False, default=4096)
 

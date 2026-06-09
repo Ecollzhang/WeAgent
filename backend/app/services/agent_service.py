@@ -300,7 +300,7 @@ class AgentService:
     def create_agent(self, user_id, name, capability_tags=None, agent_type='custom',
                      adapter_name='claude', config=None, system_prompt='',
                      skill='', avatar_color='', avatar_url='', class_id=None, is_public=False,
-                     tool_ids=None):
+                     tool_ids=None, capability_bindings=None):
         """Create a custom agent for a user."""
         agent = Agent(
             name=name,
@@ -319,7 +319,10 @@ class AgentService:
             tool_ids=tool_ids or [],
         )
         agent.save()
-        return agent.to_dict(), None
+        error = self._apply_capability_bindings(user_id, agent.id, capability_bindings)
+        if error:
+            return None, error
+        return self._agent_with_capability_bindings(agent), None
 
     def update_agent(self, agent_id, user_id, **kwargs):
         """Update an agent (owner only)."""
@@ -328,6 +331,7 @@ class AgentService:
         agent = Agent.query.filter_by(id=agent_id, user_id=user_id).first()
         if not agent:
             return None, 'Agent not found'
+        capability_bindings = kwargs.pop('capability_bindings', None)
         allowed = {'name', 'avatar_url', 'avatar_color', 'capability_tags',
                    'adapter_name', 'config', 'system_prompt', 'skill',
                    'class_id', 'is_public', 'tool_ids'}
@@ -335,7 +339,10 @@ class AgentService:
             if k in allowed and v is not None:
                 setattr(agent, k, v)
         agent.save()
-        return agent.to_dict(), None
+        error = self._apply_capability_bindings(user_id, agent.id, capability_bindings)
+        if error:
+            return None, error
+        return self._agent_with_capability_bindings(agent), None
 
     def delete_agent(self, agent_id, user_id):
         """Delete an agent (owner only)."""
@@ -346,6 +353,32 @@ class AgentService:
             return None, 'Agent not found'
         agent.delete()
         return {'deleted': True}, None
+
+    def _apply_capability_bindings(self, user_id, agent_id, capability_bindings):
+        if capability_bindings is None:
+            return None
+        from app.services.capability_service import capability_service
+
+        for binding in capability_bindings:
+            _result, error = capability_service.bind_to_user_agent(
+                user_id=user_id,
+                agent_id=agent_id,
+                capability_version_id=binding.get('capability_version_id'),
+                granted_permissions=binding.get('granted_permissions', []),
+                version_policy=binding.get('version_policy', 'pinned'),
+                enabled=binding.get('enabled', True),
+            )
+            if error:
+                return error
+        return None
+
+    def _agent_with_capability_bindings(self, agent):
+        data = agent.to_dict()
+        from app.services.capability_service import capability_service
+
+        bindings, error = capability_service.get_agent_bindings(agent.id)
+        data['capability_bindings'] = [] if error else bindings
+        return data
 
 
 agent_service = AgentService()

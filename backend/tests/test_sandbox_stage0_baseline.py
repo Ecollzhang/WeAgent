@@ -5,9 +5,7 @@ from unittest.mock import patch
 
 def _clear_adapter_test_stubs():
     """Adapter unit tests install flask extension stubs; these tests need real DB."""
-    for module_name in list(sys.modules):
-        if module_name == "app" or module_name.startswith("app."):
-            sys.modules.pop(module_name, None)
+    has_stubbed_extension = False
     for module_name in (
         "flask_sqlalchemy",
         "flask_migrate",
@@ -17,6 +15,14 @@ def _clear_adapter_test_stubs():
     ):
         module = sys.modules.get(module_name)
         if module and getattr(module, "__file__", None) is None:
+            has_stubbed_extension = True
+            sys.modules.pop(module_name, None)
+
+    if not has_stubbed_extension:
+        return
+
+    for module_name in list(sys.modules):
+        if module_name == "app" or module_name.startswith("app."):
             sys.modules.pop(module_name, None)
 
 

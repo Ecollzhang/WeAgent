@@ -2,7 +2,7 @@ import axios from 'axios'
 import { getServerUrl, apiUrl } from './config'
 import { getAccessToken, saveAuth } from './session'
 
-async function request(config) {
+export async function request(config) {
   const serverUrl = await getServerUrl()
   const client = axios.create({
     baseURL: apiUrl(serverUrl),

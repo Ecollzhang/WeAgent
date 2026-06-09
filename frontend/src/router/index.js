@@ -52,6 +52,10 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/capabilities',
+    redirect: '/tools',
+  },
+  {
     path: '/sandbox',
     redirect: '/favorites',
   },

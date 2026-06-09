@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -9,6 +10,7 @@ from urllib.parse import urlparse
 
 from .base import ProviderRunner
 from .json_stream import JsonObjectStream, extract_text_value, is_internal_plain_line
+from ..capabilities import _safe_segment
 from ..logging_utils import log_agent
 
 
@@ -277,7 +279,71 @@ class CodexRunner(ProviderRunner):
                 "requires_openai_auth = true",
                 f"base_url = {self._toml_string(base_url)}",
             ])
+        for server in self._bound_mcp_servers():
+            lines.extend([
+                "",
+                f"[mcp_servers.{server['config_name']}]",
+                f"command = {self._toml_string(server['command'])}",
+                f"args = {json.dumps(server['args'], ensure_ascii=False)}",
+            ])
         return "\n".join(lines).strip() + "\n"
+
+    def _bound_mcp_servers(self) -> list[dict]:
+        capabilities_path = os.path.join(
+            self._workspace_root(),
+            ".weagent",
+            "agents",
+            _safe_segment(self.runtime.agent_id),
+            "capabilities.json",
+        )
+        try:
+            with open(capabilities_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            return []
+
+        servers = []
+        used_names = set()
+        for capability in payload.get("capabilities") or []:
+            if capability.get("type") != "mcp":
+                continue
+            manifest = capability.get("manifest") or {}
+            raw = manifest.get("raw") if isinstance(manifest.get("raw"), dict) else {}
+            entry = manifest.get("entry") or raw.get("entry") or {}
+            command = entry.get("command")
+            args = entry.get("args") or []
+            if not isinstance(command, str) or not command.strip():
+                continue
+            if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+                continue
+            base_name = self._codex_mcp_server_name(
+                capability.get("name")
+                or capability.get("source_ref")
+                or capability.get("runtime_id")
+                or capability.get("capability_id")
+            )
+            config_name = base_name
+            suffix = 2
+            while config_name in used_names:
+                config_name = f"{base_name}_{suffix}"
+                suffix += 1
+            used_names.add(config_name)
+            servers.append({
+                "config_name": config_name,
+                "command": command.strip(),
+                "args": args,
+            })
+        return servers
+
+    @staticmethod
+    def _workspace_root() -> str:
+        return os.environ.get("WEAGENT_WORKSPACE_ROOT", "/workspace")
+
+    @staticmethod
+    def _codex_mcp_server_name(value: str) -> str:
+        text = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip().lower())
+        text = re.sub(r"_+", "_", text).strip("_-")
+        return text[:64] or "weagent_mcp"
 
     def _write_file(self, filename: str, content: str, mode: int = 0o644) -> None:
         path = os.path.join(self.home_dir, filename)

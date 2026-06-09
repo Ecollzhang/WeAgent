@@ -243,7 +243,7 @@ class DockerContainerManager:
             "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
             "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
             "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL",
-            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML",
+            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML", "CODEX_USE_RELAY",
             "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "OPENCODE_MODEL",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
             "API_TIMEOUT_MS", "CLAUDE_EXEC_TIMEOUT_SECONDS",
@@ -309,6 +309,7 @@ class DockerContainerManager:
             f"[SandboxManager] container_ready session_id={session_id} "
             f"container={container.id[:12]} orchestrator=http://localhost:{host_port}"
         )
+        self._project_capabilities_to_container(host_port, session_id, agents)
 
         # Create agents inside container
         for agent_cfg in agents:
@@ -411,13 +412,13 @@ class DockerContainerManager:
 
             agents_config = []
             try:
-                info = OrchestratorClient(host="localhost", port=host_port).get_session_info()
-                agents_config = info.get("agents", [])
+                agents_config = self._recover_agents_from_labels(container.labels)
             except Exception:
-                pass
+                agents_config = []
             if not agents_config:
                 try:
-                    agents_config = self._recover_agents_from_labels(container.labels)
+                    info = OrchestratorClient(host="localhost", port=host_port).get_session_info()
+                    agents_config = info.get("agents", [])
                 except Exception:
                     agents_config = []
 
@@ -444,7 +445,9 @@ class DockerContainerManager:
             f"[SandboxManager] send_message session_id={session_id} "
             f"agent_id={agent_id} message_len={len(message or '')}"
         )
-        return session.client.send_to_agent(agent_id, message)
+        result = session.client.send_to_agent(agent_id, message)
+        self._sync_skill_drafts_from_result(session_id, result)
+        return result
 
     def send_chain(self, session_id: str, messages: list[dict]) -> list[dict]:
         """Chain messages across agents."""
@@ -455,7 +458,9 @@ class DockerContainerManager:
             f"[SandboxManager] send_chain session_id={session_id} "
             f"message_count={len(messages or [])}"
         )
-        return session.client.send_chain(messages)
+        result = session.client.send_chain(messages)
+        self._sync_skill_drafts_from_result(session_id, result)
+        return result
 
     def delegate_message(self, session_id: str, message: str,
                          moderator_id: str = "moderator",
@@ -469,7 +474,9 @@ class DockerContainerManager:
             f"moderator_id={moderator_id} targets={target_agent_ids} "
             f"message_len={len(message or '')}"
         )
-        return session.client.delegate(message, moderator_id, target_agent_ids)
+        result = session.client.delegate(message, moderator_id, target_agent_ids)
+        self._sync_skill_drafts_from_result(session_id, result)
+        return result
 
     def add_agent(self, session_id: str, config: dict) -> dict:
         """Add an agent to an existing session container."""
@@ -479,6 +486,11 @@ class DockerContainerManager:
         print(
             f"[SandboxManager] add_agent session_id={session_id} "
             f"agent_id={config.get('agent_id')} role={config.get('role')}"
+        )
+        self._project_capabilities_to_container(
+            session.host_port,
+            session_id,
+            [*session.agents_config, config],
         )
         result = session.client.create_agent(
             agent_id=config["agent_id"],
@@ -530,9 +542,28 @@ class DockerContainerManager:
             "base_url": env_vars.get("ANTHROPIC_BASE_URL") or env_vars.get("DEEPSEEK_BASE_URL") or "",
             "model": env_vars.get("ANTHROPIC_MODEL") or env_vars.get("DEEPSEEK_MODEL") or "",
         }
+        provider_keys = [
+            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+            "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
+            "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+            "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL",
+            "CODEX_AUTH_JSON", "CODEX_CONFIG_TOML", "CODEX_USE_RELAY",
+            "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "OPENCODE_MODEL",
+        ]
         config["api_key"] = _clean_config_value(config["api_key"])
         config["base_url"] = _clean_base_url(config["base_url"])
         config["model"] = _clean_config_value(config["model"])
+        for key in provider_keys:
+            value = env_vars.get(key)
+            if value is None:
+                continue
+            if key.endswith("BASE_URL"):
+                config[key] = _clean_base_url(value)
+            elif key.endswith("API_KEY") or key.endswith("AUTH_TOKEN") or key.endswith("MODEL"):
+                config[key] = _clean_config_value(value)
+            else:
+                config[key] = value
         return session.client.update_model_config(config)
 
     def update_model_config_for_user_sessions(self, user_id: str, env_vars: dict) -> dict:
@@ -1112,6 +1143,39 @@ print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=
             raise KeyError(f"Session '{session_id}' not found")
         return session.client.remove_custom_tool(tool_name)
 
+    # ---- MCP ----
+
+    def list_mcp_servers(self, session_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.list_mcp_servers()
+
+    def start_mcp_server(self, session_id: str, agent_id: str, runtime_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.start_mcp_server(agent_id, runtime_id)
+
+    def list_mcp_tools(self, session_id: str, runtime_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.list_mcp_tools(runtime_id)
+
+    def call_mcp_tool(self, session_id: str, agent_id: str, runtime_id: str,
+                      tool_name: str, args: dict) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.call_mcp_tool(agent_id, runtime_id, tool_name, args)
+
+    def stop_mcp_server(self, session_id: str, runtime_id: str) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.stop_mcp_server(runtime_id)
+
     # ---- Services ----
 
     def list_services(self, session_id: str, user_id: str | None = None) -> dict:
@@ -1336,6 +1400,64 @@ print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=
             workspace_name=config.get("workspace_name") or config.get("role") or config["agent_id"],
             adapter_name=config.get("adapter_name") or config.get("provider") or "claude",
         )
+
+    def _project_capabilities_to_container(self, port: int, session_id: str,
+                                           agents: list[dict]) -> dict:
+        """Build DB-backed capability projection and install it before agent startup."""
+        from app.services.capability_projection_service import build_capability_projection
+
+        projection = build_capability_projection(session_id=session_id, agents=agents)
+        client = OrchestratorClient(host="localhost", port=port)
+        result = client.apply_capability_projection(projection)
+        if result.get("status") not in {"ok", None} or result.get("error"):
+            raise RuntimeError(result.get("error") or "Failed to apply capability projection")
+        return projection
+
+    def _sync_skill_drafts_from_result(self, session_id: str, result):
+        drafts = self._extract_skill_drafts(result)
+        if not drafts:
+            return
+        try:
+            from app.models.conversation import Conversation
+            from app.services.capability_draft_sync_service import (
+                capability_draft_sync_service,
+            )
+
+            conversation = Conversation.query.get(session_id)
+            if not conversation:
+                return
+            synced, error = capability_draft_sync_service.sync_records(
+                user_id=conversation.owner_id,
+                records=drafts,
+            )
+            if isinstance(result, dict):
+                if error:
+                    result["skill_drafts_sync"] = {"status": "error", "error": error}
+                else:
+                    result["skill_drafts_sync"] = {
+                        "status": "ok",
+                        "count": len(synced or []),
+                    }
+        except Exception as exc:
+            if isinstance(result, dict):
+                result["skill_drafts_sync"] = {
+                    "status": "error",
+                    "error": str(exc),
+                }
+
+    def _extract_skill_drafts(self, result) -> list[dict]:
+        drafts = []
+        if isinstance(result, dict):
+            if isinstance(result.get("skill_drafts"), list):
+                drafts.extend(result["skill_drafts"])
+            nested = result.get("results")
+            if isinstance(nested, list):
+                for item in nested:
+                    drafts.extend(self._extract_skill_drafts(item))
+        elif isinstance(result, list):
+            for item in result:
+                drafts.extend(self._extract_skill_drafts(item))
+        return drafts
 
     @staticmethod
     def _recover_agents_from_labels(labels: dict) -> list[dict]:

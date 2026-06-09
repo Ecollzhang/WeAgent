@@ -57,11 +57,70 @@
 - Tests proving turn 2 can see turn 1 messages and recorded file context.
 - Documentation of what context is preserved and what is still provider-dependent.
 
+## Phase 3: Toolset Desktop Merge
+
+**Goal:** Embed the DB-backed Toolset/Capability module from `feature/toolset` into the desktop runtime base while preserving the desktop sandbox provider architecture.
+
+**Requirements:** REQ-16, REQ-17, REQ-18, REQ-19, REQ-20, REQ-21, REQ-22, REQ-23, REQ-24, REQ-25, REQ-26
+
+**Canonical references:**
+
+- `.planning/phases/03-toolset/03-SPEC.md`
+- `.planning/phases/03-toolset/03-PLAN.md`
+- `.planning/phases/01-agent-adapter-streaming-factory/01-01-PLAN.md`
+- `.planning/phases/02-conversation-context-system/02-01-PLAN.md`
+- `backend/app/sandbox/container/providers/factory.py`
+- `backend/app/sandbox/container/agent.py`
+- `backend/app/sandbox/host/manager.py`
+- `frontend/src/components/AgentEditForm/index.vue`
+- `frontend/src/views/Tools.vue`
+
+**Planned outputs:**
+
+- Merge branch `combine/toolset_v1.1.0`.
+- Capability/Toolset DB models, APIs, seed logic, and Web UI on the desktop base.
+- Agent provider selection plus capability binding in one Web form.
+- Sandbox `.weagent/*` capability projection integrated with desktop provider runners.
+- Minimal MCP runtime and built-in Tool call records preserved.
+- Verification report covering tests, build, and sandbox smoke.
+
+## Phase 4: Desktop Toolset Adapter
+
+**Goal:** Give the desktop client a Toolset/Capability management entry and prove that desktop-created Agent sessions really inject bound Skill, Tool, and MCP capabilities into Codex and Claude provider runtimes.
+
+**Requirements:** REQ-27, REQ-28, REQ-29, REQ-30, REQ-31, REQ-32, REQ-33, REQ-34
+
+**Canonical references:**
+
+- `.planning/phases/04-desktop-toolset-adapter/04-SPEC.md`
+- `.planning/phases/04-desktop-toolset-adapter/04-PLAN.md`
+- `.planning/phases/03-toolset/03-SPEC.md`
+- `.planning/phases/03-toolset/03-PLAN.md`
+- `clients/desktop/src/views/Agents.vue`
+- `clients/desktop/src/router/index.js`
+- `clients/desktop/src/services/api.js`
+- `backend/app/sandbox/container/providers/codex.py`
+- `backend/app/sandbox/container/providers/claude.py`
+- `backend/app/sandbox/container/capabilities.py`
+
+**Planned outputs:**
+
+- Desktop Toolset/Capability management entry with category-first navigation and Skill/MCP/Plugin/Tool tabs.
+- Desktop workflows for Skill Markdown creation/editing, Markdown/zip/npx/MCP manifest import, security audit preview/detail, capability deletion, and provider config test/save/enable/disable.
+- Desktop Agent create/edit support for capability binding with pinned versions.
+- Desktop API wrappers for toolset categories, capability list, and agent capability binding/unbinding.
+- Runtime smoke proving desktop-originated sessions generate `.weagent/*` projection.
+- Codex smoke proving MCP/Skill/Tool capability injection is visible in runtime config/context.
+- Claude smoke proving Skill/Tool/MCP capability index is visible in runtime context.
+- Verification report containing projection evidence, runtime evidence, and behavior/call evidence.
+
 ## Deferred
 
+- Full execution of arbitrary user-defined script Tools.
 - Full Claude Agent SDK integration.
 - Codex TypeScript SDK bridge.
 - Multi-run persistence table for every raw event.
 - UI redesign for rich tool timeline.
 - Native provider session resume for Claude/Codex.
 - Interactive choice continuation protocol.
+- Full desktop arbitrary script Tool editor/executor and secret-vault management UI.

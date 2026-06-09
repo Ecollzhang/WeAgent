@@ -13,7 +13,7 @@
         <span>我的Agent</span>
       </router-link>
       <router-link to="/tools" class="nav-item" :class="{ active: $route.path === '/tools' }">
-        <i class="el-icon-s-tools"></i>
+        <span class="toolset-wrench-icon"></span>
         <span>工具集</span>
       </router-link>
       <router-link to="/favorites" class="nav-item" :class="{ active: $route.path === '/favorites' }">
@@ -119,6 +119,16 @@ export default {
   font-size: 18px;
   width: 20px;
   text-align: center;
+}
+
+.toolset-wrench-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M14.7%206.3a1%201%200%200%200%200%201.4l1.6%201.6a1%201%200%200%200%201.4%200l3.1-3.1a6%206%200%200%201-7.9%207.9l-6.9%206.9a2.1%202.1%200%200%201-3-3l6.9-6.9a6%206%200%200%201%207.9-7.9l-3.1%203.1z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='black'%20stroke-linecap='round'%20stroke-linejoin='round'%20stroke-width='2'%20d='M14.7%206.3a1%201%200%200%200%200%201.4l1.6%201.6a1%201%200%200%200%201.4%200l3.1-3.1a6%206%200%200%201-7.9%207.9l-6.9%206.9a2.1%202.1%200%200%201-3-3l6.9-6.9a6%206%200%200%201%207.9-7.9l-3.1%203.1z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .sidebar-footer {

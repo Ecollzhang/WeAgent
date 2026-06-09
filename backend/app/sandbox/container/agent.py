@@ -65,6 +65,7 @@ class AgentRuntime:
 
     def _format_agent_md(self) -> str:
         """Format the agent.md file from the system prompt."""
+        capability_note = self._capability_instruction()
         note = f"""
 
 ===== WeAgent 工作与实时上报规范 =====
@@ -103,7 +104,20 @@ service 产物优先使用 weagent-service start 自动上报；手动上报时�
 不要请求批准，系统已自动批准工具调用。写入完成后必须上报对应 file/image，结束前用 summary 上报给用户看的简短结论。
 ========================
 """
+        if capability_note:
+            note = note.replace("\n========================", f"{capability_note}\n========================")
         return f"# {self.role}\n\n{self.system_prompt}\n{note}"
+
+    def _capability_instruction(self) -> str:
+        """Return the toolset projection note if the capability module is present."""
+        try:
+            from .capabilities import agent_bootstrap_instruction
+            bootstrap = agent_bootstrap_instruction(self.agent_id)
+            if bootstrap in (self.system_prompt or ""):
+                return ""
+            return "\n" + bootstrap
+        except Exception:
+            return ""
 
     def stop(self):
         """Signal the currently running process to stop."""
@@ -155,6 +169,7 @@ service 产物优先使用 weagent-service start 自动上报；手动上报时�
         return msg
 
     def _runtime_instruction(self) -> str:
+        capability_note = self._capability_instruction()
         moderator_rule = ""
         if self.agent_id == "moderator":
             moderator_rule = """
@@ -190,6 +205,7 @@ weagent-report '{{"type":"summary","title":"完成摘要","content":"已完成�
 weagent-service start --name "前端预览" --cwd "/workspace/agents/{self.workspace_name}" --command "npm run dev -- --host 0.0.0.0 --port 5173" --port 5173 --type vite
 
 {moderator_rule}
+{capability_note}
 下面才是用户任务。先上报 progress，再开始处理。
 """.strip()
 

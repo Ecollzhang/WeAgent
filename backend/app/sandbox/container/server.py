@@ -320,6 +320,33 @@ def providers():
 
 
 # ============================
+# Capability projection
+# ============================
+
+
+@app.route("/api/capabilities/projection", methods=["POST"])
+def apply_capability_projection():
+    data = request.get_json(force=True) or {}
+    log_event(
+        "api_capability_projection",
+        agent_count=len((data.get("agents") or {}) if isinstance(data, dict) else {}),
+        capability_count=len((data.get("capabilities") or {}) if isinstance(data, dict) else {}),
+    )
+    result = orchestrator.apply_capability_projection(data)
+    if result.get("status") == "error" or "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/capabilities/drafts/collect", methods=["POST"])
+def collect_skill_drafts():
+    data = request.get_json(force=True) or {}
+    agent_id = data.get("agent_id", "")
+    drafts = orchestrator.collect_skill_drafts(agent_id)
+    return jsonify({"status": "ok", "drafts": drafts})
+
+
+# ============================
 # Agent management
 # ============================
 
@@ -678,6 +705,57 @@ def execute_tool():
         return jsonify({"status": "ok", "result": json.loads(result)})
     except (json.JSONDecodeError, TypeError):
         return jsonify({"status": "ok", "result": result})
+
+
+# ============================
+# MCP
+# ============================
+
+
+@app.route("/api/mcp/servers", methods=["GET"])
+def list_mcp_servers():
+    return jsonify(orchestrator.list_mcp_servers())
+
+
+@app.route("/api/mcp/<runtime_id>/start", methods=["POST"])
+def start_mcp_server(runtime_id: str):
+    data = request.get_json(force=True) or {}
+    agent_id = data.get("agent_id", "")
+    if not agent_id:
+        return jsonify({"status": "error", "error": "agent_id required"}), 400
+    result = orchestrator.start_mcp_server(agent_id, runtime_id)
+    if result.get("status") == "error":
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/mcp/<runtime_id>/tools", methods=["GET"])
+def list_mcp_tools(runtime_id: str):
+    result = orchestrator.list_mcp_tools(runtime_id)
+    if result.get("status") == "error":
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/mcp/<runtime_id>/call", methods=["POST"])
+def call_mcp_tool(runtime_id: str):
+    data = request.get_json(force=True) or {}
+    agent_id = data.get("agent_id", "")
+    tool_name = data.get("tool_name", "")
+    args = data.get("args") or {}
+    if not agent_id:
+        return jsonify({"status": "error", "error": "agent_id required"}), 400
+    if not tool_name:
+        return jsonify({"status": "error", "error": "tool_name required"}), 400
+    result = orchestrator.call_mcp_tool(agent_id, runtime_id, tool_name, args)
+    if result.get("status") == "error":
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/mcp/<runtime_id>/stop", methods=["POST"])
+def stop_mcp_server(runtime_id: str):
+    return jsonify(orchestrator.stop_mcp_server(runtime_id))
 
 
 @app.route("/api/report", methods=["POST"])
