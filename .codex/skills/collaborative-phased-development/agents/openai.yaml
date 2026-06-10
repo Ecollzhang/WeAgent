@@ -1,3 +1,0 @@
-display_name: 分阶段协作开发
-short_description: 按需求复述、方案确认、分阶段实施和测试验收协作。
-default_prompt: 按分阶段协作开发流程处理这个需求。
