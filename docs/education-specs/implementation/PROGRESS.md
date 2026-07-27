@@ -28,3 +28,7 @@
 - Education 课程、工作流和基础联合回归：`14 passed`。
 - 核心 Artifact 创建、读取、更新和消息列表增加会话 owner/participant 对象 ACL。
 - Artifact ACL 与既有 Artifact 合同回归：`4 passed`。
+- 集成 Unit、Lesson、Activity、不可变内容版本和幂等发布快照。
+- 发布严格拆分学生 manifest 与教师答案/rubric manifest。
+- 完成作业发布、学生多版本提交、教师反馈、学习事件与班级基础学情。
+- Education 全业务联合回归：`20 passed`。
