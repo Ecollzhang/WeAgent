@@ -16,3 +16,7 @@
 - 完成 Education 应用工厂、独立数据库扩展、健康检查与 JWT 业务入口。
 - 增加核心网关与 Education 服务双层灰度门；`feature.education.enabled` 关闭时不转发业务流量。
 - Education 基础切片及灰度回归：`5 passed`。
+- 完成 Course、CourseMembership、CourseInvitation 领域模型和 HTTP API。
+- 邀请令牌只保存 SHA-256 hash；支持期限、次数、撤销和幂等加入。
+- 课程授权只依赖服务端 active membership，伪造 workspace 子角色不能越权。
+- 教师与两名学生闭环测试连同服务基础回归：`8 passed`。

@@ -3,8 +3,7 @@
 import os
 import sys
 
-from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
+from flask import jsonify, request
 
 
 BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -19,17 +18,6 @@ try:
 except ImportError:  # Support ``python services/edu/app.py``.
     from config import Config
     from extensions import db
-
-
-def _create_api_blueprint():
-    blueprint = Blueprint("education_api", __name__)
-
-    @blueprint.get("/courses")
-    @jwt_required()
-    def list_courses():
-        return jsonify({"items": []})
-
-    return blueprint
 
 
 def create_edu_app(config_object=Config):
@@ -47,7 +35,11 @@ def create_edu_app(config_object=Config):
         ):
             return jsonify({"error": "Education feature is disabled"}), 404
 
-    app.register_blueprint(_create_api_blueprint(), url_prefix="/api/edu")
+    try:
+        from .routes import education_api
+    except ImportError:
+        from routes import education_api
+    app.register_blueprint(education_api, url_prefix="/api/edu")
     return app
 
 
