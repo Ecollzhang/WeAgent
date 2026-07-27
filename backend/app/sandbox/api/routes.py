@@ -201,14 +201,28 @@ def _session_access_allowed(session_id: str, user_id: str | None) -> bool:
     try:
         from app.models.conversation import Conversation
 
-        conversation = Conversation.query.filter_by(sandbox_session_id=session_id).first()
-        if conversation:
-            return conversation.owner_id == user_id
-        # Standalone sandbox sessions created outside a Conversation still require
-        # a valid login, but do not have owner metadata to compare against.
-        return True
+        conversation = Conversation.query.filter(
+            (Conversation.sandbox_session_id == session_id)
+            | (Conversation.id == session_id)
+        ).first()
+        if not conversation:
+            return False
+        if conversation.owner_id == user_id:
+            return True
+        return any(
+            participant.participant_type == "user"
+            and participant.participant_id == user_id
+            for participant in conversation.participants
+        )
     except Exception:
-        return True
+        return False
+
+
+def _require_session_access(session_id: str):
+    user_id = _current_user_id_required()
+    if _session_access_allowed(session_id, user_id):
+        return None
+    return jsonify({"code": 404, "message": "Session not found"}), 404
 
 
 def _preview_token_from_request() -> tuple[str, str]:
@@ -535,6 +549,9 @@ def read_agent_file(session_id: str, agent_id: str):
     Query params:
         path: str — file path relative to /workspace
     """
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     path = request.args.get("path", "")
     if not path:
         return jsonify({"code": 400, "message": "path query parameter required"}), 400
@@ -548,6 +565,9 @@ def read_agent_file(session_id: str, agent_id: str):
 @sandbox_bp.route("/sessions/<session_id>/agents/<agent_id>/files/raw", methods=["GET"])
 def read_agent_raw_file(session_id: str, agent_id: str):
     """Serve raw file content with proper MIME type for browser rendering."""
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     path = request.args.get("path", "")
     if not path:
         return jsonify({"code": 400, "message": "path query parameter required"}), 400
@@ -567,6 +587,9 @@ def read_agent_raw_file(session_id: str, agent_id: str):
 def file_tree(session_id: str):
     """Return the session workspace file tree."""
     started_at = time.perf_counter()
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     root = request.args.get("root", "/workspace")
     include_hidden = request.args.get("include_hidden", "false").lower() == "true"
     max_depth = request.args.get("max_depth", 8, type=int)
@@ -586,6 +609,9 @@ def file_tree(session_id: str):
 def read_session_raw_file(session_id: str):
     """Serve raw workspace file content with proper MIME type."""
     started_at = time.perf_counter()
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     path = request.args.get("path", "")
     if not path:
         return _with_timing_headers(jsonify({"code": 400, "message": "path query parameter required"}), "files/raw", started_at), 400
@@ -604,6 +630,9 @@ def read_session_raw_file(session_id: str):
 @sandbox_bp.route("/sessions/<session_id>/files/download", methods=["GET"])
 def download_session_file(session_id: str):
     """Download a workspace file."""
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     path = request.args.get("path", "")
     if not path:
         return jsonify({"code": 400, "message": "path query parameter required"}), 400
@@ -625,6 +654,9 @@ def download_session_file(session_id: str):
 @sandbox_bp.route("/sessions/<session_id>/files/export-zip", methods=["GET"])
 def export_session_zip(session_id: str):
     """Export a workspace directory as ZIP."""
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     path = request.args.get("path", "/workspace")
     mode = request.args.get("mode", "directory")
     selected_paths = [item for item in request.args.getlist("selected_path") if str(item or "").strip()]
@@ -662,6 +694,9 @@ def serve_workspace_file(session_id: str, filepath: str):
       GET /api/sandbox/sessions/{sid}/workspace/css/style.css
     """
     started_at = time.perf_counter()
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     mgr = _mgr()
     session = mgr.get_session(session_id)
     if not session:
@@ -685,6 +720,9 @@ def serve_workspace_file(session_id: str, filepath: str):
 @sandbox_bp.route("/sessions/<session_id>/files/write", methods=["PUT"])
 def write_workspace_file(session_id: str):
     """Write a file back to the container workspace."""
+    denied = _require_session_access(session_id)
+    if denied:
+        return denied
     data = request.get_json(silent=True) or {}
     path = (data.get("path") or "").strip()
     content = data.get("content")
