@@ -150,7 +150,7 @@ export default {
       }
       const lesson = await this.$store.dispatch('education/fetchLesson', this.lessonId)
       const version = lesson.current_version || lesson.published_version || lesson.publication || {}
-      const content = version.content || version.content_json || lesson.content || {}
+      const content = version.source_json || version.content || version.content_json || lesson.content || {}
       this.lessonPlan = {
         ...this.lessonPlan,
         ...(content.lesson_plan || lesson.lesson_plan || {}),

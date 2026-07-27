@@ -144,7 +144,7 @@ export default {
       return this.submissions[0] || this.assignment.submission || this.assignment.current_submission || null
     },
     submissionLocked() {
-      return this.ownSubmission && ['submitted', 'reviewed'].includes(this.ownSubmission.status)
+      return this.ownSubmission && ['submitted', 'reviewed', 'graded'].includes(this.ownSubmission.status)
     },
     studentFeedback() {
       const released = this.$store.state.education.feedback || []
@@ -249,7 +249,10 @@ export default {
       try {
         await this.$store.dispatch('education/publishAssignment', this.assignmentId)
         this.$message.success('作业已发布')
-        await this.$store.dispatch('education/fetchAssignment', this.assignmentId)
+        await this.$store.dispatch('education/fetchAssignment', {
+          assignmentId: this.assignmentId,
+          courseId: this.courseId,
+        })
       } catch (error) {
         this.$message.error('作业发布失败')
       }

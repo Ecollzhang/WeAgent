@@ -244,7 +244,8 @@ export default {
       return payload(await publishLesson(lessonId, versionId))
     },
 
-    async fetchAssignment({ commit }, { assignmentId }) {
+    async fetchAssignment({ commit }, input) {
+      const assignmentId = typeof input === 'string' ? input : input.assignmentId
       const assignment = payload(await getAssignment(assignmentId))
       commit('SET_ACTIVE_ASSIGNMENT', assignment)
       return assignment
