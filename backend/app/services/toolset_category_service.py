@@ -9,60 +9,71 @@ from app.models.toolset_category import ToolsetCategory
 
 BUILTIN_TOOLSET_CATEGORIES = [
     {
-        "id": "tool_code",
-        "name": "代码工具",
-        "slug": "tool_code",
-        "icon": "el-icon-monitor",
-        "color": "#3b82f6",
-        "sort_order": 10,
+        "id": "tool_code", "domain": "rd",
+        "name": "代码工具", "slug": "tool_code",
+        "icon": "el-icon-monitor", "color": "#3b82f6", "sort_order": 10,
     },
     {
-        "id": "tool_file",
-        "name": "文件与文档",
-        "slug": "tool_file",
-        "icon": "el-icon-document",
-        "color": "#22c55e",
-        "sort_order": 20,
+        "id": "tool_file", "domain": "rd",
+        "name": "文件与文档", "slug": "tool_file",
+        "icon": "el-icon-document", "color": "#22c55e", "sort_order": 20,
     },
     {
-        "id": "tool_web",
-        "name": "网络与检索",
-        "slug": "tool_web",
-        "icon": "el-icon-connection",
-        "color": "#8b5cf6",
-        "sort_order": 30,
+        "id": "tool_web", "domain": "rd",
+        "name": "网络与检索", "slug": "tool_web",
+        "icon": "el-icon-connection", "color": "#8b5cf6", "sort_order": 30,
     },
     {
-        "id": "tool_data",
-        "name": "数据处理",
-        "slug": "tool_data",
-        "icon": "el-icon-data-analysis",
-        "color": "#14b8a6",
-        "sort_order": 40,
+        "id": "tool_data", "domain": "rd",
+        "name": "数据处理", "slug": "tool_data",
+        "icon": "el-icon-data-analysis", "color": "#14b8a6", "sort_order": 40,
     },
     {
-        "id": "tool_image",
-        "name": "图像/多媒体",
-        "slug": "tool_image",
-        "icon": "el-icon-picture",
-        "color": "#ec4899",
-        "sort_order": 50,
+        "id": "tool_image", "domain": "rd",
+        "name": "图像/多媒体", "slug": "tool_image",
+        "icon": "el-icon-picture", "color": "#ec4899", "sort_order": 50,
     },
     {
-        "id": "tool_sys",
-        "name": "系统与终端",
-        "slug": "tool_sys",
-        "icon": "el-icon-setting",
-        "color": "#f59e0b",
-        "sort_order": 60,
+        "id": "tool_sys", "domain": "rd",
+        "name": "系统与终端", "slug": "tool_sys",
+        "icon": "el-icon-setting", "color": "#f59e0b", "sort_order": 60,
     },
     {
-        "id": "tool_custom",
-        "name": "自定义",
-        "slug": "tool_custom",
-        "icon": "el-icon-plus",
-        "color": "#64748b",
-        "sort_order": 999,
+        "id": "tool_custom", "domain": "rd",
+        "name": "自定义", "slug": "tool_custom",
+        "icon": "el-icon-plus", "color": "#64748b", "sort_order": 999,
+    },
+    # ── Edu domain categories ──
+    {
+        "id": "edu_courseware", "domain": "edu",
+        "name": "课件制作", "slug": "edu_courseware",
+        "icon": "el-icon-present", "color": "#22c55e", "sort_order": 10,
+    },
+    {
+        "id": "edu_quiz", "domain": "edu",
+        "name": "习题管理", "slug": "edu_quiz",
+        "icon": "el-icon-edit-outline", "color": "#f59e0b", "sort_order": 20,
+    },
+    {
+        "id": "edu_analytics", "domain": "edu",
+        "name": "学情分析", "slug": "edu_analytics",
+        "icon": "el-icon-data-analysis", "color": "#14b8a6", "sort_order": 30,
+    },
+    # ── Office domain categories ──
+    {
+        "id": "office_doc", "domain": "office",
+        "name": "公文处理", "slug": "office_doc",
+        "icon": "el-icon-document", "color": "#3b82f6", "sort_order": 10,
+    },
+    {
+        "id": "office_meeting", "domain": "office",
+        "name": "会议管理", "slug": "office_meeting",
+        "icon": "el-icon-date", "color": "#22c55e", "sort_order": 20,
+    },
+    {
+        "id": "office_report", "domain": "office",
+        "name": "报表分析", "slug": "office_report",
+        "icon": "el-icon-data-line", "color": "#14b8a6", "sort_order": 30,
     },
 ]
 
@@ -88,9 +99,10 @@ class ToolsetCategoryService:
                 )
                 db.session.add(category)
                 changed = True
-            for key in ("name", "slug", "icon", "color", "sort_order"):
-                if getattr(category, key) != item[key]:
-                    setattr(category, key, item[key])
+            for key in ("name", "slug", "icon", "color", "sort_order", "domain"):
+                val = item.get(key)
+                if val is not None and getattr(category, key) != val:
+                    setattr(category, key, val)
                     changed = True
             if category.is_builtin is not True:
                 category.is_builtin = True
@@ -98,9 +110,12 @@ class ToolsetCategoryService:
         if changed:
             db.session.commit()
 
-    def list_categories(self, user_id):
+    def list_categories(self, user_id, domain=None):
         self.seed_builtin_categories()
-        categories = self._visible_query(user_id).order_by(
+        q = self._visible_query(user_id)
+        if domain:
+            q = q.filter_by(domain=domain)
+        categories = q.order_by(
             ToolsetCategory.is_builtin.desc(),
             ToolsetCategory.sort_order.asc(),
             ToolsetCategory.created_at.asc(),

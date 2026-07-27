@@ -13,10 +13,11 @@ agent_bp = Blueprint('agents', __name__)
 @agent_bp.route('', methods=['GET'])
 @jwt_required()
 def list_agents():
-    """Get agents for current user. Optional ?class_id=xxx filter."""
+    """Get agents for current user. Optional ?class_id=xxx&domain=xxx filter."""
     user_id = get_jwt_identity()
     class_id = request.args.get('class_id')
-    result, error = agent_service.get_user_agents(user_id, class_id=class_id)
+    domain = request.args.get('domain')
+    result, error = agent_service.get_user_agents(user_id, class_id=class_id, domain=domain)
     if error:
         return error_response(error, code=400)
     return success_response(result)
@@ -59,6 +60,7 @@ def create_agent():
         is_public=data.get('is_public', False),
         tool_ids=data.get('tool_ids', []),
         capability_bindings=data.get('capability_bindings', []),
+        domain=data.get('domain'),
     )
     if error:
         return error_response(error, code=400)
@@ -92,9 +94,10 @@ def delete_agent(agent_id):
 @agent_bp.route('/categories', methods=['GET'])
 @jwt_required()
 def list_categories():
-    """Get categories for current user."""
+    """Get categories for current user. Optional ?domain=xxx filter."""
     user_id = get_jwt_identity()
-    result, error = agent_service.get_categories(user_id)
+    domain = request.args.get('domain')
+    result, error = agent_service.get_categories(user_id, domain=domain)
     if error:
         return error_response(error, code=400)
     return success_response(result)

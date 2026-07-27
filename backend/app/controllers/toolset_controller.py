@@ -12,7 +12,8 @@ toolset_bp = Blueprint("toolsets", __name__)
 @jwt_required()
 def list_categories():
     user_id = get_jwt_identity()
-    result, error = toolset_category_service.list_categories(user_id)
+    domain = request.args.get('domain')
+    result, error = toolset_category_service.list_categories(user_id, domain=domain)
     if error:
         return error_response(error, code=400)
     return success_response(result)

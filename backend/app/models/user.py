@@ -9,6 +9,7 @@ class User(BaseModel):
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
     avatar_url = db.Column(db.String(500), default='')
+    role = db.Column(db.String(20), nullable=False, default='user', comment='admin / user')
 
     # Relationships
     conversations = db.relationship('Conversation', backref='owner', lazy='dynamic',
@@ -19,3 +20,7 @@ class User(BaseModel):
         # Never expose password hash
         data.pop('password_hash', None)
         return data
+
+    @property
+    def is_admin(self):
+        return self.role == 'admin'

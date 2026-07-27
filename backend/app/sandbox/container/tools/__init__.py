@@ -30,8 +30,16 @@ from ..capabilities import (
 )
 
 
+# 无需能力绑定即可使用的工具（由运行时环境自动提供）
+_ALWAYS_ALLOWED_TOOLS = {
+    "rag_search": True,
+}
+
+
 class ToolRegistry:
     """Registry of tools available to agents."""
+
+    TOOL_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
 
     def __init__(self, workspace_root: str = "/workspace"):
         self._tools: dict[str, dict] = {}
@@ -103,7 +111,7 @@ class ToolRegistry:
                     raise PermissionError(
                         f"Missing granted permissions for {tool_name}: {', '.join(missing)}"
                     )
-            elif _projection_exists(self.workspace_root):
+            elif not _ALWAYS_ALLOWED_TOOLS.get(tool_name) and _projection_exists(self.workspace_root):
                 raise PermissionError(
                     f"Tool {tool_name} is not bound to agent {agent_id}"
                 )
@@ -577,6 +585,71 @@ def _configured_database_query(query: str, max_rows: int = 50,
     return result
 
 
+def _rag_search(query: str, top_k: int = 5, domain: str = "",
+                workspace_id: str = "", score_threshold: float = 0.0) -> dict:
+    """Search the RAG knowledge base for relevant document chunks.
+
+    Args:
+        query: Search query text
+        top_k: Number of results to return (default 5)
+        domain: Filter by domain (optional, e.g. 'rd', 'edu', 'office')
+        workspace_id: Filter by workspace (optional)
+        score_threshold: Minimum similarity score 0.0-1.0 (default 0.0)
+
+    Returns:
+        dict with query, results list, and total count.
+        Each result has chunk_id, content, score, metadata, and document info.
+    """
+    rag_url = os.environ.get("RAG_SERVICE_URL", "http://host.docker.internal:5104")
+    api_key = os.environ.get("RAG_INTERNAL_API_KEY", "")
+
+    if not query or not str(query).strip():
+        return {"query": query, "results": [], "total": 0}
+
+    payload = json.dumps({
+        "query": str(query or ""),
+        "top_k": max(1, min(int(top_k or 5), 20)),
+        "domain": str(domain or "").strip() or None,
+        "workspace_id": str(workspace_id or "").strip() or None,
+        "score_threshold": max(0.0, min(float(score_threshold or 0.0), 1.0)),
+    }).encode("utf-8")
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "WeAgent-RAG-Tool/1.0",
+    }
+    if api_key:
+        headers["X-Internal-API-Key"] = api_key
+
+    req = urllib.request.Request(
+        f"{rag_url.rstrip('/')}/api/rag/search",
+        data=payload,
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"知识库检索失败 (HTTP {exc.code})。请确认 RAG 服务已启动并且知识库中有已确认存储的文档。"
+        )
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"无法连接到知识库服务 ({rag_url})。请确认 RAG 服务已启动。详情: {exc.reason}"
+        )
+    except Exception as exc:
+        raise RuntimeError(f"知识库检索异常: {exc}")
+
+    result = json.loads(body)
+    data = result.get("data", {})
+    return {
+        "query": data.get("query", query),
+        "results": data.get("results", []),
+        "total": data.get("total", 0),
+    }
+
+
 def register_builtin_tools(registry: ToolRegistry):
     """Register all built-in tools."""
     registry.register("read_file", _read_file, "Read a file from workspace")
@@ -601,3 +674,4 @@ def register_builtin_tools(registry: ToolRegistry):
     registry.register("git_status", _git_status, "Read git status")
     registry.register("git_diff", _git_diff, "Read git diff")
     registry.register("git_log", _git_log, "Read git log")
+    registry.register("rag_search", _rag_search, "Search the RAG knowledge base for relevant document chunks")

@@ -1,0 +1,1663 @@
+# WeAgent Domain — 微服务实现方案
+
+> **架构决策**：三人各负责一个领域，微服务拆分，独立数据库+独立后端，共用核心服务，前端灰度控制。
+
+---
+
+## 目录
+
+1. [总体架构](#1-总体架构)
+2. [服务拆分方案](#2-服务拆分方案)
+3. [数据库设计](#3-数据库设计)
+4. [灰度控制系统](#4-灰度控制系统)
+5. [后端实现方案](#5-后端实现方案)
+6. [前端实现方案](#6-前端实现方案)
+7. [Agent调用领域服务的机制](#7-agent调用领域服务的机制)
+8. [三人分工与开发流程](#8-三人分工与开发流程)
+9. [开发规范](#9-开发规范)
+10. [里程碑与交付节点](#10-里程碑与交付节点)
+
+---
+
+## 1. 总体架构
+
+### 1.1 架构全景图
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        前端 (Vue 2.7)                             │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐   │
+│  │ 智能研发  │ │ 智慧教育  │ │ 智慧办公  │ │ 灰度控制台       │   │
+│  │ 界面模块  │ │ 界面模块  │ │ 界面模块  │ │ (Feature Flag)  │   │
+│  └─────┬────┘ └─────┬────┘ └─────┬────┘ └────────┬─────────┘   │
+│        │             │             │               │             │
+│        │    灰度配置决定每个领域的可见UI组件和功能入口             │
+└────────┼─────────────┼─────────────┼───────────────┼─────────────┘
+         │             │             │               │
+         │   HTTP REST + Socket.IO    │               │
+         │             │             │               │
+┌────────▼─────────────▼─────────────▼───────────────▼─────────────┐
+│                     API Gateway (Flask)                           │
+│  /api/*              → 路由到核心服务或领域服务                     │
+│  /api/domain/rd/*     → 智能研发服务 (5101)                         │
+│  /api/domain/edu/*    → 智慧教育服务 (5102)                         │
+│  /api/domain/office/* → 智慧办公服务 (5103)                         │
+│  /api/rag/*           → RAG服务 (5104)                              │
+│  /api/grayscale/*     → 灰度控制服务 (核心内)                       │
+└────────┬─────────────┬─────────────┬─────────────┬────────────────┘
+         │             │             │             │
+┌────────▼─────────────▼─────────────▼─────────────▼────────────────┐
+│                      共享核心服务 (:5002)                          │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐    │
+│  │ 用户认证  │ │ 会话管理  │ │Agent调度  │ │ Sandbox管理      │    │
+│  │ (JWT)   │ │          │ │(Moderator │ │ (Docker)        │    │
+│  │          │ │          │ │ +Worker)  │ │                  │    │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘    │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐    │
+│  │ 消息管理  │ │ 产物管理  │ │ 文件上传  │ │ 灰度配置管理     │    │
+│  │          │ │          │ │          │ │ (Feature Flag)  │    │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘    │
+│                                                                   │
+│  数据库: weagent_shared (MySQL)                                    │
+│  缓存: Redis (共享)                                                │
+└──────────────────────────┬────────────────────────────────────────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         │                 │                 │
+┌────────▼────────┐ ┌──────▼──────┐ ┌───────▼───────┐
+│  智能研发服务    │ │ 智慧教育服务 │ │ 智慧办公服务   │
+│  (:5101)        │ │ (:5102)     │ │ (:5103)       │
+│                 │ │             │ │               │
+│ 数据库:         │ │ 数据库:     │ │ 数据库:       │
+│ weagent_rd      │ │ weagent_edu │ │ weagent_office│
+│                 │ │             │ │               │
+│ ┌─────────────┐ │ │┌───────────┐│ │┌─────────────┐│
+│ │项目管理服务  │ │ ││课程管理    ││ ││公文模板服务  ││
+│ │代码仓库集成  │ │ ││课件资源    ││ ││会议管理服务  ││
+│ │CI/CD工具    │ │ ││作业系统    ││ ││审批流服务    ││
+│ │技术文档模板  │ │ ││成绩管理    ││ ││报表服务     ││
+│ │代码审查规则  │ │ ││学情跟踪    ││ ││日程服务     ││
+│ └─────────────┘ │ │└───────────┘│ │└─────────────┘│
+└─────────────────┘ └─────────────┘ └───────────────┘
+         │                 │                 │
+         └─────────────────┼─────────────────┘
+                           │
+┌──────────────────────────▼────────────────────────────────────────┐
+│                      共享 RAG 服务 (:5104)                          │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐               │
+│  │ 研发知识库    │ │ 教育知识库    │ │ 办公知识库    │               │
+│  │ (Milvus)     │ │ (Milvus)     │ │ (Milvus)     │               │
+│  └──────────────┘ └──────────────┘ └──────────────┘               │
+│  向量数据库: Milvus (共享实例，不同Collection)                       │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 关键设计决策
+
+| 决策点 | 选择 | 理由 |
+|---|---|---|
+| 领域服务框架 | Flask（与核心一致） | 复用现有代码模式、中间件、JWT验证逻辑 |
+| 服务间通信 | HTTP REST（内网） | 简单可靠，无需引入消息队列；Agent在沙箱内通过HTTP调用 |
+| 前端灰度 | Vuex + 灰度配置表 | 运行时动态控制，无需重新部署 |
+| 数据库隔离 | 每个领域独立MySQL数据库 | 数据完全隔离，互不影响，各自独立演進 |
+| RAG服务 | 共享服务，按Collection隔离 | Milvus天然支持多Collection，无需部署多实例 |
+
+---
+
+## 2. 服务拆分方案
+
+### 2.1 共享核心服务（不动，已有）
+
+| 服务模块 | 端口 | 说明 | 负责人 |
+|---|---|---|---|
+| 核心服务（Flask） | 5002 | 用户认证、会话、消息、Agent调度、Sandbox、文件上传、产物 | 三人共同维护 |
+| RAG服务（Flask） | 5104 | 文档摄入、向量检索、Rerank | 三人共同维护 |
+| Redis | 6379 | 共享缓存 | - |
+| Milvus | 19530 | 共享向量数据库，分Collection | - |
+
+### 2.2 领域独立服务
+
+#### 2.2.1 智能研发服务 (:5101)
+
+**负责人**：成员A
+
+**数据库**：`weagent_rd`
+
+**独有服务模块**：
+
+```
+backend/services/rd/                    # 智能研发服务根目录
+├── app.py                              # Flask应用入口 (端口5101)
+├── config.py                           # 数据库配置 (weagent_rd)
+├── controllers/
+│   ├── project_controller.py           # 项目管理接口
+│   ├── repo_controller.py             # 代码仓库集成接口
+│   ├── cicd_controller.py             # CI/CD工具接口
+│   └── review_controller.py           # 代码审查接口
+├── services/
+│   ├── project_service.py              # 项目CRUD、模板
+│   ├── repo_service.py                # GitHub/GitLab API封装
+│   ├── cicd_service.py                # 构建/部署状态查询
+│   └── review_service.py              # 代码审查规则引擎
+├── models/
+│   ├── project.py                      # 项目模型
+│   ├── repo_config.py                 # 仓库配置模型
+│   └── review_record.py              # 审查记录模型
+└── schemas/                            # Marshmallow序列化
+```
+
+**独有功能清单**：
+
+| 功能 | 说明 | Agent可调用 |
+|---|---|---|
+| 项目管理 | 创建/管理开发项目，关联会话 | ✅ 架构师Agent可创建项目骨架 |
+| 代码仓库连接 | 绑定GitHub/GitLab仓库，查看提交历史 | ✅ 开发Agent可读取仓库上下文 |
+| 技术栈模板 | Python/Vue/React等项目模板 | ✅ 架构师Agent初始化项目结构 |
+| CI/CD状态 | 查看构建/部署流水线状态 | ✅ 测试Agent触发后查看结果 |
+| 代码审查记录 | 存储和追踪审查历史 | ✅ 审查Agent记录审查结果 |
+| 依赖分析 | 解析requirements.txt/package.json | ✅ 开发Agent检查依赖兼容性 |
+
+#### 2.2.2 智慧教育服务 (:5102)
+
+**负责人**：成员B
+
+**数据库**：`weagent_edu`
+
+**独有服务模块**：
+
+```
+backend/services/edu/                   # 智慧教育服务根目录
+├── app.py                              # Flask应用入口 (端口5102)
+├── config.py                           # 数据库配置 (weagent_edu)
+├── controllers/
+│   ├── course_controller.py            # 课程管理接口
+│   ├── assignment_controller.py        # 作业系统接口
+│   ├── grade_controller.py            # 成绩管理接口
+│   ├── resource_controller.py         # 教学资源接口
+│   └── student_controller.py          # 学生学情接口
+├── services/
+│   ├── course_service.py               # 课程CRUD、课表
+│   ├── assignment_service.py           # 作业发布/提交/批改
+│   ├── grade_service.py               # 成绩录入/分析/导出
+│   ├── resource_service.py            # 课件/教案/素材管理
+│   └── analytics_service.py           # 学情数据分析
+├── models/
+│   ├── course.py                       # 课程模型
+│   ├── assignment.py                   # 作业模型
+│   ├── submission.py                   # 提交记录模型
+│   ├── grade.py                        # 成绩模型
+│   ├── resource.py                     # 教学资源模型
+│   └── student_profile.py             # 学生画像模型
+└── schemas/
+```
+
+**独有功能清单**：
+
+| 功能 | 说明 | Agent可调用 |
+|---|---|---|
+| 课程管理 | 课程创建、课表编排、教学计划 | ✅ 课程设计Agent读写课程大纲 |
+| 课件资源库 | 上传/管理/检索课件素材 | ✅ 课件Agent存取模板和素材 |
+| 作业系统 | 教师发布→学生提交→自动批改→反馈 | ✅ 习题Agent发布题目，批改Agent打分 |
+| 成绩管理 | 成绩录入、统计分析、报表导出 | ✅ 学情Agent读取成绩数据进行诊断 |
+| 学生画像 | 知识点掌握度、学习风格、薄弱项 | ✅ 学习规划Agent查询学生画像 |
+| 课堂互动 | 随堂测验、投票、问答记录 | ✅ 教学Agent分析课堂参与度 |
+
+#### 2.2.3 智慧办公服务 (:5103)
+
+**负责人**：成员C
+
+**数据库**：`weagent_office`
+
+**独有服务模块**：
+
+```
+backend/services/office/                # 智慧办公服务根目录
+├── app.py                              # Flask应用入口 (端口5103)
+├── config.py                           # 数据库配置 (weagent_office)
+├── controllers/
+│   ├── document_controller.py          # 公文管理接口
+│   ├── meeting_controller.py           # 会议管理接口
+│   ├── approval_controller.py          # 审批流接口
+│   ├── report_controller.py            # 报表服务接口
+│   └── schedule_controller.py          # 日程管理接口
+├── services/
+│   ├── document_service.py             # 公文模板/起草/审核/归档
+│   ├── meeting_service.py              # 会议议题/纪要/决议追踪
+│   ├── approval_service.py             # 审批流定义/流转/归档
+│   ├── report_service.py              # 报表模板/数据填充/生成
+│   └── schedule_service.py            # 日程CRUD/冲突检测/提醒
+├── models/
+│   ├── official_document.py            # 公文模型
+│   ├── meeting.py                      # 会议模型
+│   ├── approval.py                     # 审批模型
+│   ├── report.py                       # 报表模型
+│   └── schedule.py                     # 日程模型
+└── schemas/
+```
+
+**独有功能清单**：
+
+| 功能 | 说明 | Agent可调用 |
+|---|---|---|
+| 公文管理 | 模板库、起草、格式审核、归档 | ✅ 公文Agent调用模板和格式检查 |
+| 会议管理 | 议题管理、纪要模板、决议追踪 | ✅ 会议Agent创建纪要、提取行动项 |
+| 审批流 | 自定义审批流程、流转、归档 | ✅ 办公协调员Agent发起/查询审批 |
+| 报表服务 | 报表模板、数据填充、导出 | ✅ 报表Agent调用模板生成报表 |
+| 日程管理 | 个人/团队日程、冲突检测 | ✅ 日程Agent查询空闲时间、安排会议 |
+| 通讯录 | 部门/人员/角色管理 | ✅ 邮件Agent获取收件人信息 |
+
+---
+
+## 3. 数据库设计
+
+### 3.1 数据库总体规划
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  MySQL Instance                      │
+│                                                      │
+│  ┌──────────────────┐                               │
+│  │  weagent_shared   │  共享核心库（现有16张表）       │
+│  │  + grayscale_config│  + 新增灰度配置表             │
+│  │  + workspaces     │  + 新增工作空间表              │
+│  └──────────────────┘                               │
+│                                                      │
+│  ┌──────────────────┐                               │
+│  │  weagent_rd       │  智能研发库（独有表）           │
+│  └──────────────────┘                               │
+│                                                      │
+│  ┌──────────────────┐                               │
+│  │  weagent_edu      │  智慧教育库（独有表）           │
+│  └──────────────────┘                               │
+│                                                      │
+│  ┌──────────────────┐                               │
+│  │  weagent_office   │  智慧办公库（独有表）           │
+│  └──────────────────┘                               │
+└─────────────────────────────────────────────────────┘
+```
+
+### 3.2 共享核心库新增表
+
+#### workspaces（工作空间表）
+
+```sql
+-- 在 weagent_shared 库中新增
+CREATE TABLE workspaces (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    domain VARCHAR(50) NOT NULL COMMENT 'rd/edu/office',
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    icon VARCHAR(50),
+    sort_order INT DEFAULT 0,
+    status ENUM('active', 'archived') DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    INDEX idx_user (user_id),
+    INDEX idx_domain (domain),
+    UNIQUE KEY uk_user_domain_name (user_id, domain, name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- conversations 表新增字段
+ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(36);
+ALTER TABLE conversations ADD FOREIGN KEY (workspace_id) REFERENCES workspaces(id);
+ALTER TABLE conversations ADD INDEX idx_workspace (workspace_id);
+```
+
+#### grayscale_config（灰度配置表）
+
+```sql
+CREATE TABLE grayscale_config (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    config_key VARCHAR(100) NOT NULL COMMENT '配置键，如 ui.sidebar.course_btn',
+    config_name VARCHAR(200) NOT NULL COMMENT '中文名称，如"侧边栏-课程管理入口"',
+    config_type ENUM('ui', 'feature', 'agent', 'tool') NOT NULL COMMENT '配置类型',
+    domain VARCHAR(50) NOT NULL COMMENT 'rd/edu/office/* (星号表示所有领域)',
+    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+    visible TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否可见（关闭后UI隐藏但API可用）',
+    description TEXT COMMENT '配置说明',
+    metadata JSON COMMENT '扩展元数据（如依赖的其他配置项）',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_key_domain (config_key, domain),
+    INDEX idx_domain (domain),
+    INDEX idx_type (config_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 3.3 智能研发库（weagent_rd）
+
+```sql
+-- 项目管理
+CREATE TABLE rd_projects (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    tech_stack JSON COMMENT '{"frontend":"Vue","backend":"Flask","database":"MySQL"}',
+    repo_url VARCHAR(500),
+    repo_type ENUM('github', 'gitlab', 'gitee', 'other'),
+    status ENUM('planning', 'developing', 'testing', 'completed') DEFAULT 'planning',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_workspace (workspace_id),
+    INDEX idx_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 代码审查记录
+CREATE TABLE rd_reviews (
+    id VARCHAR(36) PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    conversation_id VARCHAR(36),
+    agent_id VARCHAR(36),
+    review_content TEXT NOT NULL COMMENT '审查内容（JSON，包含问题列表和建议）',
+    files_checked JSON COMMENT '被审查的文件列表',
+    issue_count INT DEFAULT 0,
+    severity ENUM('info', 'warning', 'critical') DEFAULT 'info',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES rd_projects(id),
+    INDEX idx_project (project_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- CI/CD构建记录
+CREATE TABLE rd_builds (
+    id VARCHAR(36) PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    build_number INT NOT NULL,
+    status ENUM('pending', 'running', 'success', 'failed') DEFAULT 'pending',
+    commit_sha VARCHAR(64),
+    branch VARCHAR(200),
+    log_url VARCHAR(500),
+    duration_seconds INT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES rd_projects(id),
+    INDEX idx_project (project_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 3.4 智慧教育库（weagent_edu）
+
+```sql
+-- 课程
+CREATE TABLE edu_courses (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL COMMENT '教师用户ID',
+    name VARCHAR(200) NOT NULL,
+    subject VARCHAR(100) COMMENT '学科',
+    grade_level VARCHAR(50) COMMENT '年级/学段',
+    description TEXT,
+    schedule JSON COMMENT '课表安排',
+    status ENUM('draft', 'active', 'ended') DEFAULT 'draft',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_workspace (workspace_id),
+    INDEX idx_teacher (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 教学资源（课件/教案/素材）
+CREATE TABLE edu_resources (
+    id VARCHAR(36) PRIMARY KEY,
+    course_id VARCHAR(36),
+    workspace_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    type ENUM('lesson_plan', 'courseware', 'exercise', 'material', 'other') NOT NULL,
+    file_path VARCHAR(500),
+    file_type VARCHAR(50),
+    file_size BIGINT,
+    tags JSON,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (course_id) REFERENCES edu_courses(id),
+    INDEX idx_course (course_id),
+    INDEX idx_workspace (workspace_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 作业
+CREATE TABLE edu_assignments (
+    id VARCHAR(36) PRIMARY KEY,
+    course_id VARCHAR(36) NOT NULL,
+    workspace_id VARCHAR(36) NOT NULL,
+    teacher_id VARCHAR(36) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    description TEXT,
+    type ENUM('homework', 'quiz', 'exam', 'practice') DEFAULT 'homework',
+    questions JSON COMMENT '题目列表',
+    total_score DECIMAL(5,1),
+    due_date DATETIME,
+    status ENUM('draft', 'published', 'closed') DEFAULT 'draft',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (course_id) REFERENCES edu_courses(id),
+    INDEX idx_course (course_id),
+    INDEX idx_workspace (workspace_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 作业提交
+CREATE TABLE edu_submissions (
+    id VARCHAR(36) PRIMARY KEY,
+    assignment_id VARCHAR(36) NOT NULL,
+    student_id VARCHAR(36) NOT NULL COMMENT '学生用户ID',
+    content JSON COMMENT '答案内容',
+    file_paths JSON COMMENT '附件路径',
+    score DECIMAL(5,1),
+    feedback TEXT COMMENT '教师/AI批改反馈',
+    status ENUM('pending', 'submitted', 'graded') DEFAULT 'pending',
+    submitted_at DATETIME,
+    graded_at DATETIME,
+    FOREIGN KEY (assignment_id) REFERENCES edu_assignments(id),
+    INDEX idx_assignment (assignment_id),
+    INDEX idx_student (student_id),
+    UNIQUE KEY uk_assignment_student (assignment_id, student_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 学生画像（学习数据）
+CREATE TABLE edu_student_profiles (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    workspace_id VARCHAR(36) NOT NULL,
+    knowledge_map JSON COMMENT '知识点掌握度映射 {"知识点": 0.0-1.0}',
+    learning_style VARCHAR(50) COMMENT '学习风格',
+    weak_points JSON COMMENT '薄弱知识点列表',
+    total_study_hours DECIMAL(6,1) DEFAULT 0,
+    completed_assignments INT DEFAULT 0,
+    average_score DECIMAL(5,1),
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_workspace (user_id, workspace_id),
+    INDEX idx_workspace (workspace_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 3.5 智慧办公库（weagent_office）
+
+```sql
+-- 公文
+CREATE TABLE office_documents (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    type ENUM('notice', 'report', 'request', 'letter', 'minutes', 'other') NOT NULL,
+    content TEXT,
+    template_id VARCHAR(36),
+    status ENUM('draft', 'reviewing', 'approved', 'published', 'archived') DEFAULT 'draft',
+    reviewer_id VARCHAR(36),
+    review_comment TEXT,
+    published_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_workspace (workspace_id),
+    INDEX idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 公文模板
+CREATE TABLE office_doc_templates (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    type ENUM('notice', 'report', 'request', 'letter', 'minutes', 'other') NOT NULL,
+    content TEXT NOT NULL COMMENT '模板正文，含占位符',
+    format_spec TEXT COMMENT '格式规范说明(红头文件等)',
+    is_system TINYINT(1) DEFAULT 0 COMMENT '系统预置模板',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_workspace (workspace_id),
+    INDEX idx_type (type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 会议
+CREATE TABLE office_meetings (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    organizer_id VARCHAR(36) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    agenda TEXT COMMENT '议程',
+    participants JSON COMMENT '参会人员列表',
+    location VARCHAR(200),
+    start_time DATETIME,
+    end_time DATETIME,
+    transcript TEXT COMMENT '会议记录/转写文本',
+    minutes TEXT COMMENT '会议纪要',
+    resolutions JSON COMMENT '决议与行动项 [{"item":"xxx","owner":"张三","deadline":"2026-08-01"}]',
+    status ENUM('scheduled', 'ongoing', 'completed', 'cancelled') DEFAULT 'scheduled',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_workspace (workspace_id),
+    INDEX idx_organizer (organizer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 审批流
+CREATE TABLE office_approvals (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    document_id VARCHAR(36),
+    title VARCHAR(200) NOT NULL,
+    type VARCHAR(50) COMMENT '审批类型（请假/报销/用印/其他）',
+    initiator_id VARCHAR(36) NOT NULL,
+    current_step INT DEFAULT 1,
+    steps JSON COMMENT '审批步骤定义 [{"step":1,"approver_id":"xxx","status":"pending"}]',
+    status ENUM('pending', 'approved', 'rejected', 'cancelled') DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_workspace (workspace_id),
+    INDEX idx_initiator (initiator_id),
+    INDEX idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 日程
+CREATE TABLE office_schedules (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    description TEXT,
+    event_type ENUM('meeting', 'task', 'reminder', 'other') DEFAULT 'task',
+    start_time DATETIME NOT NULL,
+    end_time DATETIME NOT NULL,
+    priority ENUM('low', 'medium', 'high') DEFAULT 'medium',
+    status ENUM('pending', 'done', 'cancelled') DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_workspace_user (workspace_id, user_id),
+    INDEX idx_time (start_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+---
+
+## 4. 灰度控制系统
+
+### 4.1 灰度控制范围（重要）
+
+**灰度只控制领域特有的UI和功能。共享组件一律不受灰度管控。**
+
+| 类型 | 是否受灰度控制 | 示例 |
+|---|---|---|
+| **共享通用组件** | ❌ 不受灰度控制 | ChatWindow、ArtifactWorkbench、MessageBubble、ConversationList、用户设置、登录注册 |
+| **共享通用功能** | ❌ 不受灰度控制 | 创建会话、发送消息、Agent调度、产物预览、文件上传、RAG检索 |
+| **领域专属侧边栏菜单** | ✅ 受灰度控制 | 课程管理入口、公文管理入口、项目管理入口 |
+| **领域专属聊天工具栏** | ✅ 受灰度控制 | 课件制作按钮、公文起草按钮、代码审查按钮 |
+| **领域专属欢迎页** | ✅ 受灰度控制 | 研发欢迎页、教育欢迎页、办公欢迎页 |
+| **领域专属功能开关** | ✅ 受灰度控制 | 自动批改、审批流转、仓库连接 |
+| **领域Agent启用** | ✅ 受灰度控制 | 课程设计师Agent、公文撰写Agent |
+| **领域工具启用** | ✅ 受灰度控制 | PPT生成器、题库引擎、格式检查器 |
+
+**设计原则**：三个领域共用的核心能力（会话、消息、Agent调度、产物、Sandbox）走统一的代码路径，不做灰度分支。灰度只作用在"这个领域比别的领域多了什么"的层面——侧边栏多出的菜单项、工具栏多出的操作按钮、领域专属的功能页面。
+
+### 4.2 灰度系统设计思路
+
+灰度系统控制两个层面：
+1. **功能可用性**（`enabled`）：某领域下某功能是否实际可用（enabled=false时API也拒绝）
+2. **UI可见性**（`visible`）：某领域下某UI入口是否显示（visible=false时仅隐藏入口，API仍可用）
+
+每个领域有独立的灰度配置集，切换领域时前端拉取对应领域的配置，动态控制领域特有UI的渲染。
+
+### 4.3 灰度配置键命名规范
+
+```
+命名格式：{层级}.{模块}.{配置项}
+
+ui.sidebar.course_btn          # UI-侧边栏-课程按钮
+ui.chat.toolbar.doc_template   # UI-聊天工具栏-公文模板按钮
+feature.assignment.auto_grade  # 功能-作业-自动批改
+feature.repo.connect           # 功能-仓库-连接外部仓库
+agent.doc_writer.enabled       # Agent-公文撰写助手-是否启用
+tool.ppt_generator.enabled     # 工具-PPT生成器-是否启用
+```
+
+### 4.4 灰度配置种子数据
+
+```sql
+-- ========== 智能研发 (rd) ==========
+INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
+-- UI
+('ui.sidebar.projects', '侧边栏-项目管理', 'ui', 'rd', 1, 1),
+('ui.sidebar.repos', '侧边栏-代码仓库', 'ui', 'rd', 1, 1),
+('ui.sidebar.reviews', '侧边栏-代码审查', 'ui', 'rd', 1, 1),
+('ui.sidebar.builds', '侧边栏-构建历史', 'ui', 'rd', 1, 1),
+('ui.chat.toolbar.project_init', '聊天工具栏-项目初始化', 'ui', 'rd', 1, 1),
+('ui.chat.toolbar.code_review', '聊天工具栏-代码审查', 'ui', 'rd', 1, 1),
+('ui.workspace.welcome_rd', '工作空间首页-研发欢迎页', 'ui', 'rd', 1, 1),
+-- Feature
+('feature.project.create', '功能-创建项目', 'feature', 'rd', 1, 1),
+('feature.repo.connect', '功能-连接外部仓库', 'feature', 'rd', 1, 1),
+('feature.review.auto', '功能-自动代码审查', 'feature', 'rd', 1, 1),
+('feature.cicd.status', '功能-CI/CD状态查询', 'feature', 'rd', 0, 0), -- 初版不开放
+-- Agent
+('agent.architect', 'Agent-架构师', 'agent', 'rd', 1, 1),
+('agent.developer', 'Agent-开发工程师', 'agent', 'rd', 1, 1),
+('agent.tester', 'Agent-测试工程师', 'agent', 'rd', 1, 1),
+('agent.data_analyst', 'Agent-数据分析师', 'agent', 'rd', 1, 1),
+('agent.doc_writer_rd', 'Agent-技术文档助手', 'agent', 'rd', 1, 1),
+-- Tool
+('tool.code_executor', '工具-代码执行器', 'tool', 'rd', 1, 1),
+('tool.dependency_analyzer', '工具-依赖分析器', 'tool', 'rd', 1, 1);
+
+-- ========== 智慧教育 (edu) ==========
+INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
+-- UI
+('ui.sidebar.courses', '侧边栏-课程管理', 'ui', 'edu', 1, 1),
+('ui.sidebar.assignments', '侧边栏-作业系统', 'ui', 'edu', 1, 1),
+('ui.sidebar.resources', '侧边栏-教学资源', 'ui', 'edu', 1, 1),
+('ui.sidebar.grades', '侧边栏-成绩管理', 'ui', 'edu', 1, 1),
+('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1),
+('ui.chat.toolbar.courseware', '聊天工具栏-课件制作', 'ui', 'edu', 1, 1),
+('ui.chat.toolbar.exercise', '聊天工具栏-习题生成', 'ui', 'edu', 1, 1),
+('ui.chat.toolbar.analytics', '聊天工具栏-学情分析', 'ui', 'edu', 1, 1),
+('ui.workspace.welcome_edu', '工作空间首页-教育欢迎页', 'ui', 'edu', 1, 1),
+-- Feature
+('feature.course.create', '功能-创建课程', 'feature', 'edu', 1, 1),
+('feature.assignment.publish', '功能-发布作业', 'feature', 'edu', 1, 1),
+('feature.assignment.auto_grade', '功能-自动批改', 'feature', 'edu', 1, 1),
+('feature.analytics.report', '功能-学情报告', 'feature', 'edu', 1, 1),
+('feature.bridge.teaching_learning', '功能-教学学习数据桥', 'feature', 'edu', 0, 0), -- 高级功能，初版隐藏
+-- Agent
+('agent.course_designer', 'Agent-课程设计师', 'agent', 'edu', 1, 1),
+('agent.courseware_maker', 'Agent-课件制作师', 'agent', 'edu', 1, 1),
+('agent.quiz_generator', 'Agent-习题生成器', 'agent', 'edu', 1, 1),
+('agent.learning_analyst', 'Agent-学情分析师', 'agent', 'edu', 1, 1),
+('agent.study_planner', 'Agent-学习规划师', 'agent', 'edu', 1, 1),
+('agent.practice_coach', 'Agent-练习教练', 'agent', 'edu', 1, 1),
+-- Tool
+('tool.ppt_generator', '工具-PPT生成器', 'tool', 'edu', 1, 1),
+('tool.quiz_engine', '工具-题库引擎', 'tool', 'edu', 1, 1),
+('tool.knowledge_mapper', '工具-知识点映射器', 'tool', 'edu', 1, 1);
+
+-- ========== 智慧办公 (office) ==========
+INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
+-- UI
+('ui.sidebar.documents', '侧边栏-公文管理', 'ui', 'office', 1, 1),
+('ui.sidebar.meetings', '侧边栏-会议管理', 'ui', 'office', 1, 1),
+('ui.sidebar.approvals', '侧边栏-审批流程', 'ui', 'office', 1, 1),
+('ui.sidebar.reports', '侧边栏-报表服务', 'ui', 'office', 1, 1),
+('ui.sidebar.schedules', '侧边栏-日程管理', 'ui', 'office', 1, 1),
+('ui.chat.toolbar.doc_draft', '聊天工具栏-公文起草', 'ui', 'office', 1, 1),
+('ui.chat.toolbar.meeting_mins', '聊天工具栏-会议纪要', 'ui', 'office', 1, 1),
+('ui.chat.toolbar.report_gen', '聊天工具栏-报表生成', 'ui', 'office', 1, 1),
+('ui.workspace.welcome_office', '工作空间首页-办公欢迎页', 'ui', 'office', 1, 1),
+-- Feature
+('feature.document.create', '功能-起草公文', 'feature', 'office', 1, 1),
+('feature.document.review', '功能-公文审核', 'feature', 'office', 1, 1),
+('feature.meeting.transcribe', '功能-会议转写', 'feature', 'office', 1, 1),
+('feature.approval.flow', '功能-审批流转', 'feature', 'office', 1, 1),
+('feature.report.template', '功能-报表模板', 'feature', 'office', 1, 1),
+-- Agent
+('agent.doc_writer_office', 'Agent-公文撰写助手', 'agent', 'office', 1, 1),
+('agent.meeting_assistant', 'Agent-会议助理', 'agent', 'office', 1, 1),
+('agent.report_analyst', 'Agent-报表分析助手', 'agent', 'office', 1, 1),
+('agent.email_drafter', 'Agent-邮件起草助手', 'agent', 'office', 1, 1),
+('agent.schedule_manager', 'Agent-日程管理助手', 'agent', 'office', 1, 1),
+-- Tool
+('tool.doc_template_engine', '工具-公文模板引擎', 'tool', 'office', 1, 1),
+('tool.format_checker', '工具-格式检查器', 'tool', 'office', 1, 1),
+('tool.transcript_parser', '工具-录音转写解析器', 'tool', 'office', 1, 1);
+
+-- ========== 注意：共享通用功能（会话、消息、Agent调度、产物、RAG检索等）不在此表 ==========
+-- 灰度仅控制各领域特有的UI入口、功能开关、Agent启用、工具启用
+```
+
+### 4.5 灰度控制API
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/grayscale/config?domain=edu` | 获取指定领域的灰度配置 |
+| PUT | `/api/grayscale/config/{id}` | 更新单条配置（enabled/visible） |
+| POST | `/api/grayscale/config/batch` | 批量更新配置 |
+| GET | `/api/grayscale/domains` | 获取所有可用领域列表 |
+
+> 注意：没有 `domain=*` 的全局配置查询。共享功能不走灰度系统，不需要灰度配置。
+
+### 4.6 灰度控制台前端
+
+一个独立的管理页面 `/admin/grayscale`，提供：
+
+- **领域Tab切换**：研发 / 教育 / 办公（不含"全局"Tab，共享功能不在此管理）
+- **配置列表**：按 config_type 分组（UI / 功能 / Agent / 工具）
+- **开关控制**：每项配置有 enabled 和 visible 两个开关
+- **批量操作**：一键开启/关闭某领域某类型的所有配置
+- **配置历史**：记录每次变更的操作人和时间
+
+```
+┌─────────────────────────────────────────────────────┐
+│  灰度配置管理                                        │
+│  ┌──────────────────────────────────────────────┐   │
+│  │ [智能研发] [智慧教育] [智慧办公]                  │   │
+│  └──────────────────────────────────────────────┘   │
+│                                                     │
+│  ▸ UI 可见性控制                           [全部开启]│
+│  ┌──────────────────────────────────────────────┐   │
+│  │ 侧边栏-课程管理        [✓] visible  [✓] enabled│   │
+│  │ 侧边栏-作业系统        [✓] visible  [✓] enabled│   │
+│  │ 侧边栏-教学资源        [✓] visible  [✓] enabled│   │
+│  │ 侧边栏-学生画像        [ ] visible  [✓] enabled│   │
+│  └──────────────────────────────────────────────┘   │
+│                                                     │
+│  ▸ 功能开关                               [全部开启]│
+│  ┌──────────────────────────────────────────────┐   │
+│  │ 创建课程              [✓] visible  [✓] enabled│   │
+│  │ 发布作业              [✓] visible  [✓] enabled│   │
+│  │ 自动批改              [✓] visible  [ ] enabled│   │
+│  │ 教学学习数据桥         [ ] visible  [ ] enabled│   │
+│  └──────────────────────────────────────────────┘   │
+│                                                     │
+│  ▸ Agent启用                             [全部开启]│
+│  ...                                                │
+│  ▸ 工具启用                             [全部开启]  │
+│  ...                                                │
+└─────────────────────────────────────────────────────┘
+```
+
+### 4.7 前端灰度加载流程
+
+```
+用户登录
+  │
+  ▼
+获取用户Workspace列表 → 选择/切换Workspace
+  │
+  ├─→ 共享组件直接渲染（不受灰度控制）:
+  │     ChatWindow, ArtifactWorkbench, MessageBubble,
+  │     ConversationList, Sidebar基础框架, 用户设置 ...
+  │
+  └─→ 根据 workspace.domain 请求 GET /api/grayscale/config?domain=edu
+        │
+        ▼
+      存入 Vuex store: grayscale/configs
+        │
+        ▼
+      仅领域特有UI组件通过 computed 判断:
+        v-if="isUIVisible('ui.sidebar.courses')"     ← 侧边栏领域菜单
+        v-if="isFeatureEnabled('feature.assignment.auto_grade')"  ← 领域功能按钮
+```
+
+```javascript
+// store/modules/grayscale.js
+export default {
+  namespaced: true,
+  state: {
+    configs: {},       // { "ui.sidebar.courses": { enabled: true, visible: true } }
+    currentDomain: '', // 'edu'
+    loaded: false
+  },
+  getters: {
+    // 判断某功能是否启用（enabled=false时API也拒绝）
+    isEnabled: (state) => (key) => {
+      return state.configs[key]?.enabled === true;
+    },
+    // 判断某UI是否可见（visible=false时仅隐藏UI，API仍可用）
+    isVisible: (state) => (key) => {
+      return state.configs[key]?.visible === true;
+    },
+    // 获取某类型的所有配置
+    getByType: (state) => (type) => {
+      return Object.entries(state.configs)
+        .filter(([_, v]) => v.config_type === type);
+    }
+  },
+  mutations: {
+    SET_CONFIGS(state, configs) {
+      const map = {};
+      configs.forEach(c => { map[c.config_key] = c; });
+      state.configs = map;
+      state.loaded = true;
+    },
+    SET_DOMAIN(state, domain) {
+      state.currentDomain = domain;
+      state.loaded = false;
+    }
+  },
+  actions: {
+    async loadConfig({ commit }, domain) {
+      const res = await api.getGrayscaleConfig(domain);
+      commit('SET_CONFIGS', res.data);
+      commit('SET_DOMAIN', domain);
+    }
+  }
+};
+```
+
+```javascript
+// 全局 mixin 或 composable
+export default {
+  methods: {
+    isFeatureEnabled(key) {
+      return this.$store.getters['grayscale/isEnabled'](key);
+    },
+    isUIVisible(key) {
+      return this.$store.getters['grayscale/isVisible'](key);
+    }
+  }
+};
+```
+
+```vue
+<!-- 组件中使用 -->
+<template>
+  <!-- 侧边栏：仅当前领域可见 -->
+  <el-menu-item v-if="isUIVisible('ui.sidebar.courses')" @click="goCourses">
+    <i class="el-icon-reading" /> 课程管理
+  </el-menu-item>
+  <el-menu-item v-if="isUIVisible('ui.sidebar.assignments')" @click="goAssignments">
+    <i class="el-icon-document" /> 作业系统
+  </el-menu-item>
+
+  <!-- 功能按钮：依赖功能启用 -->
+  <el-button v-if="isFeatureEnabled('feature.assignment.auto_grade')" @click="autoGrade">
+    AI自动批改
+  </el-button>
+</template>
+```
+
+---
+
+## 5. 后端实现方案
+
+### 5.1 领域服务作为独立Python包
+
+每个领域服务是一个**完全独立的Python包**，有自己完整的项目结构和配置文件，不依赖绝对路径导入。通过将共享基座安装为可import的包来复用通用能力。
+
+```
+backend/
+├── app/                          # 共享核心（已有，提供 weagent_core 包）
+│   ├── __init__.py
+│   ├── services/
+│   │   └── domain_base.py        # 领域服务基座类
+│   └── ...
+├── services/
+│   ├── rd/                       # 智能研发服务（独立包）
+│   │   ├── .env                  # 环境配置
+│   │   ├── config.py             # 可配置的入口配置
+│   │   ├── app.py                # 服务入口
+│   │   ├── requirements.txt
+│   │   ├── controllers/
+│   │   ├── services/
+│   │   ├── models/
+│   │   └── schemas/
+│   ├── edu/                      # 智慧教育服务（独立包）
+│   │   ├── .env
+│   │   ├── config.py
+│   │   ├── app.py
+│   │   └── ...
+│   ├── office/                   # 智慧办公服务（独立包）
+│   │   ├── .env
+│   │   ├── config.py
+│   │   ├── app.py
+│   │   └── ...
+│   └── rag/                      # RAG服务（独立包）
+│       ├── .env
+│       ├── config.py
+│       ├── app.py
+│       └── ...
+└── setup.py                      # 将 weagent_core 安装为可导入包
+```
+
+### 5.2 共享基座：可安装的Python包
+
+```python
+# backend/setup.py
+"""将共享核心安装为 weagent_core 包，各领域服务可直接 import"""
+from setuptools import setup, find_packages
+
+setup(
+    name='weagent-core',
+    version='1.0.0',
+    packages=find_packages(include=['app', 'app.*']),
+    install_requires=[
+        'Flask>=2.3',
+        'Flask-SQLAlchemy>=3.1',
+        'Flask-JWT-Extended>=4.5',
+        'redis>=4.5',
+        'PyMySQL>=1.1',
+    ],
+)
+```
+
+```python
+# backend/app/services/domain_base.py
+"""
+领域服务基座 — 提供统一的Flask应用初始化、JWT验证、错误处理。
+安装 weagent-core 后，各领域服务通过 from weagent_core.services.domain_base import DomainServiceBase 导入。
+"""
+import os
+from flask import Flask, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager
+import redis
+
+
+class DomainServiceBase:
+    """领域服务基座 — 所有配置从环境变量或config对象读取，不硬编码"""
+
+    def __init__(self, config):
+        """
+        config: 领域服务的配置模块（如 rd.config），包含以下属性：
+          - SERVICE_NAME: str
+          - SQLALCHEMY_DATABASE_URI: str
+          - PORT: int
+          - JWT_SECRET_KEY: str
+          - REDIS_URL: str (可选，默认 127.0.0.1:6379)
+        """
+        self.config = config
+        self.service_name = config.SERVICE_NAME
+        self.port = config.PORT
+
+        self.app = Flask(self.service_name)
+        self.app.config.from_object(config)
+
+        self.db = SQLAlchemy(self.app)
+        self.jwt = JWTManager(self.app)
+
+        redis_url = getattr(config, 'REDIS_URL', 'redis://127.0.0.1:6379/0')
+        self.redis = redis.Redis.from_url(redis_url, decode_responses=True)
+
+        self._register_error_handlers()
+        self._register_health_check()
+
+    def _register_error_handlers(self):
+        @self.app.errorhandler(404)
+        def not_found(e):
+            return jsonify({'code': 404, 'error': 'Not found', 'service': self.service_name}), 404
+
+        @self.app.errorhandler(500)
+        def server_error(e):
+            return jsonify({'code': 500, 'error': 'Internal error', 'service': self.service_name}), 500
+
+    def _register_health_check(self):
+        @self.app.route('/health')
+        def health():
+            return jsonify({
+                'service': self.service_name,
+                'status': 'ok',
+                'port': self.port
+            })
+
+    def run(self):
+        self.app.run(host='127.0.0.1', port=self.port, debug=False)
+```
+
+### 5.3 领域服务配置与入口（以智能研发为例）
+
+每个领域服务的配置从 `.env` 文件读取，不出现任何绝对路径：
+
+```bash
+# backend/services/rd/.env
+SERVICE_NAME=weagent-rd
+PORT=5101
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password
+DB_NAME=weagent_rd
+JWT_SECRET_KEY=shared-secret-from-core
+REDIS_URL=redis://127.0.0.1:6379/0
+RAG_SERVICE_URL=http://127.0.0.1:5104
+CORE_SERVICE_URL=http://127.0.0.1:5002
+```
+
+```python
+# backend/services/rd/config.py
+"""智能研发服务配置 — 全部从环境变量读取"""
+import os
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+
+
+class Config:
+    SERVICE_NAME = os.getenv('SERVICE_NAME', 'weagent-rd')
+    PORT = int(os.getenv('PORT', 5101))
+
+    # 数据库
+    DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
+    DB_PORT = os.getenv('DB_PORT', '3306')
+    DB_USER = os.getenv('DB_USER', 'root')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+    DB_NAME = os.getenv('DB_NAME', 'weagent_rd')
+    SQLALCHEMY_DATABASE_URI = (
+        f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    )
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # JWT（与核心服务共用同一secret）
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
+
+    # Redis
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
+
+    # 上游服务地址
+    RAG_SERVICE_URL = os.getenv('RAG_SERVICE_URL', 'http://127.0.0.1:5104')
+    CORE_SERVICE_URL = os.getenv('CORE_SERVICE_URL', 'http://127.0.0.1:5002')
+```
+
+```python
+# backend/services/rd/app.py
+"""智能研发服务入口 — 无绝对路径，通过 pip install -e 安装 weagent-core 后直接 import"""
+from weagent_core.services.domain_base import DomainServiceBase
+from config import Config
+
+service = DomainServiceBase(Config)
+app = service.app
+db = service.db
+
+# 注册蓝图（从本包内相对导入）
+from controllers.project_controller import project_bp
+from controllers.review_controller import review_bp
+
+app.register_blueprint(project_bp, url_prefix='/api/rd/projects')
+app.register_blueprint(review_bp, url_prefix='/api/rd/reviews')
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    service.run()
+```
+
+三个领域服务的 `app.py` 结构完全一致，仅注册的蓝图和导入的config不同。成员B和成员C只需复制模板，替换config和蓝图即可。
+
+### 5.4 核心服务的领域路由代理
+
+核心服务(5002)作为API网关，将领域请求转发到对应的领域服务。**代理地址也从配置读取**：
+
+```python
+# backend/app/controllers/domain_proxy_controller.py
+"""API网关 — 将领域请求转发到对应的微服务。上游地址从环境变量读取。"""
+import os
+import requests
+from flask import Blueprint, request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+
+domain_proxy_bp = Blueprint('domain_proxy', __name__)
+
+# 领域服务地址从环境变量读取，不硬编码
+DOMAIN_SERVICE_MAP = {
+    'rd': os.getenv('RD_SERVICE_URL', 'http://127.0.0.1:5101'),
+    'edu': os.getenv('EDU_SERVICE_URL', 'http://127.0.0.1:5102'),
+    'office': os.getenv('OFFICE_SERVICE_URL', 'http://127.0.0.1:5103'),
+}
+PROXY_TIMEOUT = int(os.getenv('PROXY_TIMEOUT', 30))
+
+
+@domain_proxy_bp.route('/api/domain/<domain>/<path:subpath>',
+                       methods=['GET', 'POST', 'PUT', 'DELETE'])
+@jwt_required()
+def proxy_to_domain(domain, subpath):
+    """
+    将 /api/domain/rd/xxx   转发到 :5101/api/rd/xxx
+    将 /api/domain/edu/xxx  转发到 :5102/api/edu/xxx
+    将 /api/domain/office/xxx 转发到 :5103/api/office/xxx
+
+    Agent相关API（/api/agents, /api/messages等）由核心服务直接处理，不经过此网关。
+    领域服务只负责该领域的数据处理和存储。
+    """
+    if domain not in DOMAIN_SERVICE_MAP:
+        return jsonify({'code': 404, 'error': f'Unknown domain: {domain}'}), 404
+
+    target_url = f"{DOMAIN_SERVICE_MAP[domain]}/api/{domain}/{subpath}"
+
+    headers = dict(request.headers)
+    headers['X-Forwarded-User'] = get_jwt_identity()
+
+    resp = requests.request(
+        method=request.method,
+        url=target_url,
+        headers=headers,
+        json=request.get_json(silent=True),
+        params=request.args,
+        timeout=PROXY_TIMEOUT
+    )
+
+    return jsonify(resp.json()), resp.status_code
+```
+
+### 5.5 服务启动（一键脚本）
+
+```bash
+# backend/start_all.sh — 启动所有服务
+#!/bin/bash
+# 共享服务
+python run.py &                    # 核心服务 :5002
+python services/rag/app.py &       # RAG服务 :5104
+
+# 领域服务（可单独启停）
+python services/rd/app.py &        # 智能研发 :5101
+python services/edu/app.py &       # 智慧教育 :5102
+python services/office/app.py &    # 智慧办公 :5103
+
+# 开发时也可单独启动自己负责的领域服务
+# 成员A: python services/rd/app.py
+# 成员B: python services/edu/app.py
+# 成员C: python services/office/app.py
+```
+
+### 5.6 领域服务间共享规范
+
+每个领域服务必须遵守：
+
+1. **统一配置方式**：所有配置从 `.env` 文件 + `config.py` 读取，不写绝对路径，不硬编码连接串
+2. **统一鉴权**：复用核心服务的JWT_SECRET_KEY，领域服务验证同一Token
+3. **统一错误格式**：`{"code": 40001, "error": "message", "service": "weagent-rd"}`
+4. **统一分页格式**：`{"items": [], "total": N, "page": P, "page_size": S}`
+5. **健康检查**：每个服务提供 `/health` 端点
+6. **可独立运行**：任一领域服务可单独启停，不影响其他领域服务
+
+---
+
+## 6. 前端实现方案
+
+### 6.1 目录结构
+
+```
+frontend/src/
+├── views/
+│   ├── workspace/                         # 共享：工作空间管理
+│   │   ├── WorkspaceList.vue
+│   │   └── WorkspaceDetail.vue
+│   │
+│   ├── rd/                                # 领域特有：智能研发
+│   │   ├── RdProjects.vue
+│   │   ├── RdRepos.vue
+│   │   └── RdReviews.vue
+│   │
+│   ├── edu/                               # 领域特有：智慧教育
+│   │   ├── EduCourses.vue
+│   │   ├── EduAssignments.vue
+│   │   ├── EduResources.vue
+│   │   ├── EduGrades.vue
+│   │   └── EduStudents.vue
+│   │
+│   ├── office/                            # 领域特有：智慧办公
+│   │   ├── OfficeDocuments.vue
+│   │   ├── OfficeMeetings.vue
+│   │   ├── OfficeApprovals.vue
+│   │   ├── OfficeReports.vue
+│   │   └── OfficeSchedules.vue
+│   │
+│   └── admin/
+│       └── GrayscaleConsole.vue            # 灰度控制台
+│
+├── components/
+│   ├── ChatWindow/                         # 共享：核心聊天（不受灰度控制）
+│   ├── ArtifactWorkbench/                  # 共享：产物工作台（不受灰度控制）
+│   ├── MessageBubble/                      # 共享：消息气泡（不受灰度控制）
+│   ├── ConversationList/                   # 共享：会话列表（不受灰度控制）
+│   ├── Sidebar/
+│   │   └── index.vue                       # 共享框架 + 领域菜单（仅领域菜单项受灰度控制）
+│   ├── WorkspaceSwitcher/
+│   │   └── index.vue                       # 共享：工作空间切换器（不受灰度控制）
+│   └── domain/                             # 领域特有：各领域欢迎页（受灰度控制）
+│       ├── RdWelcome.vue
+│       ├── EduWelcome.vue
+│       └── OfficeWelcome.vue
+│
+├── api/
+│   ├── conversation.js                     # 共享API，直接调 /api/conversations
+│   ├── agent.js                            # 共享API，直接调 /api/agents
+│   ├── message.js                          # 共享API，直接调 /api/messages
+│   ├── artifact.js                         # 共享API，直接调 /api/artifacts
+│   ├── workspace.js                        # 共享API，直接调 /api/workspaces
+│   ├── grayscale.js                        # 灰度API，直接调 /api/grayscale
+│   ├── rd.js                              # 领域API，调 /api/domain/rd/xxx
+│   ├── edu.js                             # 领域API，调 /api/domain/edu/xxx
+│   └── office.js                          # 领域API，调 /api/domain/office/xxx
+│
+├── store/
+│   └── modules/
+│       ├── user.js                         # 共享状态（不受灰度控制）
+│       ├── conversation.js                 # 共享状态（不受灰度控制）
+│       ├── message.js                      # 共享状态（不受灰度控制）
+│       ├── agent.js                        # 共享状态（不受灰度控制）
+│       ├── workspace.js                    # 共享状态（不受灰度控制）
+│       └── grayscale.js                    # 灰度控制状态（仅控制领域特有UI）
+│
+└── router/
+    └── index.js                            # 共享路由 + 领域路由
+```
+
+### 6.2 路由设计
+
+```javascript
+// router/index.js
+const routes = [
+  // ... 现有路由
+
+  // 工作空间
+  { path: '/workspaces', component: WorkspaceList, meta: { auth: true } },
+  { path: '/workspaces/:id', component: WorkspaceDetail, meta: { auth: true } },
+  { path: '/workspaces/:id/chat/:cid', component: Dashboard, meta: { auth: true } },
+
+  // 智能研发领域
+  { path: '/rd/projects', component: RdProjects, meta: { auth: true, domain: 'rd' } },
+  { path: '/rd/repos', component: RdRepos, meta: { auth: true, domain: 'rd' } },
+  { path: '/rd/reviews', component: RdReviews, meta: { auth: true, domain: 'rd' } },
+
+  // 智慧教育领域
+  { path: '/edu/courses', component: EduCourses, meta: { auth: true, domain: 'edu' } },
+  { path: '/edu/assignments', component: EduAssignments, meta: { auth: true, domain: 'edu' } },
+  { path: '/edu/resources', component: EduResources, meta: { auth: true, domain: 'edu' } },
+  { path: '/edu/grades', component: EduGrades, meta: { auth: true, domain: 'edu' } },
+  { path: '/edu/students', component: EduStudents, meta: { auth: true, domain: 'edu' } },
+
+  // 智慧办公领域
+  { path: '/office/documents', component: OfficeDocuments, meta: { auth: true, domain: 'office' } },
+  { path: '/office/meetings', component: OfficeMeetings, meta: { auth: true, domain: 'office' } },
+  { path: '/office/approvals', component: OfficeApprovals, meta: { auth: true, domain: 'office' } },
+  { path: '/office/reports', component: OfficeReports, meta: { auth: true, domain: 'office' } },
+  { path: '/office/schedules', component: OfficeSchedules, meta: { auth: true, domain: 'office' } },
+
+  // 灰度控制台
+  { path: '/admin/grayscale', component: GrayscaleConsole, meta: { auth: true, admin: true } },
+];
+```
+
+### 6.3 侧边栏渲染逻辑
+
+**核心原则：共享组件不需灰度，直接渲染；仅领域特有菜单项受灰度控制。**
+
+```vue
+<!-- components/Sidebar/index.vue -->
+<template>
+  <el-menu>
+    <!--
+      ===== 一、共享区域（所有领域通用，不经过灰度判断） =====
+      这些组件和功能在所有工作空间下都一致，不存在"哪个领域有/没有"
+    -->
+    <WorkspaceSwitcher
+      :current="currentWorkspace"
+      @switch="handleSwitchWorkspace"
+    />
+
+    <el-menu-item index="/dashboard">
+      <i class="el-icon-chat-dot-round" /> 对话
+    </el-menu-item>
+
+    <el-menu-item index="/agents">
+      <i class="el-icon-cpu" /> Agent管理
+    </el-menu-item>
+
+    <el-menu-item index="/tools">
+      <i class="el-icon-set-up" /> 工具集
+    </el-menu-item>
+
+    <el-menu-item index="/settings">
+      <i class="el-icon-setting" /> 设置
+    </el-menu-item>
+
+    <!--
+      ===== 二、领域特有区域（受灰度控制，仅当前领域可见） =====
+      这些菜单项只在特定领域下出现，且可通过灰度开关精细控制
+    -->
+
+    <!-- 智能研发领域 -->
+    <template v-if="currentDomain === 'rd'">
+      <el-menu-item v-if="isUIVisible('ui.sidebar.projects')" index="/rd/projects">
+        <i class="el-icon-folder" /> 项目管理
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.repos')" index="/rd/repos">
+        <i class="el-icon-connection" /> 代码仓库
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.reviews')" index="/rd/reviews">
+        <i class="el-icon-document-checked" /> 代码审查
+      </el-menu-item>
+    </template>
+
+    <!-- 智慧教育领域 -->
+    <template v-if="currentDomain === 'edu'">
+      <el-menu-item v-if="isUIVisible('ui.sidebar.courses')" index="/edu/courses">
+        <i class="el-icon-reading" /> 课程管理
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.assignments')" index="/edu/assignments">
+        <i class="el-icon-document" /> 作业系统
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.resources')" index="/edu/resources">
+        <i class="el-icon-folder-opened" /> 教学资源
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.grades')" index="/edu/grades">
+        <i class="el-icon-data-line" /> 成绩管理
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.students')" index="/edu/students">
+        <i class="el-icon-user" /> 学生画像
+      </el-menu-item>
+    </template>
+
+    <!-- 智慧办公领域 -->
+    <template v-if="currentDomain === 'office'">
+      <el-menu-item v-if="isUIVisible('ui.sidebar.documents')" index="/office/documents">
+        <i class="el-icon-files" /> 公文管理
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.meetings')" index="/office/meetings">
+        <i class="el-icon-date" /> 会议管理
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.approvals')" index="/office/approvals">
+        <i class="el-icon-s-check" /> 审批流程
+      </el-menu-item>
+      <el-menu-item v-if="isUIVisible('ui.sidebar.schedules')" index="/office/schedules">
+        <i class="el-icon-time" /> 日程管理
+      </el-menu-item>
+    </template>
+
+    <!-- 灰度控制台（管理员可见，与领域无关） -->
+    <el-menu-item v-if="isAdmin" index="/admin/grayscale">
+      <i class="el-icon-s-tools" /> 灰度配置
+    </el-menu-item>
+  </el-menu>
+</template>
+
+<script>
+import { mapGetters, mapState } from 'vuex';
+
+export default {
+  computed: {
+    ...mapState('workspace', ['currentWorkspace']),
+    ...mapGetters('grayscale', ['isUIVisible', 'isFeatureEnabled']),
+
+    currentDomain() {
+      return this.currentWorkspace?.domain || '';
+    },
+
+    isAdmin() {
+      return this.$store.state.user.role === 'admin';
+    }
+  },
+
+  methods: {
+    async handleSwitchWorkspace(workspace) {
+      // 1. 切换工作空间
+      await this.$store.dispatch('workspace/setCurrent', workspace);
+      // 2. 重新加载当前领域的灰度配置（仅加载领域特有配置）
+      await this.$store.dispatch('grayscale/loadConfig', workspace.domain);
+      // 3. 跳转到工作空间首页
+      this.$router.push(`/workspaces/${workspace.id}`);
+    }
+  }
+};
+</script>
+```
+
+**要点**：
+- 上面的"对话、Agent管理、工具集、设置"五个菜单项在所有领域都出现且不受灰度控制——它们是平台基础功能，三个领域共用
+- `v-if="currentDomain === 'edu'"` 确定菜单项属于哪个领域
+- 内层的 `v-if="isUIVisible('...')"` 再判断该领域内此项是否被灰度开关隐藏
+- 两级判断保证了：领域A的菜单绝不会在领域B出现，且每个领域内的菜单项可以独立开关
+
+---
+
+## 7. Agent调用领域服务的机制
+
+### 7.1 调用链路
+
+```
+Agent在Docker容器内
+  │
+  ├─→ Agent调度/消息（走核心服务）
+  │    容器内Server (:8080)
+  │    → 宿主机核心服务 (:5002) /api/messages, /api/agents ...
+  │    → 核心服务直接处理，不经过领域网关
+  │
+  └─→ 领域业务API（走领域网关）
+       容器内Server (:8080)
+       → 宿主机核心服务 (:5002) /api/domain/{domain}/{path}
+       → 网关验证JWT → 转发 → 注入workspace上下文
+       → 领域微服务 (:5101/:5102/:5103)
+       → 处理业务逻辑，读写领域数据库
+       → 返回结果 → 核心服务 → 容器Server → Agent
+```
+
+### 7.2 Agent侧工具定义
+
+在容器内为Agent注册一个 `weagent-domain-api` 工具，让Agent可以调用所属领域的API：
+
+```python
+# backend/app/sandbox/container/tools/domain_api_tool.py
+"""
+Agent领域API调用工具。
+让Agent可以在执行任务时调用所属领域的业务API（如查询课表、创建作业等）。
+"""
+
+DOMAIN_API_TOOL_DEFINITION = {
+    "name": "weagent-domain-api",
+    "description": """调用当前Workspace所属领域的业务API。
+    可用领域: rd(智能研发), edu(智慧教育), office(智慧办公)。
+    每个领域的可用API端点不同，请先调用 list-endpoints 查看可用端点。""",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list-endpoints", "get", "post", "put", "delete"],
+                "description": "操作类型。list-endpoints 列出当前领域所有可用API端点"
+            },
+            "path": {
+                "type": "string",
+                "description": "API路径，如 /courses （不含 /api/edu 前缀）"
+            },
+            "body": {
+                "type": "object",
+                "description": "请求体（POST/PUT时使用）"
+            }
+        },
+        "required": ["action"]
+    }
+}
+```
+
+Agent在任务执行中的实际调用示例：
+
+```
+Agent: 课程设计Agent
+任务: 为新课程"Python程序设计"创建课程记录
+
+Agent调用:
+  → weagent-domain-api(action="post", path="/courses", body={
+      "name": "Python程序设计",
+      "subject": "计算机",
+      "grade_level": "大一"
+    })
+  → 返回: {"id": "c001", "name": "Python程序设计", "status": "draft"}
+
+Agent随后:
+  → weagent-domain-api(action="post", path="/resources", body={
+      "course_id": "c001",
+      "title": "第一章：Python基础",
+      "type": "courseware"
+    })
+  → 上传课件文件到教学资源库
+```
+
+---
+
+## 8. 三人分工与开发流程
+
+### 8.1 分工表
+
+| 成员 | 负责领域 | 数据库 | 服务端口 | 核心交付物 |
+|---|---|---|---|---|
+| **成员A** | 智能研发 (rd) | weagent_rd | :5101 | 项目管理、代码仓库集成、代码审查、CI/CD状态 |
+| **成员B** | 智慧教育 (edu) | weagent_edu | :5102 | 课程管理、作业系统、成绩管理、资源库、学生画像 |
+| **成员C** | 智慧办公 (office) | weagent_office | :5103 | 公文管理、会议管理、审批流、报表、日程 |
+
+**三人共同维护**：
+
+| 共享模块 | 说明 |
+|---|---|
+| 核心服务 (weagent_shared) | 现有代码维护，新增workspaces表和grayscale_config表 |
+| RAG服务 (:5104) | Milvus集成，文档摄入管道，知识检索接口 |
+| 灰度控制台前端 | `/admin/grayscale` 页面 |
+| 工作空间切换 | WorkspaceSwitcher组件，Vuex store |
+| 领域服务基座 | `DomainServiceBase` 类 |
+| API网关代理 | `domain_proxy_controller.py` |
+
+### 8.2 开发流程
+
+```
+第一周：基础设施搭建（三人协作）
+─────────────────────────────────────
+  □ 成员A: 创建 DomainServiceBase 基类
+  □ 成员A: 在核心服务中新增 workspaces 表 + API
+  □ 成员A: 在核心服务中新增 grayscale_config 表 + API
+  □ 成员B: 搭建 RAG 共享服务框架 (:5104)
+  □ 成员B: 前端灰度store + WorkspaceSwitcher组件
+  □ 成员C: 前端灰度控制台页面
+  □ 成员C: 核心服务API网关代理 (domain_proxy_controller)
+  □ 全员: 各自创建领域数据库和服务骨架
+
+第二周～第四周：领域服务开发（三人并行）
+─────────────────────────────────────
+  成员A (智能研发):
+    □ 项目管理 CRUD + API
+    □ 代码仓库连接（GitHub API封装）
+    □ 代码审查记录存储
+    □ Agent工具注册（项目初始化、代码审查、依赖分析）
+    □ 研发领域前端页面（项目管理、仓库、审查）
+
+  成员B (智慧教育):
+    □ 课程管理 CRUD + API
+    □ 作业系统（发布→提交→批改）
+    □ 教学资源库
+    □ 学生画像（知识图谱）
+    □ Agent工具注册（课程设计、课件生成、习题批改）
+    □ 教育领域前端页面（课程、作业、资源、成绩、学生）
+
+  成员C (智慧办公):
+    □ 公文管理 CRUD + 模板系统 + API
+    □ 会议管理（议程→纪要→决议追踪）
+    □ 审批流定义与流转
+    □ 日程管理（CRUD + 冲突检测）
+    □ Agent工具注册（公文起草、格式检查、会议转录）
+    □ 办公领域前端页面（公文、会议、审批、报表、日程）
+
+第五周～第六周：联调与集成
+─────────────────────────────────────
+  □ 全员: 各自领域Agent与领域API联调
+  □ 全员: RAG知识库接入各自领域
+  □ 全员: 灰度配置联调（开关控制UI和功能）
+  □ 全员: 端到端场景测试（每个领域走完整用户旅程）
+  □ 全员: Bug修复、性能优化
+
+第七周～第八周：打磨与交付
+─────────────────────────────────────
+  □ 全员: 演示数据准备（每个领域准备2-3个演示场景）
+  □ 全员: 演示视频录制
+  □ 全员: 文档完善（技术文档、使用手册、参赛材料）
+  □ 全员: 回归测试
+```
+
+### 8.3 Git分支策略
+
+```
+main
+  ├── feature/infrastructure     # 基础设施（第一周，三人共同）
+  ├── feature/domain-rd          # 智能研发（成员A）
+  ├── feature/domain-edu         # 智慧教育（成员B）
+  ├── feature/domain-office      # 智慧办公（成员C）
+  └── feature/integration        # 联调集成（后两周）
+```
+
+---
+
+## 9. 开发规范
+
+### 9.1 领域服务统一规范
+
+每个领域服务必须包含以下文件：
+
+```
+backend/services/{domain}/
+├── app.py              # 入口 + create_app()
+├── config.py           # 数据库URI、端口、服务名
+├── requirements.txt    # 依赖（如需额外包）
+├── controllers/        # API路由
+├── services/           # 业务逻辑
+├── models/             # 数据模型
+├── schemas/            # 请求/响应序列化
+├── seed_data.py        # 种子数据脚本
+└── tests/              # 单元测试
+```
+
+### 9.2 API响应格式统一
+
+```json
+// 成功
+{
+  "code": 0,
+  "data": { ... },
+  "message": "ok"
+}
+
+// 列表
+{
+  "code": 0,
+  "data": {
+    "items": [...],
+    "total": 100,
+    "page": 1,
+    "page_size": 20
+  }
+}
+
+// 错误
+{
+  "code": 40001,
+  "error": "Course not found",
+  "service": "weagent-edu"
+}
+```
+
+### 9.3 Agent工具注册规范
+
+每个领域的Agent工具需在容器内注册，统一使用 `weagent-domain-api` 作为调用入口。领域特有的工具能力通过API端点暴露，而非为每个功能单独注册工具。这样Agent的工具列表保持简洁，具体能力由领域服务的API动态提供。
+
+---
+
+## 10. 里程碑与交付节点
+
+| 时间 | 里程碑 | 交付物 | 验收标准 |
+|---|---|---|---|
+| Week 1 末 | 基础设施就绪 | 基座类、workspace API、灰度表、RAG框架 | 三个领域服务骨架可启动，灰度配置可读写 |
+| Week 2 末 | 领域服务核心CRUD | 各领域3-5个核心API | Postman可调通CRUD |
+| Week 3 末 | Agent工具集成 | Agent可调用领域API | Agent在沙箱内完成一次领域API调用 |
+| Week 4 末 | 前端页面完成 | 各领域前端页面+灰度控制台 | 前端页面可渲染，灰度开关生效 |
+| Week 5 末 | 联调完成 | 端到端流程可走通 | 每个领域一个完整场景无阻断 |
+| Week 6 末 | RAG接入完成 | 知识检索在Agent任务中可用 | Agent回答中包含RAG检索结果 |
+| Week 7 末 | 演示准备完成 | Demo视频+演示数据+PPT | 可进行完整演示 |
+| Week 8 末 | 最终交付 | 完整系统+全部文档 | 比赛材料齐备 |
+
+---
+
+## 附录：开发环境搭建
+
+```bash
+# 1. 安装共享核心包（一次性，使 weagent_core 可被各领域服务 import）
+cd backend
+pip install -e .
+
+# 2. 创建领域数据库
+mysql -u root -p -e "
+  CREATE DATABASE weagent_rd CHARACTER SET utf8mb4;
+  CREATE DATABASE weagent_edu CHARACTER SET utf8mb4;
+  CREATE DATABASE weagent_office CHARACTER SET utf8mb4;
+"
+
+# 3. 各领域服务配置 .env 文件（三人各自配置自己领域的）
+cp backend/services/rd/.env.example backend/services/rd/.env
+cp backend/services/edu/.env.example backend/services/edu/.env
+cp backend/services/office/.env.example backend/services/office/.env
+# 编辑 .env 填入数据库密码等
+
+# 4. 启动共享服务
+python run.py                    # 核心服务 :5002
+python services/rag/app.py       # RAG服务 :5104
+
+# 5. 启动领域服务（开发时各自启动自己负责的即可）
+python services/rd/app.py        # 智能研发 :5101 （成员A）
+python services/edu/app.py       # 智慧教育 :5102 （成员B）
+python services/office/app.py    # 智慧办公 :5103 （成员C）
+
+# 6. 前端
+cd frontend
+npm run serve                    # :8080
+
+# 7. 验证
+curl http://127.0.0.1:5002/health   # 核心服务
+curl http://127.0.0.1:5101/health   # 智能研发
+curl http://127.0.0.1:5102/health   # 智慧教育
+curl http://127.0.0.1:5103/health   # 智慧办公
+curl http://127.0.0.1:5104/health   # RAG服务
+```

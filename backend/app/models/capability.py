@@ -16,6 +16,7 @@ class Capability(BaseModel):
     __tablename__ = "capabilities"
 
     user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=True, index=True)
+    domain = db.Column(db.String(50), default="rd", comment="rd / edu / office")
     category_id = db.Column(
         db.String(36),
         db.ForeignKey("toolset_categories.id"),

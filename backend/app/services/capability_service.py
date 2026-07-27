@@ -122,12 +122,14 @@ def _normalize_assets(assets=None) -> list[dict]:
 class CapabilityService:
     """Capability library and Agent binding business rules."""
 
-    def list_capabilities(self, user_id, capability_type=None, category_id=None):
+    def list_capabilities(self, user_id, capability_type=None, category_id=None, domain=None):
         query = self._visible_capability_query(user_id)
         if capability_type:
             query = query.filter(Capability.type == capability_type)
         if category_id:
             query = query.filter(Capability.category_id == category_id)
+        if domain:
+            query = query.filter(Capability.domain == domain)
         records = query.order_by(Capability.created_at.desc()).all()
         return [self._capability_to_dict(record, user_id=user_id) for record in records], None
 
@@ -698,6 +700,7 @@ class CapabilityService:
                 existing.name = tool["name"]
                 existing.description = tool.get("description") or ""
                 existing.source = source
+                existing.domain = existing.domain or 'rd'
                 latest = (
                     CapabilityVersion.query.get(existing.latest_version_id)
                     if existing.latest_version_id else None
@@ -730,6 +733,7 @@ class CapabilityService:
                 source=source,
                 source_ref=source_ref,
                 is_builtin=True,
+                domain="rd",
             )
             db.session.add(capability)
             db.session.flush()

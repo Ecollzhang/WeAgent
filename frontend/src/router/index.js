@@ -52,12 +52,110 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/knowledge-base',
+    name: 'KnowledgeBase',
+    component: () => import('../views/KnowledgeBase.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/capabilities',
     redirect: '/tools',
   },
   {
     path: '/sandbox',
     redirect: '/favorites',
+  },
+  // ── 领域专属页面（占位）─────────────────────────────
+  {
+    path: '/projects',
+    name: 'projects',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/repos',
+    name: 'repos',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/reviews',
+    name: 'reviews',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/builds',
+    name: 'builds',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/courses',
+    name: 'courses',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/assignments',
+    name: 'assignments',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/resources',
+    name: 'resources',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/students',
+    name: 'students',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/grades',
+    name: 'grades',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/documents',
+    name: 'documents',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/meetings',
+    name: 'meetings',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/approvals',
+    name: 'approvals',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/reports',
+    name: 'reports',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/schedules',
+    name: 'schedules',
+    component: () => import('../views/DomainPlaceholder.vue'),
+    meta: { requiresAuth: true },
+  },
+  // ── 管理页面 ───────────────────────────────────────
+  {
+    path: '/admin/grayscale',
+    name: 'GrayscaleConsole',
+    component: () => import('../views/GrayscaleConsole.vue'),
+    meta: { requiresAuth: true },
   },
 ]
 

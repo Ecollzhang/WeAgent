@@ -3,6 +3,38 @@
     <!-- 第一栏：全局侧边导航栏 -->
     <AppSidebar />
 
+    <!-- 无工作空间时的空状态引导 -->
+    <div class="workspace-empty" v-if="!hasWorkspace">
+      <div class="empty-card">
+        <div class="empty-icon">
+          <i class="el-icon-s-data"></i>
+        </div>
+        <h3>欢迎使用 WeAgent</h3>
+        <p>请先创建一个工作空间，然后开始协作</p>
+        <div class="empty-domains">
+          <div
+            v-for="d in [
+              { key: 'rd', name: '智能研发', desc: '编码、测试、数据分析', icon: 'el-icon-monitor' },
+              { key: 'edu', name: '智慧教育', desc: '课程设计、习题生成、学情分析', icon: 'el-icon-reading' },
+              { key: 'office', name: '智慧办公', desc: '公文撰写、会议纪要、报表分析', icon: 'el-icon-s-home' },
+            ]"
+            :key="d.key"
+            class="domain-card"
+            @click="quickCreateWorkspace(d.key)"
+          >
+            <i :class="d.icon"></i>
+            <div class="domain-info">
+              <strong>{{ d.name }}</strong>
+              <span>{{ d.desc }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 有工作空间时显示正常布局 -->
+    <template v-else>
+
     <!-- 第二栏：会话列表栏 -->
     <div class="conversation-panel">
       <ConversationList
@@ -50,7 +82,7 @@
       :visible.sync="migrationDialogVisible"
       :source-conversation="currentConversation"
       :conversations="conversations"
-      @refresh-conversations="$store.dispatch('conversation/fetchConversations')"
+      @refresh-conversations="$store.dispatch('conversation/fetchConversations', activeWorkspaceId)"
       @open-target="handleOpenMigrationTarget"
     />
 
@@ -311,6 +343,17 @@
           </div>
         </div>
 
+        <div class="conv-field">
+          <label class="field-label">知识库范围 <span class="field-hint">（Agent 检索知识库时的领域过滤）</span></label>
+          <el-select v-model="newConversation.kb_domain" placeholder="继承工作空间领域" size="medium" style="width: 100%;">
+            <el-option label="继承工作空间（默认）" value=""></el-option>
+            <el-option label="全部领域" value="all"></el-option>
+            <el-option label="智能研发 (rd)" value="rd"></el-option>
+            <el-option label="智慧教育 (edu)" value="edu"></el-option>
+            <el-option label="智慧办公 (office)" value="office"></el-option>
+          </el-select>
+        </div>
+
         <div class="conv-preview" v-if="selectedAgentList.length > 0">
           <div class="preview-avatars">
             <!-- 用户头像 -->
@@ -345,6 +388,7 @@
         </el-button>
       </span>
     </el-dialog>
+    </template>
   </div>
 </template>
 
@@ -399,6 +443,7 @@ export default {
         title: '',
         type: 'single',
         selectedAgents: [],
+        kb_domain: '',
       },
       socketHandlers: [],
       isAgentResponding: false,
@@ -470,6 +515,15 @@ export default {
     userAvatar() {
       return this.currentUser?.avatar || localStorage.getItem('user_avatar') || ''
     },
+    activeWorkspaceId() {
+      return this.$store.getters['workspace/activeWorkspaceId']
+    },
+    activeDomain() {
+      return this.$store.getters['workspace/activeDomain']
+    },
+    hasWorkspace() {
+      return this.$store.getters['workspace/workspacesByDomain'](this.activeDomain).length > 0
+    },
     selectedAgentList() {
       return this.newConversation.selectedAgents
         .map(id => this.findAgentWithMeta(id))
@@ -495,8 +549,22 @@ export default {
   async created() {
     socketClient.connect()
     this.registerSocketHandlers()
+
+    // 初始化工作空间和灰度配置
+    await this.$store.dispatch('workspace/fetchWorkspaces')
+    const workspaces = this.$store.state.workspace.workspaces
+    if (workspaces.length > 0) {
+      const active = this.$store.getters['workspace/activeWorkspace']
+      if (!active || !active.id) {
+        this.$store.dispatch('workspace/selectWorkspace', workspaces[0])
+      }
+      const domain = this.$store.getters['workspace/activeDomain']
+      await this.$store.dispatch('grayscale/loadDomainConfig', domain)
+    }
+
+    const wsId = this.$store.getters['workspace/activeWorkspaceId']
     await Promise.all([
-      this.$store.dispatch('conversation/fetchConversations'),
+      this.$store.dispatch('conversation/fetchConversations', wsId),
       this.$store.dispatch('agent/fetchAgents'),
     ])
     this.selectConversationFromRoute()
@@ -534,6 +602,12 @@ export default {
     },
     '$route.query.conversation_id'() {
       this.selectConversationFromRoute()
+    },
+    activeWorkspaceId(newId, oldId) {
+      if (newId && newId !== oldId) {
+        this.$store.commit('conversation/SET_CURRENT_CONVERSATION', null)
+        this.$store.dispatch('conversation/fetchConversations', newId)
+      }
     },
   },
   methods: {
@@ -621,7 +695,7 @@ export default {
             realId: res.data.id,
           })
 
-          this.$store.dispatch('conversation/fetchConversations')
+          this.$store.dispatch('conversation/fetchConversations', this.activeWorkspaceId)
           this.startMessageRefresh(convId)
         }
       } catch (e) {
@@ -650,7 +724,7 @@ export default {
           message,
         })
         this.isAgentResponding = this.hasStreamingMessages(convId)
-        this.$store.dispatch('conversation/fetchConversations')
+        this.$store.dispatch('conversation/fetchConversations', this.activeWorkspaceId)
       }
       const onDelta = (event) => {
         const patch = {
@@ -722,7 +796,7 @@ export default {
           patch,
         })
         this.isAgentResponding = this.hasStreamingMessages(event.conversation_id)
-        this.$store.dispatch('conversation/fetchConversations')
+        this.$store.dispatch('conversation/fetchConversations', this.activeWorkspaceId)
         if (!this.isAgentResponding) {
           this.stopMessageRefresh()
         }
@@ -885,7 +959,7 @@ export default {
         this.handleSelectConversation(target)
         return
       }
-      this.$store.dispatch('conversation/fetchConversations').then(() => {
+      this.$store.dispatch('conversation/fetchConversations', this.activeWorkspaceId).then(() => {
         const next = this.conversations.find(item => item.id === conversationId)
         if (next) this.handleSelectConversation(next)
       })
@@ -1327,10 +1401,11 @@ export default {
       const treeData = []
 
       try {
-        // Fetch categories + agents fresh from API (no cache)
+        // Fetch categories + agents for current domain only
+        const domain = this.activeDomain
         const [catRes, agentRes] = await Promise.all([
-          getCategories(),
-          getAgents(),  // no class_id = all user agents
+          getCategories(domain),
+          getAgents(null, domain),
         ])
         const cats = catRes.code === 200 ? catRes.data : []
         const agents = agentRes.code === 200
@@ -1392,6 +1467,23 @@ export default {
       const meta = getAgentMeta(id)
       return { ...agent, ...meta }
     },
+    async quickCreateWorkspace(domain) {
+      const names = { rd: '我的研发空间', edu: '我的教育空间', office: '我的办公空间' }
+      try {
+        const res = await this.$store.dispatch('workspace/createWorkspace', {
+          name: names[domain] || '我的工作空间',
+          domain,
+          description: '',
+        })
+        if (res.code === 201) {
+          this.$message.success('工作空间已创建')
+          this.$store.dispatch('grayscale/loadDomainConfig', domain)
+        }
+      } catch {
+        this.$message.error('创建失败，请重试')
+      }
+    },
+
     handleTreeCheckChange() {
       if (this.$refs.agentTree) {
         const checkedAgents = this.$refs.agentTree.getCheckedNodes(true)
@@ -1415,11 +1507,13 @@ export default {
           title: this.newConversation.title,
           type: this.newConversation.type,
           participant_ids: participantIds,
+          workspace_id: this.activeWorkspaceId || undefined,
+          kb_domain: this.newConversation.kb_domain || '',
         })
         if (response.code === 201) {
           this.$message.success('会话创建成功')
           this.showCreateDialog = false
-          this.newConversation = { title: '', type: 'single', selectedAgents: [] }
+          this.newConversation = { title: '', type: 'single', selectedAgents: [], kb_domain: '' }
           this.handleSelectConversation(response.data)
         } else {
           this.$message.error(response.message || '创建会话失败')
@@ -1661,6 +1755,91 @@ export default {
   border-radius: 8px;
   background: #4080ff;
   padding: 8px 20px;
+}
+
+/* 无工作空间空状态 */
+.workspace-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-card {
+  text-align: center;
+  padding: 60px 80px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  max-width: 600px;
+}
+
+.empty-icon {
+  margin-bottom: 18px;
+}
+
+.empty-icon i {
+  font-size: 64px;
+  color: #4080ff;
+}
+
+.empty-card h3 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.empty-card p {
+  margin: 0 0 30px;
+  font-size: 15px;
+  color: #94a3b8;
+}
+
+.empty-domains {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.domain-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  border: 1px solid #e8eaed;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.domain-card:hover {
+  border-color: #4080ff;
+  background: #f8faff;
+  box-shadow: 0 2px 8px rgba(64,128,255,0.1);
+}
+
+.domain-card i {
+  font-size: 28px;
+  color: #4080ff;
+  flex-shrink: 0;
+}
+
+.domain-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.domain-info strong {
+  font-size: 15px;
+  color: #1e293b;
+}
+
+.domain-info span {
+  font-size: 12px;
+  color: #94a3b8;
 }
 
 .file-browser-body {

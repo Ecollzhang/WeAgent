@@ -5,6 +5,8 @@ import conversation from './modules/conversation'
 import message from './modules/message'
 import agent from './modules/agent'
 import settings from './modules/settings'
+import workspace from './modules/workspace'
+import grayscale from './modules/grayscale'
 
 Vue.use(Vuex)
 
@@ -15,5 +17,7 @@ export default new Vuex.Store({
     message,
     agent,
     settings,
+    workspace,
+    grayscale,
   },
 })

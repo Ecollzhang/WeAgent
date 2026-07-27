@@ -9,9 +9,9 @@
       </div>
       <div class="header-actions">
         <el-button size="mini" icon="el-icon-search" type="text" @click="toggleSearchPanel" title="搜索"></el-button>
-        <el-button size="mini" icon="el-icon-folder-opened" type="text" @click="$emit('open-workspace', 'workspace')" title="工作目录"></el-button>
-        <el-button size="mini" icon="el-icon-monitor" type="text" @click="$emit('open-services')" title="预览服务"></el-button>
-        <el-button size="mini" icon="el-icon-upload2" type="text" @click="$emit('open-attachments')" title="上传文件"></el-button>
+        <el-button v-if="chatWorkspaceVisible" size="mini" icon="el-icon-folder-opened" type="text" @click="$emit('open-workspace', 'workspace')" title="工作目录"></el-button>
+        <el-button v-if="chatServicesVisible" size="mini" icon="el-icon-monitor" type="text" @click="$emit('open-services')" title="预览服务"></el-button>
+        <el-button v-if="chatAttachmentsVisible" size="mini" icon="el-icon-upload2" type="text" @click="$emit('open-attachments')" title="上传文件"></el-button>
         <el-button
           size="mini"
           :icon="favoriteActive ? 'el-icon-star-on' : 'el-icon-star-off'"
@@ -456,6 +456,7 @@
 
 <script>
 import MessageBubble from '../MessageBubble/index.vue'
+import { checkVisible } from '../../store/modules/grayscale'
 import { listServices, getServiceLogs, restartService, stopService } from '../../api/sandbox'
 
 export default {
@@ -514,6 +515,18 @@ export default {
   computed: {
     favoriteActive() {
       return !!this.conversation?.is_favorite
+    },
+    activeDomain() {
+      return this.$store.getters['workspace/activeDomain']
+    },
+    chatWorkspaceVisible() {
+      return checkVisible(this.$store.state.grayscale, this.activeDomain, 'ui.chat.workspace')
+    },
+    chatServicesVisible() {
+      return checkVisible(this.$store.state.grayscale, this.activeDomain, 'ui.chat.services')
+    },
+    chatAttachmentsVisible() {
+      return checkVisible(this.$store.state.grayscale, this.activeDomain, 'ui.chat.attachments')
     },
     participantCount() {
       if (!this.conversation || !this.conversation.participant_ids) return 0

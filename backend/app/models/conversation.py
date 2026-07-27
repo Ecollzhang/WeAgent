@@ -16,6 +16,8 @@ class Conversation(BaseModel):
     sandbox_status = db.Column(db.Enum('pending', 'running', 'stopped', 'error',
                                        name='sandbox_status'),
                                nullable=False, default='pending')
+    workspace_id = db.Column(db.String(36), db.ForeignKey('workspaces.id',
+                                ondelete='SET NULL'), nullable=True)
     last_active_at = db.Column(db.DateTime, nullable=True)
     stopped_at = db.Column(db.DateTime, nullable=True)
 

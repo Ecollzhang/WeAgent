@@ -49,6 +49,7 @@ def list_capabilities():
         user_id=user_id,
         capability_type=request.args.get("type"),
         category_id=request.args.get("category_id"),
+        domain=request.args.get("domain"),
     )
     if error:
         return error_response(error, code=400)

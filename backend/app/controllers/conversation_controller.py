@@ -11,9 +11,10 @@ conversation_bp = Blueprint('conversations', __name__)
 @conversation_bp.route('', methods=['GET'])
 @jwt_required()
 def list_conversations():
-    """Get all conversations for current user."""
+    """Get all conversations for current user, optionally filtered by workspace."""
     user_id = get_jwt_identity()
-    result, error = conversation_service.get_user_conversations(user_id)
+    workspace_id = request.args.get('workspace_id')
+    result, error = conversation_service.get_user_conversations(user_id, workspace_id=workspace_id)
 
     if error:
         return error_response(error, code=400)
@@ -38,7 +39,9 @@ def create_conversation():
         title=data['title'],
         conv_type=data['type'],
         owner_id=user_id,
-        participant_ids=data['participant_ids']
+        participant_ids=data['participant_ids'],
+        workspace_id=data.get('workspace_id'),
+        kb_domain=data.get('kb_domain') or '',
     )
 
     if error:

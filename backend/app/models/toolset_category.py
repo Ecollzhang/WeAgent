@@ -6,6 +6,7 @@ class ToolsetCategory(BaseModel):
     __tablename__ = "toolset_categories"
 
     user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=True, index=True)
+    domain = db.Column(db.String(50), default="rd", comment="rd / edu / office")
     name = db.Column(db.String(100), nullable=False)
     slug = db.Column(db.String(120), nullable=False, index=True)
     icon = db.Column(db.String(50), default="el-icon-folder")

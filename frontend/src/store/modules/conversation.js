@@ -45,10 +45,10 @@ const mutations = {
 }
 
 const actions = {
-  async fetchConversations({ commit }) {
+  async fetchConversations({ commit }, workspaceId) {
     commit('SET_LOADING', true)
     try {
-      const response = await getConversations()
+      const response = await getConversations(workspaceId ? { workspace_id: workspaceId } : {})
       if (response.code === 200) {
         commit('SET_CONVERSATIONS', response.data)
       }

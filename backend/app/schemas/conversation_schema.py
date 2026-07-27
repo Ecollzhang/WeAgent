@@ -6,6 +6,8 @@ class CreateConversationSchema(Schema):
     title = fields.String(required=True, validate=validate.Length(max=200))
     type = fields.String(required=True, validate=validate.OneOf(['single', 'group']))
     participant_ids = fields.List(fields.String(), required=True)
+    workspace_id = fields.String(required=False, allow_none=True)
+    kb_domain = fields.String(required=False, allow_none=True, validate=validate.OneOf(['', 'all', 'rd', 'edu', 'office']))
 
 
 class ConversationResponseSchema(Schema):

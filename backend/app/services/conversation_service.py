@@ -127,12 +127,13 @@ class ConversationService:
         data['participants_info'] = _enrich_participants(conversation.participants)
         return data
 
-    def create_conversation(self, title, conv_type, owner_id, participant_ids):
-        """Create a new conversation with participants."""
+    def create_conversation(self, title, conv_type, owner_id, participant_ids, workspace_id=None, kb_domain=''):
+        """Create a new conversation with participants, optionally in a workspace."""
         conversation = conversation_repo.create(
             title=title,
             type=conv_type,
-            owner_id=owner_id
+            owner_id=owner_id,
+            workspace_id=workspace_id,
         )
 
         # Add owner as participant with display info
@@ -179,7 +180,7 @@ class ConversationService:
             if p.participant_type == 'agent'
         ]
         if agent_participants:
-            error = self._create_agent_sandbox(conversation, agent_participants, owner_id)
+            error = self._create_agent_sandbox(conversation, agent_participants, owner_id, kb_domain=kb_domain)
             if error:
                 conversation.delete()
                 return None, error
@@ -205,13 +206,46 @@ class ConversationService:
             participant_ids.append(moderator_pid)
         return participant_ids
 
-    def _create_single_agent_sandbox(self, conversation, participant, user_id):
-        return self._create_agent_sandbox(conversation, [participant], user_id)
+    def _create_single_agent_sandbox(self, conversation, participant, user_id, kb_domain=''):
+        return self._create_agent_sandbox(conversation, [participant], user_id, kb_domain=kb_domain)
 
-    def _create_agent_sandbox(self, conversation, participants, user_id):
+    def _create_agent_sandbox(self, conversation, participants, user_id, kb_domain=''):
         env_vars, error = settings_service.get_container_env_vars(user_id)
         if error:
             return error
+
+        # Build KB context from workspace domain (or explicit kb_domain override)
+        kb_context = ''
+        effective_domain = kb_domain.strip() if kb_domain and kb_domain != 'all' else ''
+        if kb_domain == 'all':
+            effective_domain = ''
+        if conversation.workspace_id or kb_domain:
+            try:
+                from app.models.workspace import Workspace
+                workspace = Workspace.query.get(conversation.workspace_id) if conversation.workspace_id else None
+                domain = effective_domain or (workspace.domain if workspace else '')
+                if domain:
+                    domain_names = {'rd': '智能研发', 'edu': '智慧教育', 'office': '智慧办公'}
+                    domain_name = domain_names.get(domain, domain)
+                    workspace_info = f'\n- 工作空间: {workspace.name} (id: {workspace.id})' if workspace else ''
+                    kb_context = (
+                        f'知识库上下文:\n'
+                        f'- 当前领域: {domain_name} ({domain})'
+                        f'{workspace_info}\n'
+                        f'- 你可以使用 rag_search 工具检索知识库中的文档内容\n'
+                        f'- 检索时建议使用 domain="{domain}" 参数过滤当前领域的文档\n'
+                        f'- 如果用户问题涉及专业领域知识，优先检索知识库获取相关信息'
+                    )
+                elif kb_domain == 'all':
+                    kb_context = (
+                        f'知识库上下文:\n'
+                        f'- 知识库范围: 全部领域\n'
+                        f'- 你可以使用 rag_search 工具检索知识库中的文档内容\n'
+                        f'- 检索时可以不限制 domain 参数，搜索所有领域的文档\n'
+                        f'- 如果用户问题涉及专业领域知识，优先检索知识库获取相关信息'
+                    )
+            except Exception:
+                pass
 
         agents_config = []
         for participant in participants:
@@ -238,6 +272,8 @@ class ConversationService:
                 )
             if agent.skill:
                 system_prompt_parts.append(f'\n\n工作流程:\n{agent.skill}')
+            if kb_context:
+                system_prompt_parts.append(f'\n\n{kb_context}')
             system_prompt_parts.append(f"""
 
 文件产物要求:
@@ -274,9 +310,9 @@ class ConversationService:
         db.session.commit()
         return None
 
-    def get_user_conversations(self, user_id):
-        """Get all conversations for a user with last message."""
-        conversations = conversation_repo.get_user_conversations(user_id)
+    def get_user_conversations(self, user_id, workspace_id=None):
+        """Get all conversations for a user with last message, optionally filtered by workspace."""
+        conversations = conversation_repo.get_user_conversations(user_id, workspace_id=workspace_id)
         result = []
         for conv in conversations:
             conv_data = self._conv_to_dict(conv)

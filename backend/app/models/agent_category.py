@@ -9,3 +9,4 @@ class AgentCategory(BaseModel):
     icon = db.Column(db.String(50), default='el-icon-folder')
     color = db.Column(db.String(20), default='#4080ff')
     user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)
+    domain = db.Column(db.String(50), default='rd', comment='rd / edu / office')

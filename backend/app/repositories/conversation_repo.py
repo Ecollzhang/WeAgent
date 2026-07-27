@@ -8,8 +8,8 @@ class ConversationRepository(BaseRepository):
     def __init__(self):
         super().__init__(Conversation)
 
-    def get_user_conversations(self, user_id):
-        """Get all conversations for a user."""
+    def get_user_conversations(self, user_id, workspace_id=None):
+        """Get all conversations for a user, optionally filtered by workspace."""
         participant_ids = ConversationParticipant.query.filter_by(
             participant_type='user',
             participant_id=user_id
@@ -19,11 +19,11 @@ class ConversationRepository(BaseRepository):
         if not conversation_ids:
             return []
 
-        conversations = Conversation.query.filter(
-            Conversation.id.in_(conversation_ids)
-        ).order_by(Conversation.updated_at.desc()).all()
+        q = Conversation.query.filter(Conversation.id.in_(conversation_ids))
+        if workspace_id:
+            q = q.filter_by(workspace_id=workspace_id)
 
-        return conversations
+        return q.order_by(Conversation.updated_at.desc()).all()
 
     def get_conversation_participants(self, conversation_id):
         """Get all participants of a conversation."""

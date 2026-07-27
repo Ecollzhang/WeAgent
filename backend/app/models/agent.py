@@ -18,6 +18,7 @@ class Agent(BaseModel):
     created_by = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)
     user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)
     class_id = db.Column(db.String(36), db.ForeignKey('agent_categories.id'), nullable=True)
+    domain = db.Column(db.String(50), default='rd', comment='rd / edu / office')
     tool_ids = db.Column(db.JSON, default=list)
     is_public = db.Column(db.Boolean, default=True)
 

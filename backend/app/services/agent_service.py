@@ -16,16 +16,38 @@ MODERATOR_SYSTEM_PROMPT = '''你是 WeAgent 的主持 Agent，负责多 Agent �
 
 
 # ── System templates (no user_id) ─────────────────────────────────────
-SYSTEM_CATEGORIES = [
-    {'id': 'cat_doc',    'name': '文档',     'icon': 'el-icon-document',       'color': '#22c55e'},
-    {'id': 'cat_code',   'name': '编程',     'icon': 'el-icon-monitor',        'color': '#3b82f6'},
-    {'id': 'cat_test',   'name': '测试',     'icon': 'el-icon-s-check',        'color': '#f59e0b'},
-    {'id': 'cat_design', 'name': '设计',     'icon': 'el-icon-brush',          'color': '#ec4899'},
-    {'id': 'cat_data',   'name': '数据分析', 'icon': 'el-icon-data-analysis',  'color': '#14b8a6'},
-]
+SYSTEM_CATEGORIES = {
+    'rd': [
+        {'id': 'cat_rd_doc',    'name': '文档',     'icon': 'el-icon-document',       'color': '#22c55e', 'domain': 'rd'},
+        {'id': 'cat_rd_code',   'name': '编程',     'icon': 'el-icon-monitor',        'color': '#3b82f6', 'domain': 'rd'},
+        {'id': 'cat_rd_test',   'name': '测试',     'icon': 'el-icon-s-check',        'color': '#f59e0b', 'domain': 'rd'},
+        {'id': 'cat_rd_design', 'name': '设计',     'icon': 'el-icon-brush',          'color': '#ec4899', 'domain': 'rd'},
+        {'id': 'cat_rd_data',   'name': '数据分析', 'icon': 'el-icon-data-analysis',  'color': '#14b8a6', 'domain': 'rd'},
+    ],
+    'edu': [
+        {'id': 'cat_edu_course',    'name': '课程设计', 'icon': 'el-icon-document',       'color': '#3b82f6', 'domain': 'edu'},
+        {'id': 'cat_edu_ware',      'name': '课件制作', 'icon': 'el-icon-present',        'color': '#22c55e', 'domain': 'edu'},
+        {'id': 'cat_edu_quiz',      'name': '习题测评', 'icon': 'el-icon-edit-outline',   'color': '#f59e0b', 'domain': 'edu'},
+        {'id': 'cat_edu_analytics', 'name': '学情分析', 'icon': 'el-icon-data-analysis',  'color': '#14b8a6', 'domain': 'edu'},
+        {'id': 'cat_edu_resource',  'name': '教学资源', 'icon': 'el-icon-folder-opened',  'color': '#8b5cf6', 'domain': 'edu'},
+    ],
+    'office': [
+        {'id': 'cat_office_doc',      'name': '公文写作', 'icon': 'el-icon-document',  'color': '#3b82f6', 'domain': 'office'},
+        {'id': 'cat_office_meeting',  'name': '会议管理', 'icon': 'el-icon-date',      'color': '#22c55e', 'domain': 'office'},
+        {'id': 'cat_office_report',   'name': '报表分析', 'icon': 'el-icon-data-line', 'color': '#14b8a6', 'domain': 'office'},
+        {'id': 'cat_office_email',    'name': '邮件通讯', 'icon': 'el-icon-message',   'color': '#8b5cf6', 'domain': 'office'},
+        {'id': 'cat_office_schedule', 'name': '日程管理', 'icon': 'el-icon-time',      'color': '#f59e0b', 'domain': 'office'},
+    ],
+}
+
+# Flattened list for iteration
+def _all_system_categories():
+    for cats in SYSTEM_CATEGORIES.values():
+        for c in cats:
+            yield c
 
 SYSTEM_AGENTS = [
-    {'id': 'moderator', 'name': '任务主持人', 'class_id': 'cat_doc', 'avatar_color': '#f59e0b',
+    {'id': 'moderator', 'name': '任务主持人', 'class_id': 'cat_rd_doc', 'avatar_color': '#f59e0b',
      'adapter_name': 'claude',
      'system_prompt': '''你是 WeAgent 的主持 Agent，固定负责多 Agent 会话的任务理解、拆分、依赖分析和结果汇总。
 
@@ -56,71 +78,71 @@ JSON 格式必须为：
      'skill': '1. 理解用户任务\n2. 拆分 worker 可执行任务\n3. 判断依赖关系和并行组\n4. 输出严格 JSON plan\n5. 必要时汇总 worker 结果',
      'capability_tags': ['主持', '任务分发', '多Agent协作', '计划编排', '结果汇总']},
     # ── 文档 ──
-    {'id': '_doc_1', 'name': '文档撰写助手', 'class_id': 'cat_doc', 'avatar_color': '#22c55e',
+    {'id': '_doc_1', 'name': '文档撰写助手', 'class_id': 'cat_rd_doc', 'avatar_color': '#22c55e',
      'adapter_name': 'claude',
      'system_prompt': '你是一个专业的文档撰写专家，擅长编写技术文档、API文档和用户手册。注重文档结构清晰、语言准确。',
      'skill': '1. 确认文档类型和受众\n2. 收集相关技术资料和需求\n3. 编写文档大纲\n4. 逐章节撰写内容\n5. 审核校对和格式调整',
      'capability_tags': ['文档生成', '技术写作', 'Markdown', 'API文档', '用户手册']},
-    {'id': '_doc_2', 'name': '技术文案编辑', 'class_id': 'cat_doc', 'avatar_color': '#10b981',
+    {'id': '_doc_2', 'name': '技术文案编辑', 'class_id': 'cat_rd_doc', 'avatar_color': '#10b981',
      'adapter_name': 'claude',
      'system_prompt': '负责技术文案的编辑和润色，确保技术内容准确且易于理解。擅长中英文技术翻译。',
      'skill': '1. 接收待编辑的文案内容\n2. 检查技术术语准确性\n3. 优化语句通顺度和逻辑\n4. 统一格式和风格\n5. 输出最终版本',
      'capability_tags': ['文案编辑', '翻译', '技术校对', '内容优化']},
-    {'id': '_doc_3', 'name': 'README生成器', 'class_id': 'cat_doc', 'avatar_color': '#059669',
+    {'id': '_doc_3', 'name': 'README生成器', 'class_id': 'cat_rd_doc', 'avatar_color': '#059669',
      'adapter_name': 'opencode',
      'system_prompt': '分析代码仓库结构，自动生成高质量的README文档，包括项目简介、安装步骤、使用说明和API文档。',
      'skill': '1. 分析项目目录结构\n2. 识别技术栈和依赖\n3. 提取关键模块说明\n4. 生成README各章节\n5. 格式化输出Markdown',
      'capability_tags': ['README', '项目文档', '自动化', '代码分析']},
     # ── 编程 ──
-    {'id': '_code_1', 'name': 'Python开发助手', 'class_id': 'cat_code', 'avatar_color': '#3b82f6',
+    {'id': '_code_1', 'name': 'Python开发助手', 'class_id': 'cat_rd_code', 'avatar_color': '#3b82f6',
      'adapter_name': 'claude',
      'system_prompt': 'Python全栈开发专家，精通Web开发、数据处理和自动化脚本。提供高质量的代码实现和最佳实践建议。',
      'skill': '1. 理解需求描述和功能目标\n2. 设计代码架构和模块划分\n3. 编写可维护的Python代码\n4. 添加错误处理和日志\n5. 编写测试用例验证',
      'capability_tags': ['Python', 'Web开发', '数据处理', '自动化', '后端']},
-    {'id': '_code_2', 'name': '前端开发专家', 'class_id': 'cat_code', 'avatar_color': '#8b5cf6',
+    {'id': '_code_2', 'name': '前端开发专家', 'class_id': 'cat_rd_code', 'avatar_color': '#8b5cf6',
      'adapter_name': 'codex',
      'system_prompt': '精通Vue、React等前端框架，擅长UI组件开发、性能优化和跨端适配。注重代码质量和用户体验。',
      'skill': '1. 分析UI设计稿或需求\n2. 确定组件树和数据流\n3. 编写组件代码和样式\n4. 对接API和数据绑定\n5. 调试和优化性能',
      'capability_tags': ['前端', 'Vue', 'React', 'TypeScript', 'CSS']},
-    {'id': '_code_3', 'name': '代码审查员', 'class_id': 'cat_code', 'avatar_color': '#6366f1',
+    {'id': '_code_3', 'name': '代码审查员', 'class_id': 'cat_rd_code', 'avatar_color': '#6366f1',
      'adapter_name': 'claude',
      'system_prompt': '严格而专业的代码审查员，关注代码质量、安全性、性能和可维护性。提供建设性的改进建议。',
      'skill': '1. 接收待审查的代码\n2. 检查代码风格和规范\n3. 分析潜在bug和安全漏洞\n4. 评估性能和可维护性\n5. 输出审查报告和改进建议',
      'capability_tags': ['代码审查', '安全审计', '性能优化', '重构']},
-    {'id': '_code_4', 'name': '全栈架构师', 'class_id': 'cat_code', 'avatar_color': '#4f46e5',
+    {'id': '_code_4', 'name': '全栈架构师', 'class_id': 'cat_rd_code', 'avatar_color': '#4f46e5',
      'adapter_name': 'opencode',
      'system_prompt': '资深软件架构师，擅长系统设计、微服务架构和技术选型。帮助设计和构建可扩展的企业级应用。',
      'skill': '1. 梳理业务需求和约束条件\n2. 设计系统架构和技术选型\n3. 定义模块接口和数据流\n4. 评估扩展性和安全性\n5. 输出架构文档',
      'capability_tags': ['架构设计', '系统设计', '微服务', '技术选型', '后端']},
     # ── 测试 ──
-    {'id': '_test_1', 'name': '测试工程师', 'class_id': 'cat_test', 'avatar_color': '#f59e0b',
+    {'id': '_test_1', 'name': '测试工程师', 'class_id': 'cat_rd_test', 'avatar_color': '#f59e0b',
      'adapter_name': 'claude',
      'system_prompt': '专业的测试工程师，擅长编写单元测试、集成测试和端到端测试。精通多种测试框架和测试策略。',
      'skill': '1. 分析需求文档和代码变更\n2. 设计测试用例和测试数据\n3. 编写自动化测试脚本\n4. 执行测试并记录结果\n5. 输出测试报告',
      'capability_tags': ['单元测试', '集成测试', '端到端', '测试框架']},
-    {'id': '_test_2', 'name': '自动化测试专家', 'class_id': 'cat_test', 'avatar_color': '#d97706',
+    {'id': '_test_2', 'name': '自动化测试专家', 'class_id': 'cat_rd_test', 'avatar_color': '#d97706',
      'adapter_name': 'codex',
      'system_prompt': '专注于测试自动化的专家，设计高效的自动化测试方案，提升测试覆盖率和执行效率。',
      'skill': '1. 评估现有测试流程\n2. 选择自动化测试框架\n3. 搭建CI/CD测试流水线\n4. 编写自动化测试套件\n5. 监控测试覆盖率和执行结果',
      'capability_tags': ['自动化测试', 'CI/CD', '覆盖率', '性能测试']},
     # ── 设计 ──
-    {'id': '_dsn_1', 'name': 'UI/UX设计师', 'class_id': 'cat_design', 'avatar_color': '#ec4899',
+    {'id': '_dsn_1', 'name': 'UI/UX设计师', 'class_id': 'cat_rd_design', 'avatar_color': '#ec4899',
      'adapter_name': 'claude',
      'system_prompt': '创意UI/UX设计师，擅长界面设计、交互设计和设计系统。注重用户体验和视觉细节。',
      'skill': '1. 收集产品需求和用户反馈\n2. 梳理用户流程和信息架构\n3. 设计线框图和高保真原型\n4. 创建设计系统和组件库\n5. 输出设计规范文档',
      'capability_tags': ['UI设计', 'UX设计', '设计系统', '交互设计', 'Figma']},
-    {'id': '_dsn_2', 'name': 'CSS样式大师', 'class_id': 'cat_design', 'avatar_color': '#db2777',
+    {'id': '_dsn_2', 'name': 'CSS样式大师', 'class_id': 'cat_rd_design', 'avatar_color': '#db2777',
      'adapter_name': 'opencode',
      'system_prompt': '精通CSS/Sass/Tailwind等样式技术，擅长实现精美UI效果和响应式布局。将设计稿转化为高品质代码。',
      'skill': '1. 分析设计稿的视觉元素\n2. 规划样式结构和CSS方案\n3. 编写响应式样式代码\n4. 实现动画和交互效果\n5. 确保跨浏览器兼容性',
      'capability_tags': ['CSS', 'Tailwind', '响应式设计', '动画', 'Sass']},
     # ── 数据分析 ──
-    {'id': '_data_1', 'name': '数据分析师', 'class_id': 'cat_data', 'avatar_color': '#14b8a6',
+    {'id': '_data_1', 'name': '数据分析师', 'class_id': 'cat_rd_data', 'avatar_color': '#14b8a6',
      'adapter_name': 'claude',
      'system_prompt': '专业数据分析师，擅长数据清洗、可视化和洞察提取。精通Python数据处理生态和BI工具。',
      'skill': '1. 明确分析目标和指标\n2. 收集和清洗数据\n3. 探索性数据分析和特征工程\n4. 构建分析模型和可视化\n5. 输出分析报告和洞察结论',
      'capability_tags': ['数据分析', '可视化', 'Python', 'SQL', '报表']},
-    {'id': '_data_2', 'name': '数据库专家', 'class_id': 'cat_data', 'avatar_color': '#0d9488',
+    {'id': '_data_2', 'name': '数据库专家', 'class_id': 'cat_rd_data', 'avatar_color': '#0d9488',
      'adapter_name': 'codex',
      'system_prompt': '数据库设计与优化专家，精通SQL优化、数据建模和数据库架构设计。处理大规模数据存储与查询。',
      'skill': '1. 分析数据模型和业务逻辑\n2. 设计数据库表结构和索引\n3. 编写和优化SQL查询\n4. 制定备份和恢复策略\n5. 监控性能并持续优化',
@@ -130,13 +152,76 @@ JSON 格式必须为：
 SYSTEM_LEGACY_AGENTS = [
     {'name': 'Codex', 'adapter_name': 'codex', 'avatar_url': '/static/avatars/codex.png',
      'system_prompt': 'You are Codex, an AI specialized in code generation and completion.',
-     'capability_tags': ['代码补全', 'Python', 'JavaScript', 'TypeScript']},
+     'capability_tags': ['代码补全', 'Python', 'JavaScript', 'TypeScript'], 'domain': 'rd'},
     {'name': 'Claude Code', 'adapter_name': 'claude', 'avatar_url': '/static/avatars/claude.png',
      'system_prompt': 'You are Claude, an AI assistant specialized in software development.',
-     'capability_tags': ['代码生成', '前端', '后端', 'Python', 'JavaScript', '架构设计']},
+     'capability_tags': ['代码生成', '前端', '后端', 'Python', 'JavaScript', '架构设计'], 'domain': 'rd'},
     {'name': 'OpenCode', 'adapter_name': 'opencode', 'avatar_url': '/static/avatars/opencode.png',
      'system_prompt': 'You are OpenCode, an AI specialized in open-source development.',
-     'capability_tags': ['开源项目', '代码审查', '文档生成']},
+     'capability_tags': ['开源项目', '代码审查', '文档生成'], 'domain': 'rd'},
+]
+
+# ── Edu domain agents ──────────────────────────────────────────────────
+EDU_SYSTEM_AGENTS = [
+    {'id': '_edu_1', 'name': '课程设计师', 'class_id': 'cat_edu_course', 'avatar_color': '#3b82f6',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位资深课程设计师，擅长设计教学大纲、课程结构和学习路径。注重知识体系的完整性和学习递进关系。',
+     'skill': '1. 分析教学目标和受众\n2. 设计课程结构和知识图谱\n3. 规划章节与课时分配\n4. 制定学习路径和前置条件\n5. 输出课程大纲文档',
+     'capability_tags': ['课程设计', '教学大纲', '知识图谱', '学习路径']},
+    {'id': '_edu_2', 'name': '课件制作师', 'class_id': 'cat_edu_ware', 'avatar_color': '#22c55e',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位专业的课件制作专家，擅长制作精美的教学PPT、讲义和多媒体教学内容。注重内容呈现和视觉设计。',
+     'skill': '1. 分析教学内容的结构\n2. 设计课件整体风格和版式\n3. 编写各页幻灯片内容\n4. 设计图表和可视化元素\n5. 输出完整的课件方案',
+     'capability_tags': ['课件制作', 'PPT设计', '教学内容', '视觉设计']},
+    {'id': '_edu_3', 'name': '习题生成器', 'class_id': 'cat_edu_quiz', 'avatar_color': '#f59e0b',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位专业的习题设计专家，擅长根据知识点生成各类型习题，包括选择题、填空题、简答题和编程题。',
+     'skill': '1. 确定考察知识点和难度\n2. 选择题型和分值设计\n3. 编写题目和标准答案\n4. 设计解析和易错提示\n5. 输出完整习题集',
+     'capability_tags': ['习题生成', '题库设计', '考试命题', '难度分级']},
+    {'id': '_edu_4', 'name': '学情分析师', 'class_id': 'cat_edu_analytics', 'avatar_color': '#14b8a6',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位学情数据分析专家，擅长分析学生成绩、学习行为和知识掌握情况，提供个性化学习建议。',
+     'skill': '1. 收集学生成绩和行为数据\n2. 分析知识薄弱点和学习曲线\n3. 评估教学效果和知识点覆盖\n4. 生成学情报告和预警\n5. 输出个性化学习方案',
+     'capability_tags': ['学情分析', '数据可视化', '学习评估', '个性化推荐']},
+    {'id': '_edu_5', 'name': '学习规划师', 'class_id': 'cat_edu_course', 'avatar_color': '#8b5cf6',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位专业的学习规划顾问，为学生制定个性化的学习计划、备考策略和时间管理方案。',
+     'skill': '1. 了解学生的学习目标和现状\n2. 分析可用时间和学习资源\n3. 制定阶段性的学习计划\n4. 配置学习资源和练习素材\n5. 定期调整和优化学习方案',
+     'capability_tags': ['学习规划', '备考策略', '时间管理', '个性化学习']},
+    {'id': '_edu_6', 'name': '练习教练', 'class_id': 'cat_edu_quiz', 'avatar_color': '#ec4899',
+     'adapter_name': 'opencode', 'domain': 'edu',
+     'system_prompt': '你是一位耐心的练习辅导教练，负责指导学生完成练习、解答疑问、提供反馈和鼓励。',
+     'skill': '1. 了解学生当前练习内容\n2. 引导学生思考和尝试\n3. 分析错误并给出解析\n4. 提供针对性的变式练习\n5. 跟踪进步并给予反馈',
+     'capability_tags': ['练习辅导', '错题分析', '答疑解惑', '激励指导']},
+]
+
+# ── Office domain agents ───────────────────────────────────────────────
+OFFICE_SYSTEM_AGENTS = [
+    {'id': '_office_1', 'name': '公文撰写助手', 'class_id': 'cat_office_doc', 'avatar_color': '#3b82f6',
+     'adapter_name': 'claude', 'domain': 'office',
+     'system_prompt': '你是一位专业的公文写作专家，熟悉各类政府和企业公文格式规范，擅长撰写通知、报告、请示、函件等正式文书。',
+     'skill': '1. 确认公文类型和格式要求\n2. 梳理发文背景和目的\n3. 按规范格式起草正文\n4. 检查措辞、语气和规范性\n5. 输出正式公文文档',
+     'capability_tags': ['公文写作', '通知公告', '报告撰写', '函件起草', '格式审查']},
+    {'id': '_office_2', 'name': '会议助理', 'class_id': 'cat_office_meeting', 'avatar_color': '#22c55e',
+     'adapter_name': 'claude', 'domain': 'office',
+     'system_prompt': '你是一位专业的会议管理助手，负责会议安排、议程管理、会议纪要和待办事项跟踪。',
+     'skill': '1. 确定会议议题和参会人员\n2. 制定会议议程和时间安排\n3. 记录会议要点和决议\n4. 整理会议纪要并分发\n5. 跟踪待办事项和落实进展',
+     'capability_tags': ['会议管理', '议程安排', '会议纪要', '待办跟踪']},
+    {'id': '_office_3', 'name': '报表分析助手', 'class_id': 'cat_office_report', 'avatar_color': '#14b8a6',
+     'adapter_name': 'claude', 'domain': 'office',
+     'system_prompt': '你是一位专业的数据报表分析专家，擅长制作各类业务报表、数据汇总和趋势分析。',
+     'skill': '1. 明确报表需求和指标定义\n2. 收集和汇总相关数据\n3. 进行数据分析和可视化\n4. 撰写分析结论和建议\n5. 输出格式化的报表文档',
+     'capability_tags': ['报表制作', '数据分析', '指标汇总', '趋势预测', '可视化']},
+    {'id': '_office_4', 'name': '邮件起草助手', 'class_id': 'cat_office_email', 'avatar_color': '#8b5cf6',
+     'adapter_name': 'claude', 'domain': 'office',
+     'system_prompt': '你是一位专业的商务邮件撰写专家，擅长撰写各类正式邮件、商务函件和内部通讯。',
+     'skill': '1. 确认邮件目的和收件对象\n2. 组织邮件结构和逻辑\n3. 使用恰当的商务措辞\n4. 审核邮件格式和附件\n5. 输出正式邮件内容',
+     'capability_tags': ['商务邮件', '函件草拟', '沟通协调', '文案润色']},
+    {'id': '_office_5', 'name': '日程管理助手', 'class_id': 'cat_office_schedule', 'avatar_color': '#f59e0b',
+     'adapter_name': 'claude', 'domain': 'office',
+     'system_prompt': '你是一位专业的日程管理专家，帮助安排和优化工作日程、会议排期和任务优先级。',
+     'skill': '1. 收集待办事项和时间约束\n2. 分析优先级和依赖关系\n3. 制定日程安排方案\n4. 处理冲突和调整计划\n5. 输出日程安排表',
+     'capability_tags': ['日程管理', '优先级排序', '冲突解决', '时间规划']},
 ]
 
 
@@ -147,12 +232,23 @@ class AgentService:
 
     def seed_default_data(self):
         """Seed system categories and agents on first run."""
-        for cat_data in SYSTEM_CATEGORIES:
+        for cat_data in _all_system_categories():
             if not AgentCategory.query.get(cat_data['id']):
                 AgentCategory(**cat_data).save()
 
-        for agent_data in SYSTEM_AGENTS:
+        self._seed_agents(SYSTEM_AGENTS, 'rd')
+        self._seed_agents(EDU_SYSTEM_AGENTS, 'edu')
+        self._seed_agents(OFFICE_SYSTEM_AGENTS, 'office')
+
+        for agent_data in SYSTEM_LEGACY_AGENTS:
+            if not Agent.query.filter_by(name=agent_data['name']).first():
+                Agent(**agent_data).save()
+
+    def _seed_agents(self, agent_list, domain):
+        """Seed a list of system agents for a given domain."""
+        for agent_data in agent_list:
             data = dict(agent_data)
+            data.setdefault('domain', domain)
             if data.get('id') == 'moderator':
                 data['system_prompt'] = MODERATOR_SYSTEM_PROMPT
                 data['skill'] = (
@@ -172,10 +268,6 @@ class AgentService:
                 existing.capability_tags = data['capability_tags']
                 existing.save()
 
-        for agent_data in SYSTEM_LEGACY_AGENTS:
-            if not Agent.query.filter_by(name=agent_data['name']).first():
-                Agent(**agent_data).save()
-
     # ── Per-user copy on registration ─────────────────────────────────
 
     def copy_default_data_to_user(self, user_id):
@@ -183,18 +275,20 @@ class AgentService:
         Copy system categories and agents as user-specific records.
         The user can then freely modify their own copies.
         """
-        # Copy categories
+        # Copy all domain categories — track new ID per system template ID
         new_cat_ids = {}
-        for tmpl in SYSTEM_CATEGORIES:
+        for tmpl in _all_system_categories():
             cat = AgentCategory(
                 name=tmpl['name'], icon=tmpl['icon'], color=tmpl['color'],
+                domain=tmpl.get('domain', 'rd'),
                 user_id=user_id,
             )
             cat.save()
             new_cat_ids[tmpl['id']] = cat.id
 
-        # Copy agents — link to the new category IDs
-        for tmpl in SYSTEM_AGENTS:
+        # Copy agents — link to the new category IDs, for all domains
+        all_templates = SYSTEM_AGENTS + EDU_SYSTEM_AGENTS + OFFICE_SYSTEM_AGENTS
+        for tmpl in all_templates:
             if tmpl.get('id') == 'moderator':
                 continue
             old_cid = tmpl.get('class_id')
@@ -206,6 +300,7 @@ class AgentService:
                 adapter_name=tmpl.get('adapter_name', 'claude'),
                 system_prompt=tmpl.get('system_prompt', ''),
                 skill=tmpl.get('skill', ''),
+                domain=tmpl.get('domain', 'rd'),
                 class_id=new_cat_ids.get(old_cid) if old_cid else None,
                 user_id=user_id,
                 is_public=False,
@@ -224,6 +319,7 @@ class AgentService:
                 agent_type='external',
                 adapter_name=tmpl.get('adapter_name', 'claude'),
                 system_prompt=tmpl.get('system_prompt', ''),
+                domain=tmpl.get('domain', 'rd'),
                 user_id=user_id,
                 is_public=False,
             )
@@ -231,9 +327,20 @@ class AgentService:
 
     # ── Categories (user-scoped) ──────────────────────────────────────
 
-    def get_categories(self, user_id):
-        """Return categories belonging to the user."""
-        cats = AgentCategory.query.filter_by(user_id=user_id).order_by(AgentCategory.created_at).all()
+    def get_categories(self, user_id, domain=None):
+        """Return categories belonging to the user, optionally filtered by domain."""
+        import sys
+        print(f'[WeAgent] get_categories user={user_id} domain={domain}', file=sys.stderr, flush=True)
+
+        # Lazy-seed domain categories + agents for all three domains
+        if domain and domain in ('rd', 'edu', 'office'):
+            self._ensure_user_domain_agents(user_id, domain)
+
+        q = AgentCategory.query.filter_by(user_id=user_id)
+        if domain:
+            q = q.filter_by(domain=domain)
+        cats = q.order_by(AgentCategory.created_at).all()
+        print(f'[WeAgent] get_categories found {len(cats)} categories', file=sys.stderr, flush=True)
         result = []
         for cat in cats:
             d = cat.to_dict()
@@ -273,22 +380,81 @@ class AgentService:
 
     # ── Agents (user-scoped) ──────────────────────────────────────────
 
-    def get_user_agents(self, user_id, class_id=None):
+    def get_user_agents(self, user_id, class_id=None, domain=None):
         """
-        Return agents for a user, optionally filtered by category.
+        Return agents for a user, optionally filtered by category and domain.
+        Lazily seeds domain-specific agents for existing users on first access.
         """
+        if domain and domain in ('rd', 'edu', 'office'):
+            self._ensure_user_domain_agents(user_id, domain)
+
         q = Agent.query.filter_by(user_id=user_id)
         if class_id:
             q = q.filter_by(class_id=class_id)
+        if domain:
+            q = q.filter_by(domain=domain)
         agents = q.order_by(Agent.created_at.desc()).all()
         result = [a.to_dict() for a in agents]
 
+        # Moderator is available for ALL domains
         moderator = Agent.query.get('moderator')
         if moderator and not class_id:
             result.insert(0, moderator.to_dict())
         elif moderator and class_id and moderator.class_id == class_id:
             result.insert(0, moderator.to_dict())
         return result, None
+
+    def _ensure_user_domain_agents(self, user_id, domain):
+        """If the user has no categories for this domain, seed categories + agents from templates."""
+        import sys
+
+        # Check categories first — a better signal than agents
+        existing_cat = AgentCategory.query.filter_by(user_id=user_id, domain=domain).first()
+        if existing_cat:
+            return  # Categories already seeded for this domain
+
+        print(f'[WeAgent] Lazy-seeding {domain} categories + agents for user {user_id}', file=sys.stderr, flush=True)
+
+        # Seed domain-specific categories for this user
+        cat_map = {}
+        domain_cats = SYSTEM_CATEGORIES.get(domain, [])
+        for tmpl in domain_cats:
+            user_cat = AgentCategory.query.filter_by(
+                user_id=user_id, name=tmpl['name'], domain=domain,
+            ).first()
+            if not user_cat:
+                user_cat = AgentCategory(
+                    name=tmpl['name'], icon=tmpl['icon'], color=tmpl['color'],
+                    domain=domain, user_id=user_id,
+                )
+                user_cat.save()
+                print(f'[WeAgent]   Created category: {tmpl["name"]} ({user_cat.id})', file=sys.stderr, flush=True)
+            cat_map[tmpl['id']] = user_cat.id
+
+        # Seed domain-specific agents (skip if they already exist for this user+domain)
+        existing_agents = Agent.query.filter_by(user_id=user_id, domain=domain).first()
+        if not existing_agents:
+            domain_map = {'rd': SYSTEM_AGENTS, 'edu': EDU_SYSTEM_AGENTS, 'office': OFFICE_SYSTEM_AGENTS}
+            templates = domain_map.get(domain, [])
+            for tmpl in templates:
+                if tmpl.get('id') == 'moderator':
+                    continue
+                new_cid = cat_map.get(tmpl.get('class_id'))
+                agent = Agent(
+                    name=tmpl['name'],
+                    avatar_color=tmpl.get('avatar_color', ''),
+                    capability_tags=list(tmpl.get('capability_tags', [])),
+                    agent_type='external',
+                    adapter_name=tmpl.get('adapter_name', 'claude'),
+                    system_prompt=tmpl.get('system_prompt', ''),
+                    skill=tmpl.get('skill', ''),
+                    domain=domain,
+                    class_id=new_cid,
+                    user_id=user_id,
+                    is_public=False,
+                )
+                agent.save()
+                print(f'[WeAgent]   Created agent: {tmpl["name"]}', file=sys.stderr, flush=True)
 
     def get_agent_detail(self, agent_id):
         """Get agent detail by ID."""
@@ -300,7 +466,7 @@ class AgentService:
     def create_agent(self, user_id, name, capability_tags=None, agent_type='custom',
                      adapter_name='claude', config=None, system_prompt='',
                      skill='', avatar_color='', avatar_url='', class_id=None, is_public=False,
-                     tool_ids=None, capability_bindings=None):
+                     tool_ids=None, capability_bindings=None, domain=None):
         """Create a custom agent for a user."""
         agent = Agent(
             name=name,
@@ -312,6 +478,7 @@ class AgentService:
             skill=skill,
             avatar_color=avatar_color,
             avatar_url=avatar_url,
+            domain=domain or 'rd',
             class_id=class_id,
             created_by=user_id,
             user_id=user_id,

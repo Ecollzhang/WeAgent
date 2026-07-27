@@ -4,6 +4,10 @@ const backendHost = process.env.BACKEND_HOST || '127.0.0.1'
 const backendPort = process.env.BACKEND_PORT || '5002'
 const backendTarget = process.env.BACKEND_PROXY_TARGET || `http://${backendHost}:${backendPort}`
 
+const ragHost = process.env.RAG_HOST || '127.0.0.1'
+const ragPort = process.env.RAG_PORT || '5104'
+const ragTarget = process.env.RAG_PROXY_TARGET || `http://${ragHost}:${ragPort}`
+
 module.exports = defineConfig({
   transpileDependencies: [],
   chainWebpack: (config) => {
@@ -41,6 +45,10 @@ module.exports = defineConfig({
     port: 8080,
     historyApiFallback: true,
     proxy: {
+      '/api/rag': {
+        target: ragTarget,
+        changeOrigin: true,
+      },
       '/api': {
         target: backendTarget,
         changeOrigin: true,

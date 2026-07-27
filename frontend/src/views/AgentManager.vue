@@ -260,11 +260,21 @@ export default {
   computed: {
     currentUser() { return this.$store.state.user.user },
     userId() { return this.$store.getters['user/userId'] },
+    activeDomain() { return this.$store.getters['workspace/activeDomain'] },
     activeCategoryObj() {
       if (this.activeCategory === '__system__') {
         return { id: '__system__', name: '系统内置', icon: 'el-icon-s-operation' }
       }
       return this.categories.find(c => c.id === this.activeCategory)
+    },
+  },
+  watch: {
+    activeDomain(newDomain, oldDomain) {
+      if (newDomain && newDomain !== oldDomain) {
+        this.activeCategory = '__system__'
+        this.loadCategories()
+        this.fetchTools()
+      }
     },
   },
   created() {
@@ -276,7 +286,7 @@ export default {
       if (!catId) { this.currentAgents = []; return }
       this.agentLoading = true
       try {
-        const res = await getAgents(catId === '__system__' ? null : catId)
+        const res = await getAgents(catId === '__system__' ? null : catId, this.activeDomain)
         if (res.code === 200) {
           this.currentAgents = catId === '__system__'
             ? res.data.filter(agent => agent.id === 'moderator' || agent.read_only)
@@ -305,7 +315,7 @@ export default {
     },
     async loadCategories() {
       try {
-        const res = await getCategories()
+        const res = await getCategories(this.activeDomain)
         if (res.code === 200) {
           this.categories = res.data
           // If there are categories and none selected, select first

@@ -476,6 +476,40 @@ BUILTIN_TOOL_DEFINITIONS = [
             '{"name":"git_status","args":{}}',
         ),
     ),
+    _definition(
+        value="rag_search",
+        name="知识库检索",
+        category="tool_search",
+        icon="el-icon-collection",
+        color="#06b6d4",
+        description="搜索知识库中的文档内容，返回相关文本片段",
+        handler="rag.search",
+        tool_names=["rag_search"],
+        permissions={"required": ["network"], "optional": []},
+        status="implemented",
+        input_schema=_schema(
+            {
+                "query": {"type": "string"},
+                "top_k": {"type": "integer", "default": 5},
+                "domain": {"type": "string", "default": ""},
+                "workspace_id": {"type": "string", "default": ""},
+                "score_threshold": {"type": "number", "default": 0.0},
+            },
+            ["query"],
+        ),
+        output_schema=_schema({
+            "query": {"type": "string"},
+            "results": {"type": "array"},
+            "total": {"type": "integer"},
+        }),
+        markdown=_markdown(
+            "知识库检索",
+            "当 Agent 需要从知识库中查找相关文档、参考资料或技术方案时使用。用户上传的文档、网页等内容会被分块存储，本工具通过语义搜索找到最相关的文本片段。",
+            "调用 `rag_search`，传入 `query` 和可选的 `domain`（领域过滤）、`workspace_id`（工作空间过滤）、`top_k`（返回数量）、`score_threshold`（最低相似度阈值）。",
+            "只搜索已确认存储（status=ready）的文档；domain 可选值为 rd(研发)、edu(教育)、office(办公)；结果按相似度降序排列。",
+            '{"name":"rag_search","args":{"query":"微服务架构最佳实践","top_k":3,"domain":"rd"}}',
+        ),
+    ),
 ]
 
 

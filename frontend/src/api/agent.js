@@ -1,7 +1,9 @@
 import service from './axios'
 
-export function getAgents(classId) {
-  const params = classId ? { class_id: classId } : {}
+export function getAgents(classId, domain) {
+  const params = {}
+  if (classId) params.class_id = classId
+  if (domain) params.domain = domain
   return service.get('/agents', { params })
 }
 
@@ -23,8 +25,10 @@ export function deleteAgent(id) {
 
 // ── Categories ──
 
-export function getCategories() {
-  return service.get('/agents/categories')
+export function getCategories(domain) {
+  const params = {}
+  if (domain) params.domain = domain
+  return service.get('/agents/categories', { params })
 }
 
 export function createCategory(data) {

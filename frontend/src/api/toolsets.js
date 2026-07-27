@@ -1,7 +1,9 @@
 import service from './axios'
 
-export function getToolsetCategories() {
-  return service.get('/toolsets/categories')
+export function getToolsetCategories(domain) {
+  const params = {}
+  if (domain) params.domain = domain
+  return service.get('/toolsets/categories', { params })
 }
 
 export function createToolsetCategory(data) {

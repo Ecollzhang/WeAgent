@@ -93,6 +93,24 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN last_active_at DATETIME DEFAULT NULL'))
             if 'stopped_at' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN stopped_at DATETIME DEFAULT NULL'))
+            if 'workspace_id' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(36) DEFAULT NULL'))
+            conn.commit()
+
+    # workspaces table — sub_role column
+    if 'workspaces' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('workspaces')]
+        with db.engine.connect() as conn:
+            if 'sub_role' not in cols:
+                conn.execute(text("ALTER TABLE workspaces ADD COLUMN sub_role VARCHAR(20) DEFAULT ''"))
+            conn.commit()
+
+    # users table — role column
+    if 'users' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('users')]
+        with db.engine.connect() as conn:
+            if 'role' not in cols:
+                conn.execute(text('ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT "user"'))
             conn.commit()
 
     # user_model_configs table
@@ -103,6 +121,15 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE user_model_configs ADD COLUMN custom_model VARCHAR(100) NOT NULL DEFAULT ""'))
             conn.commit()
 
+    # agents / capabilities / toolset_categories / agent_categories — domain isolation
+    for table in ['agents', 'capabilities', 'toolset_categories', 'agent_categories']:
+        if table in inspector.get_table_names():
+            cols = [c['name'] for c in inspector.get_columns(table)]
+            with db.engine.connect() as conn:
+                if 'domain' not in cols:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN domain VARCHAR(50) DEFAULT 'rd' COMMENT 'rd / edu / office'"))
+                conn.commit()
+
     # capabilities table
     if 'capabilities' in inspector.get_table_names():
         cols = [c['name'] for c in inspector.get_columns('capabilities')]
@@ -110,6 +137,277 @@ def _migrate_existing_tables():
             if 'category_id' not in cols:
                 conn.execute(text('ALTER TABLE capabilities ADD COLUMN category_id VARCHAR(36) DEFAULT NULL'))
             conn.commit()
+
+    # grayscale_config — add domains JSON column
+    if 'grayscale_config' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('grayscale_config')]
+        with db.engine.connect() as conn:
+            if 'domains' not in cols:
+                conn.execute(text('ALTER TABLE grayscale_config ADD COLUMN domains JSON DEFAULT NULL'))
+            conn.commit()
+
+    # workspaces / grayscale_config tables — create and seed
+    if 'workspaces' not in inspector.get_table_names():
+        with db.engine.connect() as conn:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS workspaces ("
+                "  id VARCHAR(36) NOT NULL PRIMARY KEY,"
+                "  user_id VARCHAR(36) NOT NULL,"
+                "  domain VARCHAR(50) NOT NULL COMMENT 'rd / edu / office',"
+                "  sub_role VARCHAR(20) DEFAULT '' COMMENT 'edu domain: teacher / student',"
+                "  name VARCHAR(200) NOT NULL,"
+                "  description TEXT DEFAULT NULL,"
+                "  icon VARCHAR(50) DEFAULT 'default',"
+                "  sort_order INT DEFAULT 0,"
+                "  status ENUM('active','archived') DEFAULT 'active',"
+                "  created_at DATETIME NOT NULL DEFAULT (now()),"
+                "  updated_at DATETIME NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,"
+                "  INDEX idx_user (user_id),"
+                "  INDEX idx_domain (domain),"
+                "  UNIQUE KEY uk_user_domain_name (user_id, domain, name),"
+                "  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+                ")"
+            ))
+            conn.commit()
+    if 'grayscale_config' not in inspector.get_table_names():
+        with db.engine.connect() as conn:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS grayscale_config ("
+                "  id INT AUTO_INCREMENT PRIMARY KEY,"
+                "  config_key VARCHAR(100) NOT NULL,"
+                "  config_name VARCHAR(200) NOT NULL,"
+                "  config_type ENUM('ui','feature','agent','tool') NOT NULL,"
+                "  domain VARCHAR(50) NOT NULL COMMENT 'rd / edu / office',"
+                "  enabled TINYINT(1) NOT NULL DEFAULT 1,"
+                "  visible TINYINT(1) NOT NULL DEFAULT 1,"
+                "  description TEXT DEFAULT NULL,"
+                "  metadata JSON DEFAULT NULL,"
+                "  created_at DATETIME NOT NULL DEFAULT (now()),"
+                "  updated_at DATETIME NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,"
+                "  UNIQUE KEY uk_key_domain (config_key, domain),"
+                "  INDEX idx_domain (domain),"
+                "  INDEX idx_type (config_type)"
+                ")"
+            ))
+            conn.commit()
+    _seed_grayscale_configs()
+    _migrate_grayscale_configs()
+    _seed_default_workspaces()
+
+
+def _migrate_grayscale_configs():
+    """Update existing grayscale configs — clean up, enable all, fix common domain."""
+    from sqlalchemy import text as _text, inspect as _inspect
+    inspector = _inspect(db.engine)
+    if 'grayscale_config' not in inspector.get_table_names():
+        return
+
+    import json as _json2
+    all_domains_json = _json2.dumps(['rd', 'edu', 'office'])
+
+    with db.engine.connect() as conn:
+        # 1. Delete configs that are no longer used (not in wired list)
+        wired_keys = {
+            'ui.chat.workspace', 'ui.chat.services', 'ui.chat.attachments',
+            'ui.sidebar.agents', 'ui.sidebar.tools', 'ui.sidebar.favorites',
+            'ui.sidebar.knowledge',
+            'ui.sidebar.projects', 'ui.sidebar.repos', 'ui.sidebar.reviews', 'ui.sidebar.builds',
+            'ui.sidebar.courses', 'ui.sidebar.assignments', 'ui.sidebar.resources',
+            'ui.sidebar.grades', 'ui.sidebar.students',
+            'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
+            'ui.sidebar.reports', 'ui.sidebar.schedules',
+        }
+        conn.execute(_text(
+            "DELETE FROM grayscale_config WHERE config_key NOT IN :keys"
+        ), {'keys': tuple(wired_keys)})
+
+        # 2. Enable all configs
+        conn.execute(_text(
+            "UPDATE grayscale_config SET enabled = 1, visible = 1 WHERE enabled = 0 OR visible = 0"
+        ))
+
+        # 3. Move shared sidebar entries from rd/edu/office to common domain
+        shared_keys = ['ui.sidebar.agents', 'ui.sidebar.tools', 'ui.sidebar.favorites', 'ui.sidebar.knowledge']
+        for key in shared_keys:
+            # Check if common entry already exists
+            exists = conn.execute(_text(
+                "SELECT id FROM grayscale_config WHERE config_key = :key AND domain = 'common'"
+            ), {'key': key}).first()
+            if not exists:
+                # Insert into common with all domains
+                # Get name/type from any existing per-domain entry
+                existing = conn.execute(_text(
+                    "SELECT config_name, config_type FROM grayscale_config WHERE config_key = :key LIMIT 1"
+                ), {'key': key}).first()
+                if existing:
+                    conn.execute(_text(
+                        "INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) "
+                        "VALUES (:key, :name, :type, 'common', 1, 1, :domains)"
+                    ), {'key': key, 'name': existing[0], 'type': existing[1], 'domains': all_domains_json})
+            else:
+                # Update domains if null
+                conn.execute(_text(
+                    "UPDATE grayscale_config SET domains = :domains WHERE config_key = :key AND domain = 'common' AND domains IS NULL"
+                ), {'key': key, 'domains': all_domains_json})
+            # Delete per-domain entries for these shared keys
+            conn.execute(_text(
+                "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
+            ), {'key': key})
+
+        # 4. Ensure chat feature configs exist in common with domains
+        chat_keys = ['ui.chat.workspace', 'ui.chat.services', 'ui.chat.attachments']
+        for key in chat_keys:
+            exists = conn.execute(_text(
+                "SELECT id FROM grayscale_config WHERE config_key = :key AND domain = 'common'"
+            ), {'key': key}).first()
+            if not exists:
+                # Get name/type from any existing entry
+                existing = conn.execute(_text(
+                    "SELECT config_name, config_type FROM grayscale_config WHERE config_key = :key LIMIT 1"
+                ), {'key': key}).first()
+                name = existing[0] if existing else key
+                ctype = existing[1] if existing else 'ui'
+                conn.execute(_text(
+                    "INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) "
+                    "VALUES (:key, :name, :type, 'common', 1, 1, :domains)"
+                ), {'key': key, 'name': name, 'type': ctype, 'domains': all_domains_json})
+            else:
+                conn.execute(_text(
+                    "UPDATE grayscale_config SET domains = :domains WHERE config_key = :key AND domain = 'common' AND domains IS NULL"
+                ), {'key': key, 'domains': all_domains_json})
+            # Remove any per-domain duplicates of chat configs
+            conn.execute(_text(
+                "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
+            ), {'key': key})
+
+        conn.commit()
+
+
+def _seed_grayscale_configs():
+    """Seed grayscale_config table if empty."""
+    from sqlalchemy import text as _text, inspect as _inspect
+    inspector = _inspect(db.engine)
+
+    if 'grayscale_config' not in inspector.get_table_names():
+        return
+
+    with db.engine.connect() as conn:
+        count = conn.execute(_text("SELECT COUNT(*) FROM grayscale_config")).scalar()
+        if count > 0:
+            return  # already seeded
+
+        configs = [
+            # ===== 公共 (common) — 对所有领域生效，通过 domains 字段指定 =====
+            ('ui.chat.workspace', '聊天-工作目录', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.services', '聊天-预览服务', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.attachments', '聊天-上传文件', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.sidebar.agents', '侧边栏-我的Agent', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.sidebar.favorites', '侧边栏-我的收藏', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.sidebar.knowledge', '侧边栏-知识库', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            # ===== 智能研发 (rd) =====
+            ('ui.sidebar.projects', '侧边栏-项目管理', 'ui', 'rd', 1, 1),
+            ('ui.sidebar.repos', '侧边栏-代码仓库', 'ui', 'rd', 1, 1),
+            ('ui.sidebar.reviews', '侧边栏-代码审查', 'ui', 'rd', 1, 1),
+            ('ui.sidebar.builds', '侧边栏-构建管理', 'ui', 'rd', 1, 1),
+            # ===== 智慧教育 (edu) =====
+            ('ui.sidebar.courses', '侧边栏-课程管理', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.assignments', '侧边栏-作业系统', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.resources', '侧边栏-教学资源', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.grades', '侧边栏-成绩管理', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1),
+            # ===== 智慧办公 (office) =====
+            ('ui.sidebar.documents', '侧边栏-公文管理', 'ui', 'office', 1, 1),
+            ('ui.sidebar.meetings', '侧边栏-会议管理', 'ui', 'office', 1, 1),
+            ('ui.sidebar.approvals', '侧边栏-审批流程', 'ui', 'office', 1, 1),
+            ('ui.sidebar.reports', '侧边栏-报表服务', 'ui', 'office', 1, 1),
+            ('ui.sidebar.schedules', '侧边栏-日程管理', 'ui', 'office', 1, 1),
+        ]
+
+        for item in configs:
+            key, name, ctype, domain, enabled, visible = item[:6]
+            domains = item[6] if len(item) > 6 else None
+            import json as _json
+            conn.execute(_text(
+                "INSERT INTO grayscale_config "
+                "(config_key, config_name, config_type, domain, enabled, visible, domains) "
+                "VALUES (:key, :name, :type, :domain, :enabled, :visible, :domains)"
+            ), {
+                'key': key, 'name': name, 'type': ctype,
+                'domain': domain, 'enabled': enabled, 'visible': visible,
+                'domains': _json.dumps(domains) if domains else None,
+            })
+        conn.commit()
+
+
+def _seed_default_workspaces():
+    """为已有用户在各领域创建默认工作空间，并将已有会话关联到研发空间。"""
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    # 仅在表存在时执行
+    from sqlalchemy import inspect as _inspect, text as _text
+    inspector = _inspect(db.engine)
+    if 'workspaces' not in inspector.get_table_names():
+        return
+    if 'conversations' not in inspector.get_table_names():
+        return
+    if 'users' not in inspector.get_table_names():
+        return
+
+    # 获取所有用户
+    with db.engine.connect() as conn:
+        result = conn.execute(_text("SELECT id FROM users"))
+        all_user_ids = [row[0] for row in result]
+
+    now = _dt.utcnow()
+
+    for user_id in all_user_ids:
+        # 检查用户在哪些领域还没有工作空间
+        with db.engine.connect() as conn:
+            existing = conn.execute(
+                _text("SELECT domain FROM workspaces WHERE user_id = :uid"),
+                {'uid': user_id}
+            )
+            existing_domains = {row[0] for row in existing}
+
+        # 为缺失的领域创建默认空间
+        domain_defaults = [
+            ('rd', '我的研发空间', '系统自动创建的默认研发工作空间'),
+            ('edu', '我的教育空间', '系统自动创建的默认智慧教育工作空间'),
+            ('office', '我的办公空间', '系统自动创建的默认智慧办公工作空间'),
+        ]
+        for domain, name, desc in domain_defaults:
+            if domain in existing_domains:
+                continue
+            ws_id = str(_uuid.uuid4())
+            with db.engine.connect() as conn:
+                conn.execute(_text(
+                    "INSERT INTO workspaces (id, user_id, domain, name, description, icon, "
+                    "status, created_at, updated_at) "
+                    "VALUES (:id, :uid, :domain, :name, :desc, 'default', 'active', :now, :now)"
+                ), {'id': ws_id, 'uid': user_id, 'domain': domain, 'name': name, 'desc': desc, 'now': now})
+                conn.commit()
+
+    # 将 workspace_id 为空的已有会话关联到用户的研发空间（逐条处理，兼容 SQLite）
+    with db.engine.connect() as conn:
+        result = conn.execute(
+            _text("SELECT c.id, c.owner_id FROM conversations c WHERE c.workspace_id IS NULL")
+        )
+        orphan_convs = [(row[0], row[1]) for row in result]
+
+    for conv_id, owner_id in orphan_convs:
+        with db.engine.connect() as conn:
+            ws = conn.execute(
+                _text("SELECT w.id FROM workspaces w WHERE w.user_id = :uid AND w.domain = 'rd' LIMIT 1"),
+                {'uid': owner_id}
+            ).fetchone()
+            if ws:
+                conn.execute(
+                    _text("UPDATE conversations SET workspace_id = :ws_id WHERE id = :cid"),
+                    {'ws_id': ws[0], 'cid': conv_id}
+                )
+                conn.commit()
 
 
 def create_app(config_name=None):
@@ -145,6 +443,9 @@ def create_app(config_name=None):
     from app.controllers.upload_controller import upload_bp
     from app.controllers.settings_controller import settings_bp
     from app.controllers.capability_controller import capability_bp, agent_capability_bp
+    from app.controllers.workspace_controller import workspace_bp
+    from app.controllers.grayscale_controller import grayscale_bp
+    from app.controllers.domain_proxy_controller import domain_proxy_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
@@ -157,6 +458,9 @@ def create_app(config_name=None):
     app.register_blueprint(settings_bp, url_prefix='/api/settings')
     app.register_blueprint(capability_bp, url_prefix='/api/capabilities')
     app.register_blueprint(agent_capability_bp, url_prefix='/api/agents')
+    app.register_blueprint(workspace_bp)
+    app.register_blueprint(grayscale_bp)
+    app.register_blueprint(domain_proxy_bp)
 
     # Register sandbox blueprint (optional, for testing)
     try:

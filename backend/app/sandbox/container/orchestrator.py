@@ -753,15 +753,56 @@ class Orchestrator:
                     session_id=session_id,
                 )
                 results.append({"tool": tool_name, "result": result})
+                # Push RAG search results as a structured card element
+                if tool_name == "rag_search" and isinstance(result, dict):
+                    self._push_rag_result_card(agent_id, args.get("query", ""), result)
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})
         return results
+
+    @staticmethod
+    def _push_rag_result_card(agent_id: str, query: str, result: dict):
+        """Push RAG search results as a collapsible card element in the chat."""
+        search_results = result.get("results") or []
+        total = result.get("total", 0)
+        if not search_results:
+            push_event(agent_id, "agent_report_element", {
+                "type": "result",
+                "title": f'知识库检索: {query[:50]}{"..." if len(query) > 50 else ""}',
+                "content": "未找到相关文档",
+                "status": "done",
+                "data": {"title": "知识库检索结果", "empty": True},
+            })
+            return
+        # Build a table of results
+        headers = ["#", "文档", "相关度", "内容摘要"]
+        rows = []
+        for i, item in enumerate(search_results[:10], 1):
+            doc_name = (item.get("document") or {}).get("name") or item.get("metadata", {}).get("source") or "-"
+            score = item.get("score", 0)
+            score_str = f"{score:.2f}" if isinstance(score, (int, float)) else str(score)
+            content = (item.get("content") or "")[:150].replace("\n", " ")
+            rows.append([str(i), str(doc_name), score_str, content])
+        push_event(agent_id, "agent_report_element", {
+            "type": "table",
+            "title": f'知识库检索: {query[:50]}{"..." if len(query) > 50 else ""}',
+            "content": f'共找到 {total} 条相关结果',
+            "status": "done",
+            "data": {
+                "title": f'知识库检索结果 ({total}条)',
+                "headers": headers,
+                "rows": rows,
+                "query": query,
+                "total": total,
+            },
+        })
 
     def _tool_instructions(self, agent_id: str) -> str:
         """Generate tool usage instructions for the system prompt."""
         tool_index = self._agent_tool_index(agent_id)
         if tool_index:
             tool_lines = []
+            seen_tools = set()
             for item in tool_index:
                 names = ", ".join(item.get("tool_names") or [])
                 status = item.get("status") or "deferred"
@@ -770,6 +811,17 @@ class Orchestrator:
                 tool_lines.append(
                     f"  - {item.get('name')}: {description} "
                     f"(status: {status}; tools: {names}; doc: {doc_path})"
+                )
+                for n in (item.get("tool_names") or []):
+                    seen_tools.add(n)
+            # 始终包含 rag_search（知识库检索）工具
+            if "rag_search" not in seen_tools and "rag_search" in self.tools._tools:
+                tool_lines.append(
+                    "  - 知识库检索: 搜索知识库中的文档内容，返回相关文本片段\n"
+                    "    参数: query(必填,搜索关键词), top_k(可选,默认5,返回数量),\n"
+                    "    domain(可选,如rd/edu/office,过滤领域), workspace_id(可选,过滤工作空间),\n"
+                    "    score_threshold(可选,默认0.0,相关性阈值0-1)\n"
+                    "    (status: implemented; tools: rag_search)"
                 )
             tool_list = "\n".join(tool_lines)
             tool_hint = (

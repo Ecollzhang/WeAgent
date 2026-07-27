@@ -747,6 +747,7 @@ export default {
     }
   },
   computed: {
+    activeDomain() { return this.$store.getters['workspace/activeDomain'] },
     activeCategory() {
       return this.categories.find(item => item.id === this.activeCategoryId) || null
     },
@@ -802,6 +803,16 @@ export default {
       return ui.provider_types || []
     },
   },
+  watch: {
+    activeDomain(newDomain, oldDomain) {
+      if (newDomain && newDomain !== oldDomain) {
+        this.activeCategoryId = null
+        this.categories = []
+        this.capabilities = []
+        this.fetchCategories()
+      }
+    },
+  },
   created() {
     this.fetchCategories()
   },
@@ -853,7 +864,7 @@ export default {
     async fetchCategories() {
       this.categoryLoading = true
       try {
-        const res = await getToolsetCategories()
+        const res = await getToolsetCategories(this.activeDomain)
         if (res.code === 200) {
           this.categories = res.data || []
           if (!this.categories.find(item => item.id === this.activeCategoryId) && this.categories[0]) {

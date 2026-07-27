@@ -249,6 +249,7 @@ class DockerContainerManager:
             "API_TIMEOUT_MS", "CLAUDE_EXEC_TIMEOUT_SECONDS",
             "CODEX_EXEC_TIMEOUT_SECONDS", "OPENCODE_EXEC_TIMEOUT_SECONDS",
             "AGENT_EXEC_TIMEOUT_SECONDS",
+            "RAG_INTERNAL_API_KEY", "RAG_SERVICE_URL",
             "HTTP_PROXY", "HTTPS_PROXY",
         ]
         if env_vars:

@@ -1,45 +1,121 @@
 <template>
-  <div class="sidebar">
+  <div class="sidebar" :class="{ collapsed }">
     <div class="sidebar-header">
-      <div class="logo">WeAgent</div>
+      <div class="logo">{{ collapsed ? 'W' : 'WeAgent' }}</div>
     </div>
+
+    <!-- 领域 + 工作空间切换 -->
+    <WorkspaceSwitcher v-if="!collapsed" />
+
     <div class="sidebar-nav">
-      <router-link to="/dashboard" class="nav-item" :class="{ active: $route.path === '/dashboard' }">
-        <i class="el-icon-chat-dot-round"></i>
-        <span>聊天</span>
+      <!-- 公共功能 -->
+      <div v-if="!collapsed" class="nav-section-label">公共</div>
+      <router-link
+        v-for="item in commonNavItems"
+        :key="item.key"
+        :to="item.route"
+        class="nav-item"
+        :class="{ active: $route.path === item.activePath }"
+        :title="item.label"
+      >
+        <i v-if="item.iconClass" :class="item.iconClass"></i>
+        <span v-else-if="item.iconSvg" class="toolset-wrench-icon"></span>
+        <span v-show="!collapsed">{{ item.label }}</span>
       </router-link>
-      <router-link to="/agents" class="nav-item" :class="{ active: $route.path === '/agents' }">
-        <i class="el-icon-monitor"></i>
-        <span>我的Agent</span>
-      </router-link>
-      <router-link to="/tools" class="nav-item" :class="{ active: $route.path === '/tools' }">
-        <span class="toolset-wrench-icon"></span>
-        <span>工具集</span>
-      </router-link>
-      <router-link to="/favorites" class="nav-item" :class="{ active: $route.path === '/favorites' }">
-        <i class="el-icon-collection-tag"></i>
-        <span>我的收藏</span>
-      </router-link>
-      <router-link to="/settings" class="nav-item" :class="{ active: $route.path === '/settings' }">
-        <i class="el-icon-setting"></i>
-        <span>设置</span>
+
+      <!-- 分隔线 -->
+      <div class="nav-divider"></div>
+
+      <!-- 领域功能 -->
+      <div v-if="!collapsed" class="nav-section-label">领域</div>
+      <router-link
+        v-for="item in domainNavItems"
+        :key="item.key"
+        :to="item.route"
+        class="nav-item"
+        :class="{ active: $route.path === item.activePath }"
+        :title="item.label"
+      >
+        <i v-if="item.iconClass" :class="item.iconClass"></i>
+        <span v-else-if="item.iconSvg" class="toolset-wrench-icon"></span>
+        <span v-show="!collapsed">{{ item.label }}</span>
       </router-link>
     </div>
-    <div class="sidebar-footer" @click="handleLogout">
-      <div class="user-info">
+
+    <div class="sidebar-footer">
+      <div class="collapse-toggle" @click="toggleCollapse" :title="collapsed ? '展开侧边栏' : '收起侧边栏'">
+        <span class="toggle-btn">
+          <svg viewBox="0 0 1024 1024" width="16" height="16" :class="{ flipped: collapsed }">
+            <path d="M960 192h-64v704h64V192z m-579.2 32L109.248 495.552 64 540.8l45.248 45.248 271.552 271.488 45.248-45.248L189.696 576H704V512H183.296l242.752-242.752L380.8 224z" fill="currentColor"/>
+          </svg>
+        </span>
+      </div>
+      <div class="user-info" @click="handleLogout">
         <div class="user-avatar">
           <img v-if="userAvatar" :src="userAvatar" class="avatar-img" />
           <i v-else class="el-icon-user-solid"></i>
         </div>
-        <span class="username">{{ currentUser?.username || '用户' }}</span>
+        <span v-show="!collapsed" class="username">{{ currentUser?.username || '用户' }}</span>
       </div>
     </div>
   </div>
 </template>
 
 <script>
+import WorkspaceSwitcher from '../WorkspaceSwitcher/index.vue'
+import { checkVisible } from '../../store/modules/grayscale'
+
+// 公共导航项（所有领域都显示，受灰度控制）
+const COMMON_NAV = [
+  { key: 'ui.sidebar.agents', label: '我的Agent', route: '/agents', activePath: '/agents', iconClass: 'el-icon-monitor' },
+  { key: 'ui.sidebar.tools', label: '工具集', route: '/tools', activePath: '/tools', iconSvg: true },
+  { key: 'ui.sidebar.favorites', label: '我的收藏', route: '/favorites', activePath: '/favorites', iconClass: 'el-icon-collection-tag' },
+  { key: 'ui.sidebar.knowledge', label: '知识库', route: '/knowledge-base', activePath: '/knowledge-base', iconClass: 'el-icon-files' },
+  { key: 'chat', label: '聊天', route: '/dashboard', activePath: '/dashboard', iconClass: 'el-icon-chat-dot-round' },
+  { key: 'settings', label: '设置', route: '/settings', activePath: '/settings', iconClass: 'el-icon-setting' },
+]
+
+// 领域专属导航项（按 grayscale config_key 控制可见性）
+// edu 按 sub_role 区分教师端和学生端
+const DOMAIN_NAV = {
+  rd: [
+    { key: 'ui.sidebar.projects', label: '项目管理', route: '/projects', activePath: '/projects', iconClass: 'el-icon-s-grid' },
+    { key: 'ui.sidebar.repos', label: '代码仓库', route: '/repos', activePath: '/repos', iconClass: 'el-icon-folder-opened' },
+    { key: 'ui.sidebar.reviews', label: '代码审查', route: '/reviews', activePath: '/reviews', iconClass: 'el-icon-view' },
+    { key: 'ui.sidebar.builds', label: '构建管理', route: '/builds', activePath: '/builds', iconClass: 'el-icon-s-tools' },
+  ],
+  edu: {
+    teacher: [
+      { key: 'ui.sidebar.courses', label: '课程管理', route: '/courses', activePath: '/courses', iconClass: 'el-icon-document' },
+      { key: 'ui.sidebar.assignments', label: '作业系统', route: '/assignments', activePath: '/assignments', iconClass: 'el-icon-edit-outline' },
+      { key: 'ui.sidebar.students', label: '学生画像', route: '/students', activePath: '/students', iconClass: 'el-icon-user' },
+      { key: 'ui.sidebar.grades', label: '成绩管理', route: '/grades', activePath: '/grades', iconClass: 'el-icon-data-line' },
+      { key: 'ui.sidebar.resources', label: '教学资源', route: '/resources', activePath: '/resources', iconClass: 'el-icon-folder-opened' },
+    ],
+    student: [
+      { key: 'ui.sidebar.courses', label: '我的课程', route: '/courses', activePath: '/courses', iconClass: 'el-icon-document' },
+      { key: 'ui.sidebar.assignments', label: '我的作业', route: '/assignments', activePath: '/assignments', iconClass: 'el-icon-edit-outline' },
+      { key: 'ui.sidebar.grades', label: '我的成绩', route: '/grades', activePath: '/grades', iconClass: 'el-icon-data-line' },
+      { key: 'ui.sidebar.resources', label: '学习资源', route: '/resources', activePath: '/resources', iconClass: 'el-icon-folder-opened' },
+    ],
+  },
+  office: [
+    { key: 'ui.sidebar.documents', label: '公文管理', route: '/documents', activePath: '/documents', iconClass: 'el-icon-document' },
+    { key: 'ui.sidebar.meetings', label: '会议管理', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
+    { key: 'ui.sidebar.approvals', label: '审批流程', route: '/approvals', activePath: '/approvals', iconClass: 'el-icon-check' },
+    { key: 'ui.sidebar.reports', label: '报表服务', route: '/reports', activePath: '/reports', iconClass: 'el-icon-data-line' },
+    { key: 'ui.sidebar.schedules', label: '日程管理', route: '/schedules', activePath: '/schedules', iconClass: 'el-icon-time' },
+  ],
+}
+
 export default {
   name: 'AppSidebar',
+  components: { WorkspaceSwitcher },
+  data() {
+    return {
+      collapsed: localStorage.getItem('sidebar_collapsed') === '1',
+    }
+  },
   computed: {
     currentUser() {
       return this.$store.state.user.user
@@ -47,8 +123,40 @@ export default {
     userAvatar() {
       return this.currentUser?.avatar || localStorage.getItem('user_avatar') || ''
     },
+    activeDomain() {
+      return this.$store.getters['workspace/activeDomain']
+    },
+    activeSubRole() {
+      return this.$store.getters['workspace/activeSubRole']
+    },
+    commonNavItems() {
+      const domain = this.activeDomain || 'rd'
+      return COMMON_NAV.filter(item => {
+        // 聊天和设置始终显示
+        if (item.key === 'chat' || item.key === 'settings') return true
+        return checkVisible(this.$store.state.grayscale, domain, item.key)
+      })
+    },
+    domainNavItems() {
+      const domain = this.activeDomain || 'rd'
+      const raw = DOMAIN_NAV[domain] || []
+      let items
+      if (domain === 'edu') {
+        const sub = this.activeSubRole || 'teacher'
+        items = (raw[sub] || raw.teacher || [])
+      } else {
+        items = raw
+      }
+      return items.filter(item => {
+        return checkVisible(this.$store.state.grayscale, domain, item.key)
+      })
+    },
   },
   methods: {
+    toggleCollapse() {
+      this.collapsed = !this.collapsed
+      localStorage.setItem('sidebar_collapsed', this.collapsed ? '1' : '0')
+    },
     handleLogout() {
       this.$confirm('确认退出登录？', '提示', {
         confirmButtonText: '退出',
@@ -71,10 +179,20 @@ export default {
   flex-direction: column;
   border-radius: 12px;
   background: linear-gradient(180deg, #e8f0ff 0%, #f0f5ff 100%);
+  transition: width 0.25s ease;
+}
+
+.sidebar.collapsed {
+  width: 64px;
 }
 
 .sidebar-header {
   padding: 24px 20px 16px;
+}
+
+.sidebar.collapsed .sidebar-header {
+  padding: 24px 12px 16px;
+  text-align: center;
 }
 
 .logo {
@@ -82,6 +200,7 @@ export default {
   font-weight: 700;
   color: #1e293b;
   letter-spacing: -0.5px;
+  transition: all 0.25s ease;
 }
 
 .sidebar-nav {
@@ -90,6 +209,10 @@ export default {
   flex-direction: column;
   padding: 8px 12px;
   gap: 2px;
+}
+
+.sidebar.collapsed .sidebar-nav {
+  padding: 8px 8px;
 }
 
 .nav-item {
@@ -104,6 +227,11 @@ export default {
   transition: all 0.2s;
 }
 
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 15px 0;
+}
+
 .nav-item:hover {
   background: rgba(255,255,255,0.5);
   color: #1e293b;
@@ -115,10 +243,26 @@ export default {
   font-weight: 600;
 }
 
+.nav-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px 12px 4px;
+}
+
+.nav-divider {
+  height: 1px;
+  background: rgba(59,130,246,0.1);
+  margin: 4px 8px;
+}
+
 .nav-item i {
   font-size: 18px;
   width: 20px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .toolset-wrench-icon {
@@ -132,9 +276,47 @@ export default {
 }
 
 .sidebar-footer {
-  padding: 12px;
-  border-top: 1px solid rgba(59,130,246,0.12);
+  padding: 0 12px 12px;
+}
+
+.collapse-toggle {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 4px 4px 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(59,130,246,0.08);
+}
+
+.toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
   cursor: pointer;
+  color: #bfbfbf;
+  background: rgba(255,255,255,0.4);
+  transition: all 0.2s ease;
+}
+
+.toggle-btn:hover {
+  background: rgba(64,128,255,0.12);
+  color: #4080ff;
+  box-shadow: 0 0 0 3px rgba(64,128,255,0.1);
+}
+
+.toggle-btn:active {
+  transform: scale(0.92);
+}
+
+.toggle-btn svg {
+  transition: transform 0.25s ease;
+}
+
+.toggle-btn svg.flipped {
+  transform: rotate(180deg);
 }
 
 .sidebar-footer .user-info {
@@ -143,7 +325,13 @@ export default {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 8px;
+  cursor: pointer;
   transition: background 0.2s;
+}
+
+.sidebar.collapsed .sidebar-footer .user-info {
+  justify-content: center;
+  padding: 8px;
 }
 
 .sidebar-footer .user-info:hover {

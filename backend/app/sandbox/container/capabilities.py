@@ -22,6 +22,7 @@ BUILTIN_TOOL_RUNTIME_NAMES = {
     "image_generation": {"image_generate"},
     "terminal": {"run_command_safe"},
     "git_operations": {"git_status", "git_diff", "git_log"},
+    "rag_search": {"rag_search"},
 }
 
 TOOL_PERMISSION_USAGE = {
@@ -46,6 +47,7 @@ TOOL_PERMISSION_USAGE = {
     "image_info": ["read_workspace"],
     "image_analysis": ["read_workspace"],
     "image_generate": ["write_workspace"],
+    "rag_search": ["network"],
 }
 
 

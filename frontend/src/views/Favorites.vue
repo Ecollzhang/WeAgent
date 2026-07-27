@@ -128,6 +128,7 @@ export default {
     }
   },
   computed: {
+    activeDomain() { return this.$store.getters['workspace/activeDomain'] },
     loading() {
       return this.$store.state.conversation.loading
     },
@@ -159,12 +160,20 @@ export default {
       })
     },
   },
+  watch: {
+    activeDomain(newDomain, oldDomain) {
+      if (newDomain && newDomain !== oldDomain) {
+        this.refresh()
+      }
+    },
+  },
   created() {
     this.refresh()
   },
   methods: {
     refresh() {
-      return this.$store.dispatch('conversation/fetchConversations')
+      const wsId = this.$store.getters['workspace/activeWorkspaceId']
+      return this.$store.dispatch('conversation/fetchConversations', wsId)
     },
     openConversation(conversation) {
       this.$router.push({

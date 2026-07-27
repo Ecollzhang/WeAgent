@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip list:*)",
+      "Bash(.venv/Scripts/python -c ':*)",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/controllers/grayscale_controller.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/controllers/domain_proxy_controller.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from app.services.domain_base import DomainServiceBase; print\\('import OK'\\)\")",
+      "Bash(mysql:*)",
+      "Bash(python services/rag/app.py)",
+      "Bash(curl -s http://127.0.0.1:5104/api/rag/status)",
+      "Bash(python -c \"from config import Config; print\\(type\\(Config\\)\\); print\\(dir\\(Config\\)\\)\")",
+      "Bash(taskkill //F //IM python.exe //FI \"WINDOWTITLE eq *rag*\")",
+      "Bash(netstat -ano)",
+      "Bash(awk '{print $5}')",
+      "Bash(python -c \"import socket; s=socket.socket\\(\\); s.settimeout\\(1\\); r=s.connect_ex\\(\\('127.0.0.1',5104\\)\\); print\\('5104 open' if r==0 else '5104 closed'\\); s.close\\(\\)\")",
+      "Bash(curl:*)",
+      "Bash(taskkill //PID 39056 //F)",
+      "Bash(taskkill //PID 49476 //F)",
+      "Bash(find \"D:/myWork/研究生/competition/字节全栈挑战赛/WeAgent/backend/services/rag\" -type d -name \"__pycache__\" -exec rm -rf {} +)"
+    ]
+  }
+}

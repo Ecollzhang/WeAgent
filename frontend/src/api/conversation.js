@@ -1,7 +1,7 @@
 import service from './axios'
 
-export function getConversations() {
-  return service.get('/conversations')
+export function getConversations(params = {}) {
+  return service.get('/conversations', { params })
 }
 
 export function createConversation(data) {
