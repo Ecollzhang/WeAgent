@@ -37,9 +37,12 @@ def create_edu_app(config_object=Config):
 
     try:
         from .routes import education_api
+        from .workflow_routes import education_workflow_api
     except ImportError:
         from routes import education_api
+        from workflow_routes import education_workflow_api
     app.register_blueprint(education_api, url_prefix="/api/edu")
+    app.register_blueprint(education_workflow_api, url_prefix="/api/edu")
     return app
 
 
