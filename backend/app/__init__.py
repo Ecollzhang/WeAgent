@@ -196,8 +196,8 @@ def _migrate_existing_tables():
 
 
 def _migrate_grayscale_configs():
-    """Update existing grayscale configs — clean up, enable all, fix common domain."""
-    from sqlalchemy import text as _text, inspect as _inspect
+    """Update existing grayscale configs without overriding operator choices."""
+    from sqlalchemy import bindparam as _bindparam, text as _text, inspect as _inspect
     inspector = _inspect(db.engine)
     if 'grayscale_config' not in inspector.get_table_names():
         return
@@ -217,16 +217,12 @@ def _migrate_grayscale_configs():
             'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
             'ui.sidebar.reports', 'ui.sidebar.schedules',
         }
-        conn.execute(_text(
+        cleanup_statement = _text(
             "DELETE FROM grayscale_config WHERE config_key NOT IN :keys"
-        ), {'keys': tuple(wired_keys)})
+        ).bindparams(_bindparam("keys", expanding=True))
+        conn.execute(cleanup_statement, {'keys': sorted(wired_keys)})
 
-        # 2. Enable all configs
-        conn.execute(_text(
-            "UPDATE grayscale_config SET enabled = 1, visible = 1 WHERE enabled = 0 OR visible = 0"
-        ))
-
-        # 3. Move shared sidebar entries from rd/edu/office to common domain
+        # 2. Move shared sidebar entries from rd/edu/office to common domain
         shared_keys = ['ui.sidebar.agents', 'ui.sidebar.tools', 'ui.sidebar.favorites', 'ui.sidebar.knowledge']
         for key in shared_keys:
             # Check if common entry already exists
@@ -254,7 +250,7 @@ def _migrate_grayscale_configs():
                 "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
             ), {'key': key})
 
-        # 4. Ensure chat feature configs exist in common with domains
+        # 3. Ensure chat feature configs exist in common with domains
         chat_keys = ['ui.chat.workspace', 'ui.chat.services', 'ui.chat.attachments']
         for key in chat_keys:
             exists = conn.execute(_text(
