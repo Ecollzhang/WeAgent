@@ -110,5 +110,5 @@ Sidecar 要求：
 
 详细证据：
 
-- [Education 开源生态调研](../../../../.planning/research/education-open-source-landscape.md)
-- [Education 语言学习工具接入调研](../../../../.planning/research/education-language-tooling.md)
+- [Education 开源生态调研](../../../.planning/research/education-open-source-landscape.md)
+- [Education 语言学习工具接入调研](../../../.planning/research/education-language-tooling.md)

@@ -172,13 +172,13 @@ MVP 验收使用一个教师账号和至少两个学生账号，两个学生均�
 
 外部生态与语言学习工具调研分别保存在：
 
-- [Education 开源生态调研](../../../.planning/research/education-open-source-landscape.md)
-- [Education 语言学习工具接入调研](../../../.planning/research/education-language-tooling.md)
+- [Education 开源生态调研](../../.planning/research/education-open-source-landscape.md)
+- [Education 语言学习工具接入调研](../../.planning/research/education-language-tooling.md)
 
 项目内部架构依据：
 
-- [队友开发指南](../../competition/队友开发指南.md)
-- [Sandbox Agent Adapter 合并方案](../../report/sandbox-agent-adapter-merge-plan.md)
-- [AI 协作入口](../../../AI协作文档/1-AI协作友好/ai-entry-overview.md)
-- [AI 协作规范](../../../AI协作文档/1-AI协作友好/collaboration.md)
-- [模块边界](../../../AI协作文档/1-AI协作友好/module-boundary.md)
+- [队友开发指南](../competition/队友开发指南.md)
+- [Sandbox Agent Adapter 合并方案](../report/sandbox-agent-adapter-merge-plan.md)
+- [AI 协作入口](../../AI协作文档/1-AI协作友好/ai-entry-overview.md)
+- [AI 协作规范](../../AI协作文档/1-AI协作友好/collaboration.md)
+- [模块边界](../../AI协作文档/1-AI协作友好/module-boundary.md)
