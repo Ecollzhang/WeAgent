@@ -95,7 +95,7 @@ Education Agent
 - [x] 迁移并修复 Education 设计文档链接。
 - [x] 建立 Decisions、Issues、Progress、UAT Report。
 - [x] 修复灰度初始化覆盖人工关闭状态的问题。
-- [ ] 清理既有核心测试中的 P0/P1 基线失败。
+- [x] 清理既有核心测试中的 P0/P1 基线失败。
 
 验证：正确工作目录下运行后端全量测试；前端构建与既有契约测试。
 

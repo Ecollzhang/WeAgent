@@ -159,6 +159,8 @@ def run_business_loop() -> dict[str, Any]:
             "submissions": 0,
             "feedback": 0,
             "draft_recoveries": 0,
+            "artifact_exports": 0,
+            "export_fallbacks": 0,
             "isolation_checks": 0,
         }
         analytics_summary = []
@@ -286,6 +288,31 @@ def run_business_loop() -> dict[str, Any]:
                     201,
                     "create lesson plan",
                 )
+                expect(
+                    client.get(
+                        f"/api/edu/contents/{content['content']['id']}/export?format=json",
+                        headers=teacher,
+                    ),
+                    200,
+                    "export editable content",
+                )
+                html_export = client.get(
+                    f"/api/edu/contents/{content['content']['id']}/export?format=html",
+                    headers=teacher,
+                )
+                if html_export.status_code != 200 or html_export.mimetype != "text/html":
+                    raise AssertionError("export HTML: expected a downloadable HTML artifact")
+                pptx_fallback = expect(
+                    client.get(
+                        f"/api/edu/contents/{content['content']['id']}/export?format=pptx",
+                        headers=teacher,
+                    ),
+                    424,
+                    "PPTX adapter fallback",
+                )
+                assert pptx_fallback["fallback_formats"] == ["html", "json"]
+                counters["artifact_exports"] += 2
+                counters["export_fallbacks"] += 1
                 expect(
                     client.post(
                         f"/api/edu/lessons/{lesson_id}/activities",

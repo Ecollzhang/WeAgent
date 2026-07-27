@@ -65,15 +65,24 @@ Education MVP 的真实多用户最小闭环已通过：
   fallback，不伪造正文。
 - SSRF、重定向、私网地址、超时、响应体积与内容类型均有回归测试。
 
-## 7. 真实模型与浏览器 UAT
+## 7. Artifact 与导出
+
+- 每个课时保留结构化 `source_json`，可继续编辑并形成不可变新版本。
+- 教师可下载当前版本的可编辑 JSON 和渲染 HTML。
+- 真实 UAT 对 4 个课时完成 8 次 Artifact 导出。
+- PPTX 通过适配器边界接入；当前环境未安装适配器时返回 `424` 和
+  `html/json` fallback，4 次降级均未丢失源结构。
+- 导出接口按课程教师 membership 授权，外部用户返回 404。
+
+## 8. 真实模型与浏览器 UAT
 
 真实模型调用的脱敏证据：
 
 - provider：`openai-compatible`
 - HTTP：`200`
 - 返回模型标识：`deepseek-v4-flash`
-- 输出长度：`1155`
-- 输出 SHA-256 前 12 位：`6fdb6c6b35b4`
+- 输出长度：`1078`
+- 输出 SHA-256 前 12 位：`7259a82008b6`
 
 浏览器在生产构建上完成：
 
@@ -83,9 +92,9 @@ Education MVP 的真实多用户最小闭环已通过：
 4. 自动进入课程空间，成功切换到成员页并读取教师成员数据。
 5. 浏览器 session、一次性数据库与本地服务进程在验收后关闭。
 
-## 8. 自动化回归
+## 9. 自动化回归
 
-- 后端全量：`302 passed`。
+- 后端全量：`303 passed`。
 - Education API/Agent/RAG 定向测试：通过。
 - sandbox 文件 ACL：`1 passed`。
 - 前端合同与 Vue 编译测试：`8 passed`。
@@ -93,7 +102,7 @@ Education MVP 的真实多用户最小闭环已通过：
 - UAT 脚本：`backend/scripts/education_uat.py`。
 - 浏览器 harness：`backend/scripts/education_browser_uat_server.py`。
 
-## 9. 已知 P2
+## 10. 已知 P2
 
 - 后端测试需从 `backend` 目录运行，仓库根目录未设置 `app` 的 Python import path。
 - 当前 Windows Conda profile 激活会在测试结束后输出 GBK 编码噪声；pytest/UAT 子进程

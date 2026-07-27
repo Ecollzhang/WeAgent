@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from .content_models import (
@@ -373,6 +373,78 @@ def list_content_versions(content_id):
         content_id=content.id
     ).order_by(EducationContentVersion.version_number.asc()).all()
     return jsonify({"items": [_version_dict(row) for row in versions]})
+
+
+@education_content_api.get("/contents/<content_id>/export")
+@jwt_required()
+def export_content(content_id):
+    """Export the current editable source or rendered HTML.
+
+    PPTX stays behind an adapter boundary. When no adapter is installed the
+    API explicitly advertises lossless HTML/JSON fallbacks instead of
+    returning a corrupt or fake presentation.
+    """
+    user_id = get_jwt_identity()
+    content = EducationContent.query.filter_by(id=content_id).first()
+    if not content or not _membership(content.course_id, user_id, "teacher"):
+        return jsonify({"error": "content not found"}), 404
+    version = EducationContentVersion.query.filter_by(
+        id=content.current_version_id,
+        content_id=content.id,
+    ).first()
+    if not version:
+        return jsonify({"error": "content version not found"}), 404
+
+    export_format = str(request.args.get("format") or "json").strip().lower()
+    filename_base = f"education-content-{content.id}"
+    if export_format == "json":
+        body = json.dumps(
+            {
+                "content": _content_dict(content),
+                "version": version.version_number,
+                "schema_name": version.schema_name,
+                "schema_version": version.schema_version,
+                "source_json": version.source_json,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return Response(
+            body,
+            mimetype="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename_base}.json"'
+            },
+        )
+    if export_format == "html":
+        if not version.rendered_html:
+            return jsonify(
+                {
+                    "error": "rendered HTML is not available",
+                    "fallback_formats": ["json"],
+                }
+            ), 409
+        return Response(
+            version.rendered_html,
+            mimetype="text/html",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename_base}.html"'
+            },
+        )
+    if export_format == "pptx":
+        return jsonify(
+            {
+                "error": "PPTX adapter is not installed",
+                "adapter_status": "unavailable",
+                "fallback_formats": ["html", "json"],
+            }
+        ), 424
+    return jsonify(
+        {
+            "error": "unsupported export format",
+            "supported_formats": ["json", "html", "pptx"],
+        }
+    ), 400
 
 
 def _publication_dict(publication, include_teacher=False):

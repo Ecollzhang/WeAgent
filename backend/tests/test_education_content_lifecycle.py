@@ -362,3 +362,60 @@ def test_lesson_detail_and_content_history_are_membership_scoped(app):
     assert client.get(
         f"/api/edu/contents/{content['content']['id']}/versions", headers=outsider
     ).status_code == 404
+
+
+def test_teacher_exports_editable_json_and_html_with_pptx_fallback(app):
+    client = app.test_client()
+    teacher = headers(app, "export-teacher")
+    outsider = headers(app, "export-outsider")
+    created_course = course(client, teacher)
+    lesson = client.post(
+        f"/api/edu/courses/{created_course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Exportable narrative lesson",
+            "learning_domain": "integrated",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    content = client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "lesson_plan",
+            "schema_name": "lesson_plan_json",
+            "source_json": lesson_plan(),
+            "rendered_html": "<article><h1>Narrative lesson</h1></article>",
+        },
+    ).get_json()["content"]
+
+    editable = client.get(
+        f"/api/edu/contents/{content['id']}/export?format=json",
+        headers=teacher,
+    )
+    assert editable.status_code == 200
+    assert editable.mimetype == "application/json"
+    assert "attachment;" in editable.headers["Content-Disposition"]
+    assert editable.get_json()["source_json"]["subject_code"] == "high_school_english"
+
+    html = client.get(
+        f"/api/edu/contents/{content['id']}/export?format=html",
+        headers=teacher,
+    )
+    assert html.status_code == 200
+    assert html.mimetype == "text/html"
+    assert b"Narrative lesson" in html.data
+
+    unavailable_pptx = client.get(
+        f"/api/edu/contents/{content['id']}/export?format=pptx",
+        headers=teacher,
+    )
+    assert unavailable_pptx.status_code == 424
+    assert unavailable_pptx.get_json()["fallback_formats"] == ["html", "json"]
+    assert client.get(
+        f"/api/edu/contents/{content['id']}/export?format=json",
+        headers=outsider,
+    ).status_code == 404
