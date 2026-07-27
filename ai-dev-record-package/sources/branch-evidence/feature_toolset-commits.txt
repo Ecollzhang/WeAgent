@@ -1,0 +1,15 @@
+﻿9e300c5 2026-06-02 feat: add configurable tool catalog
+00c8a97 2026-06-02 docs: sync toolset planning artifacts
+0001d7c 2026-06-02 feat: implement builtin tool runtime
+e91301c 2026-05-29 docs: add chinese docker uat guide
+af6594e 2026-05-29 docs: add docker uat guide
+185735e 2026-05-29 test: add toolset regression contracts
+538c67b 2026-05-29 feat: sync runtime skill drafts
+6d38fc0 2026-05-29 feat: add plugin install records
+4dc8027 2026-05-29 feat: add minimal mcp runtime
+650d5b9 2026-05-29 feat: audit builtin tool calls
+09431ba 2026-05-29 feat: add capability runtime projection
+52a5669 2026-05-29 feat: add capability library UI
+73012c4 2026-05-28 feat: add capability service api
+927c356 2026-05-28 feat: add capability data model
+c1b6ef1 2026-05-28 docs: plan toolset capability phase

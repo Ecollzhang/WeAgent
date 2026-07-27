@@ -1,0 +1,46 @@
+{
+  "package_name": "WeAgent AI 协作开发记录交付包",
+  "created_at": "2026-06-06",
+  "purpose": "展示人类成员与 AI 在 WeAgent 项目开发过程中的协作记录、规划、规范、验证与归档证据。",
+  "source_branches": [
+    "origin/agent_adapter",
+    "origin/feature/toolset",
+    "origin/combine/toolset_v1.1.0"
+  ],
+  "inclusion_policy": {
+    "include": [
+      "docs/ai-collab AI 协作归档",
+      ".planning 规划、需求、路线图、阶段计划、SPEC、VERIFY、checkpoint",
+      "docs/tech 技术方案文档",
+      "docs/report 阶段报告",
+      "toolset Markdown 说明和 Skill 示例",
+      "原始参考 PDF 和 Markdown 草案",
+      ".planning/tmp 中有效截图、日志、UAT JSON"
+    ],
+    "exclude": [
+      "完整源码",
+      "依赖目录",
+      "构建产物",
+      "浏览器 profile/cache",
+      "本地 AI 工具 settings 文件",
+      "PDF 全文提取结果"
+    ]
+  },
+  "generated_documents": [
+    "README.md",
+    "01-项目说明文档.md",
+    "02-AI协作与开发记录说明.md",
+    "03-完整解析解读文档.md",
+    "04-SPEC-SKILL-RULE体系解读.md",
+    "05-分支贡献与演进时间线.md",
+    "06-项目文件夹总结.md",
+    "07-素材索引与来源清单.md"
+  ],
+  "source_indexes": [
+    "sources/branch-evidence/branch-selection-summary.json",
+    "sources/branch-evidence/agent_adapter-selected-files.txt",
+    "sources/branch-evidence/feature_toolset-selected-files.txt",
+    "sources/branch-evidence/combine_toolset_v1.1.0-selected-files.txt",
+    "sources/current-worktree/planning-tmp-evidence-index.json"
+  ]
+}

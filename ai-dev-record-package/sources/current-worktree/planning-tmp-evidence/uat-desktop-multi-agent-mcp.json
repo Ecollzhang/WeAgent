@@ -1,0 +1,893 @@
+{
+  "suffix": "1780634069440_7674",
+  "username": "uat_multi_1780634069440_7674",
+  "steps": [
+    {
+      "name": "register_user",
+      "ok": true,
+      "data": {
+        "id": "8211c00a-95aa-4933-ac90-30fd4636852d",
+        "username": "uat_multi_1780634069440_7674"
+      }
+    },
+    {
+      "name": "save_dummy_model_config_for_sandbox_creation",
+      "ok": true,
+      "data": {
+        "has_api_key": true,
+        "effective_model": "uat-dummy-model",
+        "base_url": "http://host.docker.internal:9/v1"
+      }
+    },
+    {
+      "name": "create_skill",
+      "ok": true,
+      "data": {
+        "id": "10dd59d0-68ff-416e-9f9c-c7b63ac4c838",
+        "version_id": "2212fbbf-43d4-4160-a474-b17a965156fd",
+        "marker": "DESKTOP_MULTI_AGENT_SKILL_MARKER_1780634069440_7674"
+      }
+    },
+    {
+      "name": "resolve_memory_mcp",
+      "ok": true,
+      "data": {
+        "id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89",
+        "version_id": "5191e273-1be0-45b0-85ba-717b56571833",
+        "name": "Memory MCP",
+        "source_ref": "@modelcontextprotocol/server-memory"
+      }
+    },
+    {
+      "name": "create_agents_with_separated_bindings",
+      "ok": true,
+      "data": {
+        "skill_agent_id": "226114c5-c191-47fb-8d07-9d14950eba82",
+        "mcp_agent_id": "86fb8b23-fb49-4de1-8c30-a626794fb73d"
+      }
+    },
+    {
+      "name": "create_multi_agent_conversation_and_sandbox",
+      "ok": true,
+      "data": {
+        "id": "2243d5ec-721b-4529-81de-b19812d1c2c2",
+        "sandbox_session_id": "2243d5ec-721b-4529-81de-b19812d1c2c2",
+        "sandbox_host_port": 11803,
+        "sandbox_status": "running"
+      }
+    },
+    {
+      "name": "verify_agent_projection_files",
+      "ok": true,
+      "data": {
+        "skill_agent_skill_count": 1,
+        "skill_agent_capability_types": [
+          "skill"
+        ],
+        "mcp_agent_capability_types": [
+          "mcp"
+        ],
+        "skill_marker_present": true,
+        "mcp_manifest_command": "npx",
+        "mcp_manifest_args": [
+          "--yes",
+          "@modelcontextprotocol/server-memory"
+        ]
+      }
+    },
+    {
+      "name": "start_mcp_server",
+      "ok": true,
+      "data": {
+        "status": "ok",
+        "runtime_id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89",
+        "capability_id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89"
+      }
+    },
+    {
+      "name": "list_mcp_tools",
+      "ok": true,
+      "data": {
+        "count": 9,
+        "names": [
+          "create_entities",
+          "create_relations",
+          "add_observations",
+          "delete_entities",
+          "delete_observations",
+          "delete_relations",
+          "read_graph",
+          "search_nodes",
+          "open_nodes"
+        ]
+      }
+    },
+    {
+      "name": "call_mcp_tool",
+      "ok": true,
+      "data": {
+        "status": "ok",
+        "tool_name": "read_graph",
+        "result_keys": [
+          "content",
+          "structuredContent"
+        ]
+      }
+    },
+    {
+      "name": "verify_mcp_call_runtime_audit_files",
+      "ok": true,
+      "data": {
+        "tree_present": true,
+        "root": "/workspace/.weagent/runs"
+      }
+    }
+  ],
+  "artifacts": {
+    "user": {
+      "id": "8211c00a-95aa-4933-ac90-30fd4636852d",
+      "username": "uat_multi_1780634069440_7674"
+    },
+    "skill": {
+      "id": "10dd59d0-68ff-416e-9f9c-c7b63ac4c838",
+      "version_id": "2212fbbf-43d4-4160-a474-b17a965156fd",
+      "marker": "DESKTOP_MULTI_AGENT_SKILL_MARKER_1780634069440_7674"
+    },
+    "mcp": {
+      "id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89",
+      "version_id": "5191e273-1be0-45b0-85ba-717b56571833",
+      "name": "Memory MCP",
+      "source_ref": "@modelcontextprotocol/server-memory"
+    },
+    "agents": {
+      "skill_agent_id": "226114c5-c191-47fb-8d07-9d14950eba82",
+      "mcp_agent_id": "86fb8b23-fb49-4de1-8c30-a626794fb73d"
+    },
+    "conversation": {
+      "id": "2243d5ec-721b-4529-81de-b19812d1c2c2",
+      "sandbox_session_id": "2243d5ec-721b-4529-81de-b19812d1c2c2",
+      "sandbox_host_port": 11803,
+      "sandbox_status": "running"
+    },
+    "mcp_start": {
+      "capability_id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89",
+      "capability_version_id": "5191e273-1be0-45b0-85ba-717b56571833",
+      "initialize": {
+        "capabilities": {
+          "tools": {
+            "listChanged": true
+          }
+        },
+        "protocolVersion": "2024-11-05",
+        "serverInfo": {
+          "name": "memory-server",
+          "version": "0.6.3"
+        }
+      },
+      "runtime_id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89",
+      "status": "ok"
+    },
+    "mcp_tools": {
+      "runtime_id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89",
+      "status": "ok",
+      "tools": [
+        {
+          "description": "Create multiple new entities in the knowledge graph",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "entities": {
+                "items": {
+                  "properties": {
+                    "entityType": {
+                      "description": "The type of the entity",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The name of the entity",
+                      "type": "string"
+                    },
+                    "observations": {
+                      "description": "An array of observation contents associated with the entity",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "entityType",
+                    "observations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "entities"
+            ],
+            "type": "object"
+          },
+          "name": "create_entities",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entityType": {
+                      "description": "The type of the entity",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The name of the entity",
+                      "type": "string"
+                    },
+                    "observations": {
+                      "description": "An array of observation contents associated with the entity",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "entityType",
+                    "observations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "entities"
+            ],
+            "type": "object"
+          },
+          "title": "Create Entities"
+        },
+        {
+          "description": "Create multiple new relations between entities in the knowledge graph. Relations should be in active voice",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "relations": {
+                "items": {
+                  "properties": {
+                    "from": {
+                      "description": "The name of the entity where the relation starts",
+                      "type": "string"
+                    },
+                    "relationType": {
+                      "description": "The type of the relation",
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "The name of the entity where the relation ends",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "relationType"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "relations"
+            ],
+            "type": "object"
+          },
+          "name": "create_relations",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "from": {
+                      "description": "The name of the entity where the relation starts",
+                      "type": "string"
+                    },
+                    "relationType": {
+                      "description": "The type of the relation",
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "The name of the entity where the relation ends",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "relationType"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "relations"
+            ],
+            "type": "object"
+          },
+          "title": "Create Relations"
+        },
+        {
+          "description": "Add new observations to existing entities in the knowledge graph",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "observations": {
+                "items": {
+                  "properties": {
+                    "contents": {
+                      "description": "An array of observation contents to add",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "entityName": {
+                      "description": "The name of the entity to add the observations to",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "entityName",
+                    "contents"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "observations"
+            ],
+            "type": "object"
+          },
+          "name": "add_observations",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "results": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "addedObservations": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "entityName": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "entityName",
+                    "addedObservations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "results"
+            ],
+            "type": "object"
+          },
+          "title": "Add Observations"
+        },
+        {
+          "description": "Delete multiple entities and their associated relations from the knowledge graph",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "entityNames": {
+                "description": "An array of entity names to delete",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "entityNames"
+            ],
+            "type": "object"
+          },
+          "name": "delete_entities",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "success",
+              "message"
+            ],
+            "type": "object"
+          },
+          "title": "Delete Entities"
+        },
+        {
+          "description": "Delete specific observations from entities in the knowledge graph",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "deletions": {
+                "items": {
+                  "properties": {
+                    "entityName": {
+                      "description": "The name of the entity containing the observations",
+                      "type": "string"
+                    },
+                    "observations": {
+                      "description": "An array of observations to delete",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "entityName",
+                    "observations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "deletions"
+            ],
+            "type": "object"
+          },
+          "name": "delete_observations",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "success",
+              "message"
+            ],
+            "type": "object"
+          },
+          "title": "Delete Observations"
+        },
+        {
+          "description": "Delete multiple relations from the knowledge graph",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "relations": {
+                "description": "An array of relations to delete",
+                "items": {
+                  "properties": {
+                    "from": {
+                      "description": "The name of the entity where the relation starts",
+                      "type": "string"
+                    },
+                    "relationType": {
+                      "description": "The type of the relation",
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "The name of the entity where the relation ends",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "relationType"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "relations"
+            ],
+            "type": "object"
+          },
+          "name": "delete_relations",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "success",
+              "message"
+            ],
+            "type": "object"
+          },
+          "title": "Delete Relations"
+        },
+        {
+          "description": "Read the entire knowledge graph",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {},
+            "type": "object"
+          },
+          "name": "read_graph",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entityType": {
+                      "description": "The type of the entity",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The name of the entity",
+                      "type": "string"
+                    },
+                    "observations": {
+                      "description": "An array of observation contents associated with the entity",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "entityType",
+                    "observations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "from": {
+                      "description": "The name of the entity where the relation starts",
+                      "type": "string"
+                    },
+                    "relationType": {
+                      "description": "The type of the relation",
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "The name of the entity where the relation ends",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "relationType"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "entities",
+              "relations"
+            ],
+            "type": "object"
+          },
+          "title": "Read Graph"
+        },
+        {
+          "description": "Search for nodes in the knowledge graph based on a query",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "query": {
+                "description": "The search query to match against entity names, types, and observation content",
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          },
+          "name": "search_nodes",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entityType": {
+                      "description": "The type of the entity",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The name of the entity",
+                      "type": "string"
+                    },
+                    "observations": {
+                      "description": "An array of observation contents associated with the entity",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "entityType",
+                    "observations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "from": {
+                      "description": "The name of the entity where the relation starts",
+                      "type": "string"
+                    },
+                    "relationType": {
+                      "description": "The type of the relation",
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "The name of the entity where the relation ends",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "relationType"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "entities",
+              "relations"
+            ],
+            "type": "object"
+          },
+          "title": "Search Nodes"
+        },
+        {
+          "description": "Open specific nodes in the knowledge graph by their names",
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "names": {
+                "description": "An array of entity names to retrieve",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "names"
+            ],
+            "type": "object"
+          },
+          "name": "open_nodes",
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "entities": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entityType": {
+                      "description": "The type of the entity",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The name of the entity",
+                      "type": "string"
+                    },
+                    "observations": {
+                      "description": "An array of observation contents associated with the entity",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "entityType",
+                    "observations"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "relations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "from": {
+                      "description": "The name of the entity where the relation starts",
+                      "type": "string"
+                    },
+                    "relationType": {
+                      "description": "The type of the relation",
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "The name of the entity where the relation ends",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "relationType"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "entities",
+              "relations"
+            ],
+            "type": "object"
+          },
+          "title": "Open Nodes"
+        }
+      ]
+    },
+    "mcp_call": {
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"entities\": [],\n  \"relations\": []\n}",
+            "type": "text"
+          }
+        ],
+        "structuredContent": {
+          "entities": [],
+          "relations": []
+        }
+      },
+      "runtime_id": "adf8cf59-2191-485e-8296-3c4e2dc9ed89",
+      "status": "ok",
+      "tool_name": "read_graph"
+    },
+    "runs_tree": {
+      "root": "/workspace/.weagent/runs",
+      "tree": {
+        "children": [
+          {
+            "children": [
+              {
+                "extension": "jsonl",
+                "mime_type": "application/octet-stream",
+                "name": "calls.jsonl",
+                "path": "/workspace/.weagent/runs/86fb8b23-fb49-4de1-8c30-a626794fb73d-1780634265035-1/calls.jsonl",
+                "size": 636,
+                "type": "file"
+              },
+              {
+                "extension": "json",
+                "mime_type": "application/json",
+                "name": "capability-snapshot.json",
+                "path": "/workspace/.weagent/runs/86fb8b23-fb49-4de1-8c30-a626794fb73d-1780634265035-1/capability-snapshot.json",
+                "size": 18090,
+                "type": "file"
+              }
+            ],
+            "name": "86fb8b23-fb49-4de1-8c30-a626794fb73d-1780634265035-1",
+            "path": "/workspace/.weagent/runs/86fb8b23-fb49-4de1-8c30-a626794fb73d-1780634265035-1",
+            "type": "directory"
+          }
+        ],
+        "name": "runs",
+        "path": "/workspace/.weagent/runs",
+        "type": "directory"
+      }
+    }
+  },
+  "checks": {
+    "projection": {
+      "skill_agent_skill_count": 1,
+      "skill_agent_capability_types": [
+        "skill"
+      ],
+      "mcp_agent_capability_types": [
+        "mcp"
+      ],
+      "skill_marker_present": true,
+      "mcp_manifest_command": "npx",
+      "mcp_manifest_args": [
+        "--yes",
+        "@modelcontextprotocol/server-memory"
+      ]
+    }
+  },
+  "errors": []
+}

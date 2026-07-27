@@ -1,0 +1,30 @@
+﻿14d7d4b 2026-06-06 fix: polish toolset desktop layout and icon
+bde323c 2026-06-03 docs: mark desktop toolset phase verified
+151c9fc 2026-06-03 docs: record desktop toolset verification
+0482350 2026-06-03 test: verify desktop capability runtime injection
+07f9fb8 2026-06-03 feat: add desktop toolset management UI
+587c3f8 2026-06-03 plan: define desktop toolset adapter phase
+a9f414a 2026-06-03 fix: expose bound mcp servers to codex
+a1209d0 2026-06-03 fix: route codex through relay for chat providers
+5b93a82 2026-06-02 fix: sync codex model config into sandbox
+5a11405 2026-06-02 fix: omit runtime status from legacy tool seed
+a3a15d4 2026-06-02 docs: record toolset desktop merge verification
+bbf6fd6 2026-06-02 merge: combine toolset with desktop runtime
+7662028 2026-06-02 docs: plan toolset desktop merge
+9e300c5 2026-06-02 feat: add configurable tool catalog
+00c8a97 2026-06-02 docs: sync toolset planning artifacts
+0001d7c 2026-06-02 feat: implement builtin tool runtime
+96f9b7e 2026-06-01 桌面端支持以及绝大部分功能的实现
+2a15778 2026-06-01 message 新增 type=service，增加启动容器服务的脚本，容器服务可访问。后端端口转到5002
+e91301c 2026-05-29 docs: add chinese docker uat guide
+af6594e 2026-05-29 docs: add docker uat guide
+185735e 2026-05-29 test: add toolset regression contracts
+538c67b 2026-05-29 feat: sync runtime skill drafts
+6d38fc0 2026-05-29 feat: add plugin install records
+4dc8027 2026-05-29 feat: add minimal mcp runtime
+650d5b9 2026-05-29 feat: audit builtin tool calls
+09431ba 2026-05-29 feat: add capability runtime projection
+52a5669 2026-05-29 feat: add capability library UI
+73012c4 2026-05-28 feat: add capability service api
+927c356 2026-05-28 feat: add capability data model
+c1b6ef1 2026-05-28 docs: plan toolset capability phase

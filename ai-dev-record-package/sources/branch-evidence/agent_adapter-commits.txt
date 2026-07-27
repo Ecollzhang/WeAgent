@@ -1,0 +1,13 @@
+﻿4192c59 2026-05-25 docs: archive context system phase
+11ab486 2026-05-25 feat: add conversation context system
+4779fd3 2026-05-25 fix: stabilize codex adapter runtime
+b645e35 2026-05-24 docs: mark adapter phase complete
+07b6e90 2026-05-24 docs: add adapter frontend test report
+0dddf76 2026-05-24 feat: stream adapter events to frontend
+d17a1bf 2026-05-24 feat: route orchestrator through agent adapters
+034ea0c 2026-05-24 fix: support real codex streaming output
+8f0ca8c 2026-05-23 fix: harden cli streaming adapters
+4dd020d 2026-05-23 feat: add streaming agent adapters
+9f2cee8 2026-05-23 chore: keep ai-collab local
+96f211b 2026-05-23 docs: align agent adapter plan with gsd
+38b6241 2026-05-23 docs: plan agent adapter streaming factory

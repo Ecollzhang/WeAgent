@@ -1,0 +1,32 @@
+﻿[
+    {
+        "branch":  "origin/agent_adapter",
+        "slug":  "agent_adapter",
+        "selected_files":  59,
+        "markdown_files":  58,
+        "planning_files":  12,
+        "ai_collab_files":  24,
+        "report_files":  2,
+        "toolset_files":  0
+    },
+    {
+        "branch":  "origin/feature/toolset",
+        "slug":  "feature_toolset",
+        "selected_files":  103,
+        "markdown_files":  103,
+        "planning_files":  60,
+        "ai_collab_files":  13,
+        "report_files":  0,
+        "toolset_files":  9
+    },
+    {
+        "branch":  "origin/combine/toolset_v1.1.0",
+        "slug":  "combine_toolset_v1.1.0",
+        "selected_files":  81,
+        "markdown_files":  80,
+        "planning_files":  18,
+        "ai_collab_files":  25,
+        "report_files":  6,
+        "toolset_files":  9
+    }
+]

@@ -1,0 +1,122 @@
+﻿[
+    {
+        "Name":  "desktop-tools-cdp-narrow.png",
+        "Length":  56637,
+        "LastWriteTime":  "\/Date(1780633026298)\/"
+    },
+    {
+        "Name":  "desktop-tools-cdp-wide.png",
+        "Length":  53989,
+        "LastWriteTime":  "\/Date(1780633030217)\/"
+    },
+    {
+        "Name":  "desktop-tools-exact-window.png",
+        "Length":  12866,
+        "LastWriteTime":  "\/Date(1780632838908)\/"
+    },
+    {
+        "Name":  "desktop-tools-fixed-narrow-v2.png",
+        "Length":  76421,
+        "LastWriteTime":  "\/Date(1780633565838)\/"
+    },
+    {
+        "Name":  "desktop-tools-fixed-narrow.png",
+        "Length":  72144,
+        "LastWriteTime":  "\/Date(1780633448906)\/"
+    },
+    {
+        "Name":  "desktop-tools-fixed-wide-v2.png",
+        "Length":  82486,
+        "LastWriteTime":  "\/Date(1780633569583)\/"
+    },
+    {
+        "Name":  "desktop-tools-fixed-wide.png",
+        "Length":  82460,
+        "LastWriteTime":  "\/Date(1780633451856)\/"
+    },
+    {
+        "Name":  "desktop-tools-header-after-2.png",
+        "Length":  1489,
+        "LastWriteTime":  "\/Date(1780492212786)\/"
+    },
+    {
+        "Name":  "desktop-tools-header-after-screen.png",
+        "Length":  85622,
+        "LastWriteTime":  "\/Date(1780492376974)\/"
+    },
+    {
+        "Name":  "desktop-tools-header-after.png",
+        "Length":  167091,
+        "LastWriteTime":  "\/Date(1780492007415)\/"
+    },
+    {
+        "Name":  "desktop-tools-header-confirm.png",
+        "Length":  259685,
+        "LastWriteTime":  "\/Date(1780632782564)\/"
+    },
+    {
+        "Name":  "desktop-tools-window-after.png",
+        "Length":  85421,
+        "LastWriteTime":  "\/Date(1780492064437)\/"
+    },
+    {
+        "Name":  "dev-backend-current.log",
+        "Length":  145222,
+        "LastWriteTime":  "\/Date(1780414290123)\/"
+    },
+    {
+        "Name":  "dev-backend.log",
+        "Length":  24272,
+        "LastWriteTime":  "\/Date(1780380100175)\/"
+    },
+    {
+        "Name":  "dev-frontend-current.log",
+        "Length":  32010,
+        "LastWriteTime":  "\/Date(1780415327365)\/"
+    },
+    {
+        "Name":  "dev-frontend.log",
+        "Length":  175594,
+        "LastWriteTime":  "\/Date(1780380568144)\/"
+    },
+    {
+        "Name":  "toolset-count-fixed.png",
+        "Length":  81657,
+        "LastWriteTime":  "\/Date(1780326395551)\/"
+    },
+    {
+        "Name":  "toolset-detail-sidebar-debug.png",
+        "Length":  77599,
+        "LastWriteTime":  "\/Date(1780325553133)\/"
+    },
+    {
+        "Name":  "toolset-detail-sidebar-fixed.png",
+        "Length":  77420,
+        "LastWriteTime":  "\/Date(1780325796052)\/"
+    },
+    {
+        "Name":  "toolset-icon-debug-after.png",
+        "Length":  59731,
+        "LastWriteTime":  "\/Date(1780325456707)\/"
+    },
+    {
+        "Name":  "toolset-icon-debug-before.png",
+        "Length":  59731,
+        "LastWriteTime":  "\/Date(1780325271323)\/"
+    },
+    {
+        "Name":  "uat-desktop-multi-agent-mcp.json",
+        "Length":  27948,
+        "LastWriteTime":  "\/Date(1780634270446)\/"
+    },
+    {
+        "Name":  "web-tools-sidebar-wrench.png",
+        "Length":  66887,
+        "LastWriteTime":  "\/Date(1780633106267)\/"
+    },
+    {
+        "Name":  "web-tools-wrench-v2.png",
+        "Length":  70703,
+        "LastWriteTime":  "\/Date(1780633640146)\/"
+    }
+]
