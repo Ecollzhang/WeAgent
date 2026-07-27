@@ -30,7 +30,7 @@ import redis
 class DomainServiceBase:
     """领域服务基座 — 所有配置从外部 config 对象读取，不硬编码。"""
 
-    def __init__(self, config):
+    def __init__(self, config, db_instance=None):
         """
         Args:
             config: 领域服务的配置模块/类，至少需包含:
@@ -49,7 +49,8 @@ class DomainServiceBase:
         self.app.config.from_object(config)
 
         # 数据库
-        self.db = SQLAlchemy(self.app)
+        self.db = db_instance or SQLAlchemy()
+        self.db.init_app(self.app)
 
         # JWT — 与核心服务共用同一 secret，验证同一 Token
         self.jwt = JWTManager(self.app)

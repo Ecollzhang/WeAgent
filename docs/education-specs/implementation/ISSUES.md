@@ -50,7 +50,7 @@
 - 处理：在 Education 基础切片后分别以现有公开测试 seam 定位和修复，不与业务实现混改。
 - 状态：待处理。
 
-## EDU-ARCH-001：Education 服务壳不可导入
+## EDU-ARCH-001：Education 服务壳不可导入（已解决）
 
 - 发现时间：2026-07-27
 - 模块：Education 服务
@@ -60,7 +60,10 @@
 - 影响：5102 服务无法启动，所有 Education API 不存在。
 - 处理计划：建立可注入 testing config 的 Education app factory，并复用现有
   `app.services.domain_base`，以健康检查和代理 seam 做首个红绿切片。
-- 状态：待处理。
+- 处理：建立可注入配置的 `create_edu_app` 应用工厂，修正核心包导入，复用可注入数据库的
+  `DomainServiceBase`，并增加健康、JWT 和双层灰度测试。
+- 验证：Education 基础切片与灰度回归 `5 passed`。
+- 状态：已解决。
 
 ## EDU-SEC-001：现有 Artifact 与 sandbox 文件路由缺少对象级 ACL
 

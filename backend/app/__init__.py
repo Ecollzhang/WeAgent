@@ -216,6 +216,7 @@ def _migrate_grayscale_configs():
             'ui.sidebar.grades', 'ui.sidebar.students',
             'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
             'ui.sidebar.reports', 'ui.sidebar.schedules',
+            'feature.education.enabled',
         }
         cleanup_statement = _text(
             "DELETE FROM grayscale_config WHERE config_key NOT IN :keys"
@@ -312,6 +313,7 @@ def _seed_grayscale_configs():
             ('ui.sidebar.resources', '侧边栏-教学资源', 'ui', 'edu', 1, 1),
             ('ui.sidebar.grades', '侧边栏-成绩管理', 'ui', 'edu', 1, 1),
             ('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1),
+            ('feature.education.enabled', 'Education feature', 'feature', 'edu', 1, 1),
             # ===== 智慧办公 (office) =====
             ('ui.sidebar.documents', '侧边栏-公文管理', 'ui', 'office', 1, 1),
             ('ui.sidebar.meetings', '侧边栏-会议管理', 'ui', 'office', 1, 1),

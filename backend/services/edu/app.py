@@ -1,29 +1,62 @@
-"""WeAgent 智慧教育领域服务.
+"""WeAgent Education domain service."""
 
-启动方式:
-    cd services/edu
-    python app.py
-"""
-import sys
 import os
+import sys
 
-# 确保能导入 weagent_core
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from flask import Blueprint, jsonify, request
+from flask_jwt_extended import jwt_required
 
-from weagent_core.services.domain_base import DomainServiceBase
-from config import Config
 
-service = DomainServiceBase(Config)
-app = service.app
-db = service.db
+BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, BACKEND_ROOT)
 
-# ── TODO: 在此注册领域专属蓝图 ──────────────────────────────
-# 示例:
-#   from controllers.xxx_controller import xxx_bp
-#   app.register_blueprint(xxx_bp, url_prefix='/api/edu/xxx')
+from app.services.domain_base import DomainServiceBase
 
-if __name__ == '__main__':
+try:
+    from .config import Config
+    from .extensions import db
+except ImportError:  # Support ``python services/edu/app.py``.
+    from config import Config
+    from extensions import db
+
+
+def _create_api_blueprint():
+    blueprint = Blueprint("education_api", __name__)
+
+    @blueprint.get("/courses")
+    @jwt_required()
+    def list_courses():
+        return jsonify({"items": []})
+
+    return blueprint
+
+
+def create_edu_app(config_object=Config):
+    """Create an isolated Education application for production or tests."""
+    service = DomainServiceBase(config_object, db_instance=db)
+    app = service.app
+    app.extensions["domain_service"] = service
+
+    @app.before_request
+    def enforce_feature_gate():
+        if (
+            request.path.startswith("/api/edu/")
+            and request.path != "/api/edu/health"
+            and not app.config.get("EDUCATION_FEATURE_ENABLED", True)
+        ):
+            return jsonify({"error": "Education feature is disabled"}), 404
+
+    app.register_blueprint(_create_api_blueprint(), url_prefix="/api/edu")
+    return app
+
+
+app = create_edu_app()
+
+
+if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    print(f'[WeAgent] 智慧教育服务启动 → http://127.0.0.1:{Config.PORT}')
+    service = app.extensions["domain_service"]
+    print(f"[WeAgent] Education service listening on http://127.0.0.1:{service.port}")
     service.run(debug=True)

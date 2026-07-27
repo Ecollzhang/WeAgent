@@ -17,6 +17,20 @@ DOMAIN_SERVICE_PORTS = {
 PROXY_TIMEOUT = 30
 
 
+def _domain_is_enabled(domain):
+    """Read the operator-controlled domain gate."""
+    if domain != 'edu':
+        return True
+
+    from app.models.grayscale_config import GrayscaleConfig
+
+    feature = GrayscaleConfig.query.filter_by(
+        config_key='feature.education.enabled',
+        domain='edu',
+    ).first()
+    return feature is None or bool(feature.enabled)
+
+
 def _proxy_request(domain, path):
     """将当前请求转发到领域服务并返回响应."""
     port = DOMAIN_SERVICE_PORTS.get(domain)
@@ -111,6 +125,10 @@ def proxy_health(domain):
 @jwt_required()
 def proxy_domain_request(domain, subpath):
     """将 /api/domain/{domain}/* 请求转发到领域服务."""
+    if not _domain_is_enabled(domain):
+        from app.utils.response import error_response
+        return error_response('Education feature is disabled', code=404)
+
     resp = _proxy_request(domain, subpath)
     if resp is None:
         from app.utils.response import error_response
