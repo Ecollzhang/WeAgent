@@ -204,9 +204,8 @@ class Orchestrator:
                 reply_preview=shorten(reply, 300),
             )
 
-            # Save assistant reply
-            session_store.save_message(agent_id, "assistant", reply)
             if self._is_agent_runtime_error(reply):
+                session_store.save_message(agent_id, "assistant", reply)
                 log_agent(agent_id, "task_runtime_error", level="error", role=role, error=shorten(reply, 500))
                 push_event(agent_id, "error", {
                     "agent_id": agent_id,
@@ -214,14 +213,32 @@ class Orchestrator:
                 })
                 return {"status": "error", "agent_id": agent_id, "error": reply, "reply": reply}
 
-            # Parse tool calls and code blocks from the response
+            reply, tool_results, loop_error = self._complete_tool_calls(
+                agent,
+                agent_id,
+                reply,
+                context=context,
+                run_id=capability_run_id,
+            )
+            session_store.save_message(agent_id, "assistant", reply)
+            if loop_error:
+                log_agent(agent_id, "tool_loop_limit_reached", level="error", role=role)
+                push_event(agent_id, "error", {
+                    "agent_id": agent_id,
+                    "error": loop_error,
+                })
+                return {
+                    "status": "error",
+                    "agent_id": agent_id,
+                    "error": loop_error,
+                    "reply": reply,
+                    "tool_results": tool_results,
+                }
+
+            # Parse code blocks and collect files from the final response.
             start_parse = time.time()
-            tool_results = []
             if self._should_collect_agent_files(agent_id):
                 log_agent(agent_id, "artifact_collection_start", role=role)
-                tool_results = self._execute_tool_calls(
-                    agent_id, reply, run_id=capability_run_id
-                )
                 if not tool_results:
                     tool_results = self._parse_and_write_code_blocks(agent_id, reply)
 
@@ -731,6 +748,52 @@ class Orchestrator:
         r"<tool_call>\s*({.*?})\s*</tool_call>", re.DOTALL
     )
 
+    def _complete_tool_calls(self, agent: AgentRuntime, agent_id: str,
+                             initial_reply: str, context: str = "",
+                             run_id: str = None) -> tuple[str, list[dict], Optional[str]]:
+        """Execute registered tools and return their results to the provider.
+
+        A bounded loop prevents a provider from issuing tool calls forever. The
+        provider receives structured results as a new user turn and must return
+        either a final answer or another tool call.
+        """
+        try:
+            max_rounds = max(
+                1,
+                min(int(os.environ.get("WEAGENT_TOOL_LOOP_MAX_ROUNDS", "4")), 10),
+            )
+        except ValueError:
+            max_rounds = 4
+
+        reply = initial_reply
+        all_results = []
+        for round_number in range(1, max_rounds + 1):
+            if not self.TOOL_CALL_PATTERN.search(reply or ""):
+                return reply, all_results, None
+            results = self._execute_tool_calls(agent_id, reply, run_id=run_id)
+            all_results.extend(results)
+            follow_up = (
+                "The requested tools have finished. Use these results to answer "
+                "the original request. If another tool is essential, emit a new "
+                "<tool_call>; otherwise return the final answer.\n\n"
+                f"<tool_results round=\"{round_number}\">\n"
+                f"{json.dumps(results, ensure_ascii=False)}\n"
+                "</tool_results>"
+            )
+            session_store.save_message(agent_id, "assistant", reply)
+            session_store.save_message(agent_id, "user", follow_up)
+            reply = agent.send_with_context(follow_up, context=context)
+            if self._is_agent_runtime_error(reply):
+                return reply, all_results, reply
+
+        if self.TOOL_CALL_PATTERN.search(reply or ""):
+            return (
+                reply,
+                all_results,
+                f"Maximum tool rounds reached ({max_rounds}); execution stopped.",
+            )
+        return reply, all_results, None
+
     def _execute_tool_calls(self, agent_id: str, response: str,
                             run_id: str = None) -> list[dict]:
         """Parse <tool_call> blocks from agent response and execute them."""
@@ -754,8 +817,20 @@ class Orchestrator:
                 )
                 results.append({"tool": tool_name, "result": result})
                 # Push RAG search results as a structured card element
-                if tool_name == "rag_search" and isinstance(result, dict):
-                    self._push_rag_result_card(agent_id, args.get("query", ""), result)
+                card_result = result
+                if isinstance(result, str):
+                    try:
+                        envelope = json.loads(result)
+                        if envelope.get("status") == "ok":
+                            card_result = envelope.get("result")
+                    except (json.JSONDecodeError, AttributeError):
+                        card_result = None
+                if tool_name == "rag_search" and isinstance(card_result, dict):
+                    self._push_rag_result_card(
+                        agent_id,
+                        args.get("query", ""),
+                        card_result,
+                    )
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})
         return results

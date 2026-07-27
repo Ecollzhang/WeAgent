@@ -1,9 +1,10 @@
 """检索 API — 语义搜索 + 混合搜索."""
 from functools import wraps
 
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import verify_jwt_in_request
+from flask import Blueprint, request, jsonify, g
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 
+from access_scope import resolve_search_scope
 from config import Config
 from models.document import Document
 from models.chunk import Chunk
@@ -30,19 +31,39 @@ def _check_internal_key():
     return req_key and req_key == api_key
 
 
-def auth_optional(f):
+def auth_scoped(f):
     """支持 JWT 或内部 API Key 任一认证方式."""
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if _check_internal_key():
-            return f(*args, **kwargs)
-        verify_jwt_in_request()
+        payload = request.get_json(silent=True) or {}
+        internal = _check_internal_key()
+        identity = None
+        if not internal:
+            verify_jwt_in_request()
+            identity = get_jwt_identity()
+        try:
+            g.rag_search_scope = resolve_search_scope(
+                internal=internal,
+                headers=request.headers,
+                payload=payload,
+                jwt_identity=identity,
+            )
+        except PermissionError as exc:
+            return _error(str(exc), 403)
         return f(*args, **kwargs)
     return wrapper
 
 
+def _document_allowed(doc, scope):
+    if not doc or doc.domain != scope.domain:
+        return False
+    if scope.internal and scope.workspace_id:
+        return doc.workspace_id == scope.workspace_id
+    return doc.user_id == scope.user_id
+
+
 @search_bp.route('/search', methods=['POST'])
-@auth_optional
+@auth_scoped
 def semantic_search():
     """语义搜索.
 
@@ -60,8 +81,9 @@ def semantic_search():
 
     top_k = data.get('top_k', 5)
     score_threshold = data.get('score_threshold', 0)
-    domain = data.get('domain')
-    workspace_id = data.get('workspace_id')
+    scope = g.rag_search_scope
+    domain = scope.domain
+    workspace_id = scope.workspace_id if scope.internal else None
 
     # 构建 ChromaDB 过滤条件
     filter_meta = {}
@@ -100,6 +122,13 @@ def semantic_search():
             'source_type': doc.source_type if doc else '',
             'file_type': doc.file_type if doc else '',
         }
+    results = [
+        result for result in results
+        if _document_allowed(
+            docs_map.get(result['metadata'].get('document_id', '')),
+            scope,
+        )
+    ]
 
     return _ok({
         'query': query,
@@ -110,7 +139,7 @@ def semantic_search():
 
 
 @search_bp.route('/search/hybrid', methods=['POST'])
-@auth_optional
+@auth_scoped
 def hybrid_search():
     """混合搜索 — 语义 + 关键词.
 
@@ -128,8 +157,9 @@ def hybrid_search():
 
     top_k = data.get('top_k', 5)
     keyword_top_k = data.get('keyword_top_k', 3)
-    domain = data.get('domain')
-    workspace_id = data.get('workspace_id')
+    scope = g.rag_search_scope
+    domain = scope.domain
+    workspace_id = scope.workspace_id if scope.internal else None
 
     # ── 语义搜索 ──
     filter_meta = {}
@@ -150,9 +180,19 @@ def hybrid_search():
     # ── 关键词搜索（MySQL LIKE） ──
     keyword_chunks = []
     if keyword_top_k > 0:
-        kq = Chunk.query.filter(
-            Chunk.content.contains(query)
-        ).limit(keyword_top_k).all()
+        keyword_query = Chunk.query.join(Document).filter(
+            Chunk.content.contains(query),
+            Document.domain == scope.domain,
+        )
+        if scope.internal and scope.workspace_id:
+            keyword_query = keyword_query.filter(
+                Document.workspace_id == scope.workspace_id
+            )
+        else:
+            keyword_query = keyword_query.filter(
+                Document.user_id == scope.user_id
+            )
+        kq = keyword_query.limit(keyword_top_k).all()
         for c in kq:
             keyword_chunks.append({
                 'chunk_id': c.vector_id,
@@ -196,6 +236,13 @@ def hybrid_search():
             'source_type': doc.source_type if doc else '',
             'file_type': doc.file_type if doc else '',
         }
+    merged = [
+        result for result in merged
+        if _document_allowed(
+            docs_map.get(result['metadata'].get('document_id', '')),
+            scope,
+        )
+    ]
 
     return _ok({
         'query': query,

@@ -281,6 +281,7 @@ def _process_document_bg(app, doc_id, text, doc_name, doc_domain, workspace_id):
                     'chunk_index': c['chunk_index'],
                     'domain': doc_domain,
                     'workspace_id': workspace_id or '',
+                    'user_id': doc.user_id,
                 })
             vector_service.add(vector_ids, vector_embs, vector_docs, vector_metas)
 
@@ -427,6 +428,7 @@ def reprocess_document(doc_id):
                 'chunk_index': c['chunk_index'],
                 'domain': doc.domain,
                 'workspace_id': doc.workspace_id or '',
+                'user_id': doc.user_id,
             })
         vector_service.add(vector_ids, vector_embs, vector_docs, vector_metas)
 

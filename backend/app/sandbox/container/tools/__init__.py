@@ -7,11 +7,13 @@ The orchestrator intercepts tool calls and executes them.
 
 import base64
 import csv
+import ipaddress
 import json
 import mimetypes
 import os
 import re
 import shlex
+import socket
 import sqlite3
 import struct
 import subprocess
@@ -426,24 +428,82 @@ def _git_log(limit: int = 5) -> dict:
     return _git_command(["log", f"--max-count={safe_limit}", "--oneline"])
 
 
-def _http_fetch(url: str, max_bytes: int = 40_000) -> dict:
+def _validate_public_http_url(url: str) -> urllib.parse.ParseResult:
     parsed = urllib.parse.urlparse(str(url or ""))
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("Only http/https URLs are allowed")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("URL must contain a hostname and no embedded credentials")
+    if os.environ.get("WEAGENT_HTTP_FETCH_ALLOW_PRIVATE") == "1":
+        return parsed
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError(f"Unable to resolve URL hostname: {exc}") from exc
+    if not addresses:
+        raise ValueError("Unable to resolve URL hostname")
+    for entry in addresses:
+        address = entry[4][0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("URL resolved to an invalid IP address") from exc
+        if not ip.is_global:
+            raise ValueError(
+                "URL resolves to a private, loopback, link-local, or reserved address"
+            )
+    return parsed
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    max_redirects = 3
+
+    def __init__(self):
+        super().__init__()
+        self._redirect_count = 0
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self._redirect_count += 1
+        if self._redirect_count > self.max_redirects:
+            raise ValueError("Too many HTTP redirects")
+        _validate_public_http_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _http_fetch(url: str, max_bytes: int = 40_000) -> dict:
+    parsed = _validate_public_http_url(url)
     limit = max(100, min(int(max_bytes or 40_000), 200_000))
     request = urllib.request.Request(url, headers={"User-Agent": "WeAgent-Tool/1.0"})
+    opener = urllib.request.build_opener(_SafeRedirectHandler())
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            body = response.read(limit + 1)
-            status_code = getattr(response, "status", 200)
-            content_type = response.headers.get("content-type", "")
+        response = opener.open(request, timeout=10)
     except urllib.error.HTTPError as exc:
-        body = exc.read(limit + 1)
-        status_code = exc.code
-        content_type = exc.headers.get("content-type", "")
+        response = exc
+    with response:
+        final_url = response.geturl()
+        _validate_public_http_url(final_url)
+        content_type = response.headers.get("content-type", "")
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        allowed_types = {
+            "text/html",
+            "text/plain",
+            "text/markdown",
+            "application/json",
+            "application/xhtml+xml",
+            "application/xml",
+        }
+        if media_type not in allowed_types:
+            raise ValueError(f"Unsupported response content type: {media_type or 'missing'}")
+        body = response.read(limit + 1)
+        status_code = getattr(response, "status", getattr(response, "code", 200))
     text = body[:limit].decode("utf-8", errors="replace")
+    final_parsed = urllib.parse.urlparse(final_url)
     return {
-        "url": urllib.parse.urlunparse(parsed._replace(query="", fragment="")),
+        "url": urllib.parse.urlunparse(final_parsed._replace(query="", fragment="")),
         "status_code": status_code,
         "content_type": content_type,
         "body_preview": text,
@@ -602,6 +662,11 @@ def _rag_search(query: str, top_k: int = 5, domain: str = "",
     """
     rag_url = os.environ.get("RAG_SERVICE_URL", "http://host.docker.internal:5104")
     api_key = os.environ.get("RAG_INTERNAL_API_KEY", "")
+    scope_user_id = os.environ.get("RAG_SCOPE_USER_ID", "").strip()
+    scope_domain = os.environ.get("RAG_SCOPE_DOMAIN", "").strip()
+    scope_workspace_id = os.environ.get("RAG_SCOPE_WORKSPACE_ID", "").strip()
+    if not scope_user_id or not scope_domain:
+        raise RuntimeError("RAG search requires a server-issued user and domain scope")
 
     if not query or not str(query).strip():
         return {"query": query, "results": [], "total": 0}
@@ -609,8 +674,8 @@ def _rag_search(query: str, top_k: int = 5, domain: str = "",
     payload = json.dumps({
         "query": str(query or ""),
         "top_k": max(1, min(int(top_k or 5), 20)),
-        "domain": str(domain or "").strip() or None,
-        "workspace_id": str(workspace_id or "").strip() or None,
+        "domain": scope_domain,
+        "workspace_id": scope_workspace_id or None,
         "score_threshold": max(0.0, min(float(score_threshold or 0.0), 1.0)),
     }).encode("utf-8")
 
@@ -620,6 +685,10 @@ def _rag_search(query: str, top_k: int = 5, domain: str = "",
     }
     if api_key:
         headers["X-Internal-API-Key"] = api_key
+    headers["X-WeAgent-User-ID"] = scope_user_id
+    headers["X-WeAgent-Domain"] = scope_domain
+    if scope_workspace_id:
+        headers["X-WeAgent-Workspace-ID"] = scope_workspace_id
 
     req = urllib.request.Request(
         f"{rag_url.rstrip('/')}/api/rag/search",

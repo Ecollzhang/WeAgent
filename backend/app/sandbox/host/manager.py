@@ -250,6 +250,7 @@ class DockerContainerManager:
             "CODEX_EXEC_TIMEOUT_SECONDS", "OPENCODE_EXEC_TIMEOUT_SECONDS",
             "AGENT_EXEC_TIMEOUT_SECONDS",
             "RAG_INTERNAL_API_KEY", "RAG_SERVICE_URL",
+            "RAG_SCOPE_USER_ID", "RAG_SCOPE_DOMAIN", "RAG_SCOPE_WORKSPACE_ID",
             "HTTP_PROXY", "HTTPS_PROXY",
         ]
         if env_vars:
