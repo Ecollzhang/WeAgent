@@ -292,3 +292,73 @@ def test_lesson_template_rejects_cross_subject_genre_and_incomplete_plan(app):
         },
     )
     assert invalid_plan.status_code == 400
+
+
+def test_lesson_detail_and_content_history_are_membership_scoped(app):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    student = headers(app, "student")
+    outsider = headers(app, "outsider")
+    created_course = course(client, teacher)
+    join(client, teacher, student, created_course["id"])
+    lesson = client.post(
+        f"/api/edu/courses/{created_course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Draft narrative",
+            "learning_domain": "integrated",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    content = client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "lesson_plan",
+            "schema_name": "lesson_plan_json",
+            "source_json": lesson_plan(),
+        },
+    ).get_json()
+    second = client.post(
+        f"/api/edu/contents/{content['content']['id']}/versions",
+        headers=teacher,
+        json={
+            "schema_name": "lesson_plan_json",
+            "source_json": {
+                **lesson_plan(),
+                "objectives": [{"id": "v2", "description": "Revise the narrative"}],
+            },
+        },
+    ).get_json()
+
+    teacher_detail = client.get(
+        f"/api/edu/lessons/{lesson['id']}", headers=teacher
+    )
+    assert teacher_detail.status_code == 200
+    assert teacher_detail.get_json()["status"] == "draft"
+    assert teacher_detail.get_json()["current_published_version_id"] is None
+    assert client.get(
+        f"/api/edu/lessons/{lesson['id']}", headers=student
+    ).status_code == 404
+
+    contents = client.get(
+        f"/api/edu/lessons/{lesson['id']}/contents", headers=teacher
+    )
+    assert contents.status_code == 200
+    assert contents.get_json()["items"][0]["current_version_id"] == second["version"]["id"]
+    versions = client.get(
+        f"/api/edu/contents/{content['content']['id']}/versions", headers=teacher
+    )
+    assert versions.status_code == 200
+    assert [row["version_number"] for row in versions.get_json()["items"]] == [1, 2]
+    assert versions.get_json()["items"][1]["source_json"]["objectives"][0]["id"] == "v2"
+
+    assert client.get(
+        f"/api/edu/lessons/{lesson['id']}/contents", headers=student
+    ).status_code == 404
+    assert client.get(
+        f"/api/edu/contents/{content['content']['id']}/versions", headers=outsider
+    ).status_code == 404

@@ -234,6 +234,21 @@ def get_course_structure(course_id):
     )
 
 
+@education_content_api.get("/lessons/<lesson_id>")
+@jwt_required()
+def get_lesson(lesson_id):
+    user_id = get_jwt_identity()
+    lesson = Lesson.query.filter_by(id=lesson_id).first()
+    if not lesson:
+        return jsonify({"error": "lesson not found"}), 404
+    membership = _membership(lesson.course_id, user_id)
+    if not membership or (
+        membership.role != "teacher" and lesson.status != "published"
+    ):
+        return jsonify({"error": "lesson not found"}), 404
+    return jsonify(_lesson_dict(lesson))
+
+
 @education_content_api.post("/lessons/<lesson_id>/activities")
 @jwt_required()
 def create_activity(lesson_id):
@@ -319,6 +334,19 @@ def create_content(lesson_id):
     return jsonify({"content": _content_dict(content), "version": _version_dict(version)}), 201
 
 
+@education_content_api.get("/lessons/<lesson_id>/contents")
+@jwt_required()
+def list_lesson_contents(lesson_id):
+    user_id = get_jwt_identity()
+    lesson = _lesson_for_member(lesson_id, user_id, "teacher")
+    if not lesson:
+        return jsonify({"error": "lesson not found"}), 404
+    rows = EducationContent.query.filter_by(
+        lesson_id=lesson.id
+    ).order_by(EducationContent.created_at.asc()).all()
+    return jsonify({"items": [_content_dict(row) for row in rows]})
+
+
 @education_content_api.post("/contents/<content_id>/versions")
 @jwt_required()
 def create_content_version(content_id):
@@ -332,6 +360,19 @@ def create_content_version(content_id):
         return jsonify({"error": error}), 400
     db.session.commit()
     return jsonify({"content": _content_dict(content), "version": _version_dict(version)}), 201
+
+
+@education_content_api.get("/contents/<content_id>/versions")
+@jwt_required()
+def list_content_versions(content_id):
+    user_id = get_jwt_identity()
+    content = EducationContent.query.filter_by(id=content_id).first()
+    if not content or not _membership(content.course_id, user_id, "teacher"):
+        return jsonify({"error": "content not found"}), 404
+    versions = EducationContentVersion.query.filter_by(
+        content_id=content.id
+    ).order_by(EducationContentVersion.version_number.asc()).all()
+    return jsonify({"items": [_version_dict(row) for row in versions]})
 
 
 def _publication_dict(publication, include_teacher=False):
@@ -510,6 +551,24 @@ def _assignment_for_member(assignment_id, user_id, role=None):
     return assignment
 
 
+@education_content_api.get("/assignments/<assignment_id>")
+@jwt_required()
+def get_assignment(assignment_id):
+    user_id = get_jwt_identity()
+    assignment = _assignment_for_member(assignment_id, user_id)
+    if not assignment:
+        return jsonify({"error": "assignment not found"}), 404
+    membership = _membership(assignment.course_id, user_id)
+    if membership.role != "teacher" and assignment.status != "published":
+        return jsonify({"error": "assignment not found"}), 404
+    return jsonify(
+        _assignment_dict(
+            assignment,
+            include_evaluation=membership.role == "teacher",
+        )
+    )
+
+
 @education_content_api.post("/lessons/<lesson_id>/assignments")
 @jwt_required()
 def create_assignment(lesson_id):
@@ -594,6 +653,91 @@ def list_assignments(course_id):
     )
 
 
+def _submission_payload(submission, include_draft=False):
+    if not submission:
+        return {"submission": None, "draft": None, "versions": []}
+    versions = SubmissionVersion.query.filter_by(
+        submission_id=submission.id
+    ).order_by(SubmissionVersion.version_number.asc()).all()
+    draft = None
+    if include_draft and submission.draft_answer_json is not None:
+        draft = {
+            "answer_json": submission.draft_answer_json,
+            "artifact_ids": submission.draft_artifact_ids or [],
+            "updated_at": (
+                submission.draft_updated_at.isoformat()
+                if submission.draft_updated_at
+                else None
+            ),
+        }
+    return {
+        "submission": _submission_dict(submission),
+        "draft": draft,
+        "versions": [_submission_version_dict(row) for row in versions],
+    }
+
+
+def _submission_list_item(submission):
+    payload = _submission_dict(submission)
+    versions = SubmissionVersion.query.filter_by(
+        submission_id=submission.id
+    ).order_by(SubmissionVersion.version_number.asc()).all()
+    payload["versions"] = [_submission_version_dict(row) for row in versions]
+    return payload
+
+
+@education_content_api.put("/assignments/<assignment_id>/submission/draft")
+@jwt_required()
+def save_submission_draft(assignment_id):
+    user_id = get_jwt_identity()
+    assignment = _assignment_for_member(assignment_id, user_id, "student")
+    if not assignment or assignment.status != "published":
+        return jsonify({"error": "assignment not found"}), 404
+    data = request.get_json(silent=True) or {}
+    answer = data.get("answer_json")
+    artifacts = data.get("artifact_ids") or []
+    if not isinstance(answer, dict):
+        return jsonify({"error": "answer_json must be an object"}), 400
+    if not isinstance(artifacts, list):
+        return jsonify({"error": "artifact_ids must be a list"}), 400
+    submission = Submission.query.filter_by(
+        assignment_id=assignment.id, student_user_id=user_id
+    ).first()
+    if not submission:
+        submission = Submission(
+            assignment_id=assignment.id,
+            student_user_id=user_id,
+            status="draft",
+            attempt_count=0,
+        )
+        db.session.add(submission)
+    if submission.attempt_count >= assignment.max_attempts:
+        return jsonify({"error": "maximum attempts reached"}), 409
+    if (
+        submission.status == "graded"
+        and not assignment.allow_revision_after_feedback
+    ):
+        return jsonify({"error": "revision after feedback is disabled"}), 409
+    submission.draft_answer_json = answer
+    submission.draft_artifact_ids = artifacts
+    submission.draft_updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(_submission_payload(submission, include_draft=True))
+
+
+@education_content_api.get("/assignments/<assignment_id>/submission")
+@jwt_required()
+def get_current_submission(assignment_id):
+    user_id = get_jwt_identity()
+    assignment = _assignment_for_member(assignment_id, user_id, "student")
+    if not assignment or assignment.status != "published":
+        return jsonify({"error": "assignment not found"}), 404
+    submission = Submission.query.filter_by(
+        assignment_id=assignment.id, student_user_id=user_id
+    ).first()
+    return jsonify(_submission_payload(submission, include_draft=True))
+
+
 @education_content_api.post("/assignments/<assignment_id>/submissions")
 @jwt_required()
 def submit_assignment(assignment_id):
@@ -602,12 +746,21 @@ def submit_assignment(assignment_id):
     if not assignment or assignment.status != "published":
         return jsonify({"error": "assignment not found"}), 404
     data = request.get_json(silent=True) or {}
-    answer = data.get("answer_json")
-    if not isinstance(answer, dict) or not answer:
-        return jsonify({"error": "answer_json is required"}), 400
     submission = Submission.query.filter_by(
         assignment_id=assignment.id, student_user_id=user_id
     ).first()
+    answer = data.get("answer_json")
+    artifact_ids = data.get("artifact_ids")
+    using_saved_draft = answer is None and submission is not None
+    if answer is None and submission:
+        answer = submission.draft_answer_json
+        artifact_ids = submission.draft_artifact_ids
+    if not isinstance(answer, dict) or not answer:
+        return jsonify({"error": "answer_json is required"}), 400
+    if artifact_ids is None:
+        artifact_ids = []
+    if not isinstance(artifact_ids, list):
+        return jsonify({"error": "artifact_ids must be a list"}), 400
     if not submission:
         submission = Submission(
             assignment_id=assignment.id, student_user_id=user_id
@@ -617,6 +770,8 @@ def submit_assignment(assignment_id):
     if submission.attempt_count >= assignment.max_attempts:
         return jsonify({"error": "maximum attempts reached"}), 409
     source_version_id = data.get("source_version_id")
+    if using_saved_draft and source_version_id is None:
+        source_version_id = submission.current_version_id
     if submission.current_version_id and source_version_id != submission.current_version_id:
         return jsonify({"error": "source_version_id must reference the current submission"}), 409
     now = datetime.utcnow()
@@ -624,7 +779,7 @@ def submit_assignment(assignment_id):
         submission_id=submission.id,
         version_number=submission.attempt_count + 1,
         answer_json=answer,
-        artifact_ids=data.get("artifact_ids") or [],
+        artifact_ids=artifact_ids,
         submitted_at=now,
         source_version_id=source_version_id,
         checksum=_json_checksum(answer),
@@ -635,6 +790,9 @@ def submit_assignment(assignment_id):
     submission.attempt_count += 1
     submission.status = "submitted" if submission.attempt_count == 1 else "revised"
     submission.submitted_at = now
+    submission.draft_answer_json = None
+    submission.draft_artifact_ids = None
+    submission.draft_updated_at = None
     _event(
         assignment.course_id,
         user_id,
@@ -661,9 +819,18 @@ def list_submissions(assignment_id):
         return jsonify({"error": "assignment not found"}), 404
     membership = _membership(assignment.course_id, user_id)
     query = Submission.query.filter_by(assignment_id=assignment.id)
-    if membership.role != "teacher":
+    if membership.role == "teacher":
+        query = query.filter(Submission.status != "draft")
+    else:
         query = query.filter_by(student_user_id=user_id)
-    return jsonify({"items": [_submission_dict(row) for row in query.all()]})
+    return jsonify(
+        {
+            "items": [
+                _submission_list_item(row)
+                for row in query.order_by(Submission.created_at.asc()).all()
+            ]
+        }
+    )
 
 
 def _submission_for_reviewer(submission_id, user_id):

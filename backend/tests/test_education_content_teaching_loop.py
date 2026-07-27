@@ -214,3 +214,152 @@ def test_teacher_analytics_reports_completion_scores_and_learning_events(setup):
         f"/api/edu/courses/{course['id']}/analytics",
         headers=student_a,
     ).status_code == 404
+
+
+def test_assignment_detail_hides_evaluation_from_students(setup):
+    app, client, teacher, student_a, student_b, outsider, course, lesson = setup
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Private answer contract",
+            "kind": "quiz",
+            "instruction_json": {"items": [{"stem": "What did the character learn?"}]},
+            "evaluation_json": {"answer_key": ["Be honest"]},
+        },
+    ).get_json()
+
+    teacher_detail = client.get(
+        f"/api/edu/assignments/{assignment['id']}", headers=teacher
+    )
+    assert teacher_detail.status_code == 200
+    assert teacher_detail.get_json()["evaluation_json"]["answer_key"] == ["Be honest"]
+    assert client.get(
+        f"/api/edu/assignments/{assignment['id']}", headers=student_a
+    ).status_code == 404
+
+    client.post(f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher)
+    student_detail = client.get(
+        f"/api/edu/assignments/{assignment['id']}", headers=student_a
+    )
+    assert student_detail.status_code == 200
+    assert "evaluation_json" not in student_detail.get_json()
+    assert "answer_key" not in str(student_detail.get_json())
+    assert client.get(
+        f"/api/edu/assignments/{assignment['id']}", headers=outsider
+    ).status_code == 404
+
+
+def test_student_draft_survives_refresh_and_submit_freezes_visible_version(setup):
+    app, client, teacher, student_a, student_b, outsider, course, lesson = setup
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Writing draft",
+            "kind": "writing",
+            "instruction_json": {"prompt": "Retell the ending."},
+            "evaluation_json": {"rubric": {"clarity": 10}},
+            "max_attempts": 2,
+        },
+    ).get_json()
+    client.post(f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher)
+
+    saved = client.put(
+        f"/api/edu/assignments/{assignment['id']}/submission/draft",
+        headers=student_a,
+        json={"answer_json": {"writing": "First saved draft."}},
+    )
+    assert saved.status_code == 200
+    restored = client.get(
+        f"/api/edu/assignments/{assignment['id']}/submission",
+        headers=student_a,
+    )
+    assert restored.status_code == 200
+    assert restored.get_json()["draft"]["answer_json"]["writing"] == "First saved draft."
+    assert restored.get_json()["versions"] == []
+
+    submitted = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student_a,
+        json={},
+    )
+    assert submitted.status_code == 201
+    frozen = submitted.get_json()["version"]
+    assert frozen["answer_json"]["writing"] == "First saved draft."
+    after_submit = client.get(
+        f"/api/edu/assignments/{assignment['id']}/submission",
+        headers=student_a,
+    ).get_json()
+    assert after_submit["draft"] is None
+    assert after_submit["versions"][0]["id"] == frozen["id"]
+    assert after_submit["versions"][0]["answer_json"]["writing"] == "First saved draft."
+
+    client.put(
+        f"/api/edu/assignments/{assignment['id']}/submission/draft",
+        headers=student_a,
+        json={"answer_json": {"writing": "Revised saved draft."}},
+    )
+    revised = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student_a,
+        json={},
+    )
+    assert revised.status_code == 201
+    assert revised.get_json()["version"]["version_number"] == 2
+    assert revised.get_json()["version"]["source_version_id"] == frozen["id"]
+    history = client.get(
+        f"/api/edu/assignments/{assignment['id']}/submission",
+        headers=student_a,
+    ).get_json()["versions"]
+    assert history[0]["answer_json"]["writing"] == "First saved draft."
+    assert history[1]["answer_json"]["writing"] == "Revised saved draft."
+
+    assert client.get(
+        f"/api/edu/assignments/{assignment['id']}/submission",
+        headers=student_b,
+    ).get_json()["submission"] is None
+    assert client.get(
+        f"/api/edu/assignments/{assignment['id']}/submission",
+        headers=outsider,
+    ).status_code == 404
+
+
+def test_teacher_reads_submission_bodies_only_inside_assignment_course(setup):
+    app, client, teacher, student_a, student_b, outsider, course, lesson = setup
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Reading response",
+            "kind": "mixed",
+            "instruction_json": {"prompt": "Respond with evidence."},
+            "evaluation_json": {"answer_notes": "Look for evidence."},
+        },
+    ).get_json()
+    client.post(f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher)
+    client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student_a,
+        json={"answer_json": {"response": "The final paragraph is evidence."}},
+    )
+
+    reviewed = client.get(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=teacher,
+    )
+    assert reviewed.status_code == 200
+    assert reviewed.get_json()["items"][0]["student_user_id"] == "student-a"
+    assert (
+        reviewed.get_json()["items"][0]["versions"][0]["answer_json"]["response"]
+        == "The final paragraph is evidence."
+    )
+    student_view = client.get(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student_a,
+    )
+    assert student_view.get_json()["items"][0]["versions"][0]["answer_json"]
+    assert client.get(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=outsider,
+    ).status_code == 404
