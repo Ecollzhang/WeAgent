@@ -479,7 +479,7 @@ BUILTIN_TOOL_DEFINITIONS = [
     _definition(
         value="rag_search",
         name="知识库检索",
-        category="tool_search",
+        category="tool_web",
         icon="el-icon-collection",
         color="#06b6d4",
         description="搜索知识库中的文档内容，返回相关文本片段",

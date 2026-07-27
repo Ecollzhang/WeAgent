@@ -145,13 +145,9 @@ class OpenCodeRunner(ProviderRunner):
         return parts
 
     def fallback_output(self, stdout: str, stderr: str = "") -> str:
-        reported = [
-            text
-            for text in self._reported_element_texts(stdout)
-            if text and not self._is_placeholder_report(text)
-        ]
-        if reported:
-            return reported[-1]
+        # Progress/result cards are structured UI events, not an assistant reply.
+        # Returning one here makes an unfinished run look complete and leaks
+        # internal report wording into the conversation.
         return ""
 
     def should_retry_without_resume(self, stderr: str) -> bool:
