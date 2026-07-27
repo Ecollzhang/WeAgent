@@ -12,6 +12,26 @@ from app.services.message_service import _message_dict
 MODERATOR_AGENT_ID = 'moderator'
 
 
+def _trusted_rag_scope(conversation, user_id, kb_domain=''):
+    """Build a server-issued RAG scope; model/tool arguments cannot widen it."""
+    allowed_domains = {'rd', 'edu', 'office'}
+    scope = {
+        'RAG_SCOPE_USER_ID': str(user_id),
+        'RAG_SCOPE_DOMAIN': kb_domain if kb_domain in allowed_domains else 'rd',
+    }
+    if conversation.workspace_id:
+        from app.models.workspace import Workspace
+
+        workspace = Workspace.query.filter_by(
+            id=conversation.workspace_id,
+            user_id=user_id,
+        ).first()
+        if workspace and workspace.domain in allowed_domains:
+            scope['RAG_SCOPE_DOMAIN'] = workspace.domain
+            scope['RAG_SCOPE_WORKSPACE_ID'] = workspace.id
+    return scope
+
+
 def _safe_workspace_name(name):
     import re
     clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(name or '').strip())
@@ -213,12 +233,13 @@ class ConversationService:
         env_vars, error = settings_service.get_container_env_vars(user_id)
         if error:
             return error
+        env_vars = dict(env_vars or {})
+        rag_scope = _trusted_rag_scope(conversation, user_id, kb_domain)
+        env_vars.update(rag_scope)
 
         # Build KB context from workspace domain (or explicit kb_domain override)
         kb_context = ''
-        effective_domain = kb_domain.strip() if kb_domain and kb_domain != 'all' else ''
-        if kb_domain == 'all':
-            effective_domain = ''
+        effective_domain = rag_scope['RAG_SCOPE_DOMAIN']
         if conversation.workspace_id or kb_domain:
             try:
                 from app.models.workspace import Workspace

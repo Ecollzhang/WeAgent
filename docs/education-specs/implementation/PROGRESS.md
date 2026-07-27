@@ -32,3 +32,5 @@
 - 发布严格拆分学生 manifest 与教师答案/rubric manifest。
 - 完成作业发布、学生多版本提交、教师反馈、学习事件与班级基础学情。
 - Education 全业务联合回归：`20 passed`。
+- Sandbox 创建时从会话 owner 和受信 workspace 注入不可由模型扩大的 RAG user/domain/workspace scope。
+- 教育系统 Agent 补齐笔记整理、资料研究和教学审校角色，并移除编程题范围。

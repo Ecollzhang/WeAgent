@@ -425,8 +425,16 @@ def create_app(config_name=None):
 
     app = Flask(__name__)
 
-    # Load configuration
-    from config import config_by_name
+    # Load the core configuration by file path. Domain services also have
+    # top-level ``config.py`` modules and may be imported in the same process.
+    import importlib.util
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.py')
+    config_spec = importlib.util.spec_from_file_location(
+        'weagent_core_config', os.path.abspath(config_path)
+    )
+    config_module = importlib.util.module_from_spec(config_spec)
+    config_spec.loader.exec_module(config_module)
+    config_by_name = config_module.config_by_name
     app.config.from_object(config_by_name[config_name])
 
     # Initialize extensions
