@@ -824,6 +824,8 @@ class Orchestrator:
     DOC_FILE_EXTS = {".md", ".txt"}
     LOW_VALUE_FILE_PARTS = {
         ".git",
+        ".session",
+        ".weagent",
         ".next",
         ".nuxt",
         ".output",
@@ -837,6 +839,7 @@ class Orchestrator:
         "target",
         "vendor",
     }
+    RUNTIME_FILE_PARTS = {".session", ".weagent"}
 
     @staticmethod
     def _agent_kind(agent_id: str, role: str = "") -> str:
@@ -943,6 +946,13 @@ class Orchestrator:
         parts = {part for part in path.split("/") if part}
         return bool(parts & self.LOW_VALUE_FILE_PARTS)
 
+    def _is_runtime_file_path(self, relpath: str) -> bool:
+        path = str(relpath or "").replace("\\", "/").strip("/")
+        if path.startswith("workspace/"):
+            path = path[len("workspace/"):]
+        parts = {part for part in path.split("/") if part}
+        return bool(parts & self.RUNTIME_FILE_PARTS)
+
     def _should_collect_agent_files(self, agent_id: str) -> bool:
         agent = self.agents.get(agent_id)
         role = agent.role if agent else ""
@@ -950,9 +960,11 @@ class Orchestrator:
 
     def _apply_native_file_policy(self, agent_id: str, relpath: str) -> tuple[Optional[str], Optional[str]]:
         """Move or delete files created by Claude native tools if they violate role paths."""
-        allowed_path, note = self._path_policy(agent_id, relpath)
         clean = re.sub(r"^/workspace/", "", relpath).lstrip("/").replace("\\", "/")
         clean = os.path.normpath(clean).replace("\\", "/")
+        if self._is_runtime_file_path(clean):
+            return None, "runtime files are ignored"
+        allowed_path, note = self._path_policy(agent_id, clean)
         src, src_error = self._resolve_workspace_path(clean)
         if src_error or not os.path.isfile(src):
             return None, src_error or "file not found"
@@ -989,8 +1001,9 @@ class Orchestrator:
 
     def _reply_mentions_files(self, reply: str) -> bool:
         """Check if reply mentions creating/writing files."""
-        if self.FILE_MENTION_RE.search(reply):
-            return True
+        for match in self.FILE_MENTION_RE.findall(reply):
+            if self._looks_like_reportable_file(match):
+                return True
         # Also check for file references without /workspace/ prefix
         matches = self.FILE_REF_RE.findall(reply)
         if matches:
@@ -1063,6 +1076,10 @@ class Orchestrator:
     def _looks_like_reportable_file(path: str) -> bool:
         clean = str(path or "").strip().strip("`").rstrip("/")
         if not clean:
+            return False
+        normalized = re.sub(r"^/workspace/", "", clean).lstrip("/").replace("\\", "/")
+        parts = {part for part in normalized.split("/") if part}
+        if parts & Orchestrator.RUNTIME_FILE_PARTS:
             return False
         basename = clean.rsplit("/", 1)[-1]
         if "." not in basename:
@@ -1146,10 +1163,14 @@ class Orchestrator:
             for m in self.FILE_MENTION_RE.findall(reply):
                 path = m.strip("`").strip()
                 clean = re.sub(r"^/workspace/", "", path)
-                mentioned.add(clean.lstrip("/"))
+                candidate = clean.lstrip("/")
+                if self._looks_like_reportable_file(candidate):
+                    mentioned.add(candidate)
             for m in self.FILE_REF_RE.findall(reply):
                 clean = m.strip("`").strip()
-                mentioned.add(clean.lstrip("/"))
+                candidate = clean.lstrip("/")
+                if self._looks_like_reportable_file(candidate):
+                    mentioned.add(candidate)
 
             for relpath in mentioned:
                 policy_path, policy_note = self._apply_native_file_policy(agent_id, relpath)
