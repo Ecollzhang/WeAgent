@@ -68,7 +68,7 @@
 - 验证：Education 基础切片与灰度回归 `5 passed`。
 - 状态：已解决。
 
-## EDU-SEC-001：现有 Artifact 与 sandbox 文件路由缺少对象级 ACL
+## EDU-SEC-001：现有 Artifact 与 sandbox 文件路由缺少对象级 ACL（部分解决）
 
 - 发现时间：2026-07-27
 - 模块：核心 Artifact/sandbox
@@ -78,7 +78,11 @@
 - 影响：Education 的跨学生、跨课程 Artifact 隔离验收无法通过。
 - 处理计划：先完成课程成员/发布防火墙，再通过授权 adapter 或核心通用 access policy
   收紧读取；补 ID 猜测和跨用户回归测试。
-- 状态：待处理。
+- 处理：核心 SQL Artifact 增加 owner 字段；创建、读取、更新和按消息列表均校验
+  conversation owner/participant，跨用户统一返回 404。Education 发布范围的 Artifact
+  仍由 Education 发布 manifest 和课程 membership 继续收口。
+- 验证：Artifact ACL 与既有消息/Artifact 合同 `4 passed`。
+- 状态：核心 SQL Artifact 已解决；sandbox 文件与课程发布 ACL 继续跟踪。
 
 ## EDU-RUNTIME-001：工具执行结果没有回送模型
 

@@ -75,6 +75,16 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE messages ADD COLUMN meta JSON DEFAULT NULL'))
             conn.commit()
 
+    # artifacts table — owner for message-less artifacts and ACL auditing
+    if 'artifacts' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('artifacts')]
+        with db.engine.connect() as conn:
+            if 'owner_user_id' not in cols:
+                conn.execute(text(
+                    'ALTER TABLE artifacts ADD COLUMN owner_user_id VARCHAR(36) DEFAULT NULL'
+                ))
+            conn.commit()
+
     # conversations table — sandbox lifecycle columns
     if 'conversations' in inspector.get_table_names():
         cols = [c['name'] for c in inspector.get_columns('conversations')]

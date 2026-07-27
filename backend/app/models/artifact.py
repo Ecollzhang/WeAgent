@@ -6,6 +6,7 @@ class Artifact(BaseModel):
     __tablename__ = 'artifacts'
 
     message_id = db.Column(db.String(36), db.ForeignKey('messages.id'), nullable=True)
+    owner_user_id = db.Column(db.String(36), nullable=True, index=True)
     artifact_type = db.Column(
         db.Enum('code', 'webpage', 'document', 'ppt', 'diff', name='artifact_type'),
         nullable=False, default='code'

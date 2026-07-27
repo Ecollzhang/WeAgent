@@ -26,3 +26,5 @@
 - 补齐教师侧、学生侧与内部 Worker 的 Agent 角色合同，以及八个 MVP 系统工作流模板。
 - 教师可保存课程级 strict/guided DAG；循环、任意可执行代码、缺少发布审核门会被服务端拒绝。
 - Education 课程、工作流和基础联合回归：`14 passed`。
+- 核心 Artifact 创建、读取、更新和消息列表增加会话 owner/participant 对象 ACL。
+- Artifact ACL 与既有 Artifact 合同回归：`4 passed`。
