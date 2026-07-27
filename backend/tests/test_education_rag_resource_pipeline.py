@@ -14,6 +14,7 @@ SPEC.loader.exec_module(resource_pipeline)
 EducationResourcePipeline = resource_pipeline.EducationResourcePipeline
 ResourceScope = resource_pipeline.ResourceScope
 SearchCandidate = resource_pipeline.SearchCandidate
+SafeWebPageReader = resource_pipeline.SafeWebPageReader
 
 
 class _BrokenSearch:
@@ -99,3 +100,19 @@ def test_pipeline_returns_diagnostic_when_search_and_fetch_fallbacks_are_empty()
     assert result["results"] == []
     assert result["fallback_exhausted"] is True
     assert len(result["diagnostics"]) == 2
+
+
+def test_web_page_reader_rejects_http_error_pages_as_content():
+    reader = SafeWebPageReader(
+        fetch=lambda url, max_bytes: {
+            "url": url,
+            "status_code": 404,
+            "content_type": "text/html",
+            "body_preview": "<h1>Not found</h1>",
+        }
+    )
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        reader.fetch(SearchCandidate("https://example.edu/missing", "Missing"))

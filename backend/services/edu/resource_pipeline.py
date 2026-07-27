@@ -92,6 +92,11 @@ class SafeWebPageReader:
 
     def fetch(self, candidate: SearchCandidate) -> dict[str, Any]:
         response = self._fetch(candidate.url, max_bytes=self._max_bytes)
+        status_code = int(response.get("status_code") or 0)
+        if status_code < 200 or status_code >= 300:
+            raise RuntimeError(
+                f"Content fetch failed with HTTP {status_code or 'unknown'}"
+            )
         body = response.get("body_preview") or ""
         content_type = (response.get("content_type") or "").lower()
         if "html" in content_type:
