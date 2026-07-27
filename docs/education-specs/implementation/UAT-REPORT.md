@@ -64,6 +64,8 @@ Education MVP 的真实多用户最小闭环已通过：
 - 搜索摘要不当作网页全文；读取失败可切换候选 URL/provider，全部失败时返回可诊断
   fallback，不伪造正文。
 - SSRF、重定向、私网地址、超时、响应体积与内容类型均有回归测试。
+- `/api/edu/resources/search` 只接受当前成员课程生成的服务端 scope；真实 UAT 在两个
+  标杆课程上验证了“外部 provider 未配置 → 课程资料 RAG”诊断式 fallback。
 
 ## 7. Artifact 与导出
 
@@ -81,8 +83,8 @@ Education MVP 的真实多用户最小闭环已通过：
 - provider：`openai-compatible`
 - HTTP：`200`
 - 返回模型标识：`deepseek-v4-flash`
-- 输出长度：`1078`
-- 输出 SHA-256 前 12 位：`7259a82008b6`
+- 输出长度：`1410`
+- 输出 SHA-256 前 12 位：`c8e2a35ceb11`
 
 浏览器在生产构建上完成：
 
@@ -94,7 +96,7 @@ Education MVP 的真实多用户最小闭环已通过：
 
 ## 9. 自动化回归
 
-- 后端全量：`303 passed`。
+- 后端全量：`304 passed`。
 - Education API/Agent/RAG 定向测试：通过。
 - sandbox 文件 ACL：`1 passed`。
 - 前端合同与 Vue 编译测试：`8 passed`。

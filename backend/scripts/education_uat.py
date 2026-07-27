@@ -161,6 +161,7 @@ def run_business_loop() -> dict[str, Any]:
             "draft_recoveries": 0,
             "artifact_exports": 0,
             "export_fallbacks": 0,
+            "search_fallbacks": 0,
             "isolation_checks": 0,
         }
         analytics_summary = []
@@ -215,6 +216,23 @@ def run_business_loop() -> dict[str, Any]:
                 "outsider member isolation",
             )
             counters["isolation_checks"] += 1
+
+            resource_fallback = expect(
+                client.post(
+                    "/api/edu/resources/search",
+                    headers=teacher,
+                    json={
+                        "query": f"{spec['title']} 阅读写作教学资源",
+                        "course_id": course_id,
+                        "limit": 3,
+                    },
+                ),
+                200,
+                "resource search fallback",
+            )
+            assert resource_fallback["fallback_exhausted"] is True
+            assert resource_fallback["diagnostics"][0]["status"] == "unconfigured"
+            counters["search_fallbacks"] += 1
 
             unit = expect(
                 client.post(

@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from .content_models import (
@@ -1001,6 +1001,72 @@ def list_feedback(submission_id):
             ]
         }
     )
+
+
+@education_content_api.post("/resources/search")
+@jwt_required()
+def search_resources():
+    """Run a membership-scoped research pipeline or return safe fallback."""
+    user_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    query = str(data.get("query") or "").strip()
+    course_id = str(data.get("course_id") or "").strip()
+    if not query or not course_id:
+        return jsonify({"error": "query and course_id are required"}), 400
+    if not _membership(course_id, user_id):
+        return jsonify({"error": "course not found"}), 404
+    try:
+        limit = max(1, min(int(data.get("limit") or 5), 20))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be an integer"}), 400
+
+    pipeline = current_app.config.get("EDUCATION_RESOURCE_PIPELINE")
+    if pipeline is None:
+        return jsonify(
+            {
+                "query": query,
+                "provider_index": None,
+                "results": [],
+                "diagnostics": [
+                    {
+                        "stage": "search",
+                        "status": "unconfigured",
+                        "message": (
+                            "No external SearchProvider is configured; "
+                            "continue with course-scoped RAG materials."
+                        ),
+                    }
+                ],
+                "fallback_exhausted": True,
+            }
+        )
+
+    from .resource_pipeline import ResourceScope
+
+    scope = ResourceScope(
+        user_id=user_id,
+        domain="edu",
+        course_ids=(course_id,),
+    )
+    try:
+        result = pipeline.research(query, scope=scope, limit=limit)
+    except Exception as exc:
+        return jsonify(
+            {
+                "query": query,
+                "provider_index": None,
+                "results": [],
+                "diagnostics": [
+                    {
+                        "stage": "pipeline",
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                ],
+                "fallback_exhausted": True,
+            }
+        )
+    return jsonify(result)
 
 
 @education_content_api.get("/courses/<course_id>/analytics")
