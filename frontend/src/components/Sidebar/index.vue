@@ -15,7 +15,7 @@
         :key="item.key"
         :to="item.route"
         class="nav-item"
-        :class="{ active: $route.path === item.activePath }"
+        :class="{ active: $route.path.startsWith(item.activePath) }"
         :title="item.label"
       >
         <i v-if="item.iconClass" :class="item.iconClass"></i>
@@ -33,7 +33,7 @@
         :key="item.key"
         :to="item.route"
         class="nav-item"
-        :class="{ active: $route.path === item.activePath }"
+        :class="{ active: $route.path.startsWith(item.activePath) }"
         :title="item.label"
       >
         <i v-if="item.iconClass" :class="item.iconClass"></i>
@@ -76,7 +76,6 @@ const COMMON_NAV = [
 ]
 
 // 领域专属导航项（按 grayscale config_key 控制可见性）
-// edu 按 sub_role 区分教师端和学生端
 const DOMAIN_NAV = {
   rd: [
     { key: 'ui.sidebar.projects', label: '项目管理', route: '/projects', activePath: '/projects', iconClass: 'el-icon-s-grid' },
@@ -84,21 +83,9 @@ const DOMAIN_NAV = {
     { key: 'ui.sidebar.reviews', label: '代码审查', route: '/reviews', activePath: '/reviews', iconClass: 'el-icon-view' },
     { key: 'ui.sidebar.builds', label: '构建管理', route: '/builds', activePath: '/builds', iconClass: 'el-icon-s-tools' },
   ],
-  edu: {
-    teacher: [
-      { key: 'ui.sidebar.courses', label: '课程管理', route: '/courses', activePath: '/courses', iconClass: 'el-icon-document' },
-      { key: 'ui.sidebar.assignments', label: '作业系统', route: '/assignments', activePath: '/assignments', iconClass: 'el-icon-edit-outline' },
-      { key: 'ui.sidebar.students', label: '学生画像', route: '/students', activePath: '/students', iconClass: 'el-icon-user' },
-      { key: 'ui.sidebar.grades', label: '成绩管理', route: '/grades', activePath: '/grades', iconClass: 'el-icon-data-line' },
-      { key: 'ui.sidebar.resources', label: '教学资源', route: '/resources', activePath: '/resources', iconClass: 'el-icon-folder-opened' },
-    ],
-    student: [
-      { key: 'ui.sidebar.courses', label: '我的课程', route: '/courses', activePath: '/courses', iconClass: 'el-icon-document' },
-      { key: 'ui.sidebar.assignments', label: '我的作业', route: '/assignments', activePath: '/assignments', iconClass: 'el-icon-edit-outline' },
-      { key: 'ui.sidebar.grades', label: '我的成绩', route: '/grades', activePath: '/grades', iconClass: 'el-icon-data-line' },
-      { key: 'ui.sidebar.resources', label: '学习资源', route: '/resources', activePath: '/resources', iconClass: 'el-icon-folder-opened' },
-    ],
-  },
+  edu: [
+    { key: 'ui.sidebar.courses', label: '教学空间', route: '/education', activePath: '/education', iconClass: 'el-icon-reading' },
+  ],
   office: [
     { key: 'ui.sidebar.documents', label: '公文管理', route: '/documents', activePath: '/documents', iconClass: 'el-icon-document' },
     { key: 'ui.sidebar.meetings', label: '会议管理', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
@@ -126,9 +113,6 @@ export default {
     activeDomain() {
       return this.$store.getters['workspace/activeDomain']
     },
-    activeSubRole() {
-      return this.$store.getters['workspace/activeSubRole']
-    },
     commonNavItems() {
       const domain = this.activeDomain || 'rd'
       return COMMON_NAV.filter(item => {
@@ -140,13 +124,7 @@ export default {
     domainNavItems() {
       const domain = this.activeDomain || 'rd'
       const raw = DOMAIN_NAV[domain] || []
-      let items
-      if (domain === 'edu') {
-        const sub = this.activeSubRole || 'teacher'
-        items = (raw[sub] || raw.teacher || [])
-      } else {
-        items = raw
-      }
+      const items = raw
       return items.filter(item => {
         return checkVisible(this.$store.state.grayscale, domain, item.key)
       })

@@ -34,3 +34,7 @@
 - Education 全业务联合回归：`20 passed`。
 - Sandbox 创建时从会话 owner 和受信 workspace 注入不可由模型扩大的 RAG user/domain/workspace scope。
 - 教育系统 Agent 补齐笔记整理、资料研究和教学审校角色，并移除编程题范围。
+- 完成安全工具结果回灌、带 scope 的 RAG、搜索—正文抓取—检索—重排 fallback 和 SSRF 防护。
+- 完成 Education 教师/学生页面、Vuex/API、单一教学空间导航和服务端灰度路由守卫。
+- 学生草稿改为服务端持久化并支持刷新恢复；本地存储仅作为网络失败 fallback。
+- 前端 8 个合同测试全部通过，生产构建成功。

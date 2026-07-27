@@ -48,6 +48,18 @@ export function getLessonRelease(lessonId) {
   return service.get(url(`/lessons/${lessonId}/release`))
 }
 
+export function getLesson(lessonId) {
+  return service.get(url(`/lessons/${lessonId}`))
+}
+
+export function getLessonContents(lessonId) {
+  return service.get(url(`/lessons/${lessonId}/contents`))
+}
+
+export function getContentVersions(contentId) {
+  return service.get(url(`/contents/${contentId}/versions`))
+}
+
 export function getLessonPublication(lessonId) {
   return service.get(url(`/lessons/${lessonId}/publication`))
 }
@@ -79,6 +91,10 @@ export function getCourseAssignments(courseId) {
   return service.get(url(`/courses/${courseId}/assignments`))
 }
 
+export function getAssignment(assignmentId) {
+  return service.get(url(`/assignments/${assignmentId}`))
+}
+
 export function createAssignment(lessonId, data) {
   return service.post(url(`/lessons/${lessonId}/assignments`), data)
 }
@@ -97,6 +113,16 @@ export function submitAssignment(assignmentId, data) {
     artifact_ids: data.artifact_ids || [],
     source_version_id: data.source_version_id || null,
   })
+}
+
+export function saveSubmissionDraft(assignmentId, answerJson) {
+  return service.put(url(`/assignments/${assignmentId}/submission/draft`), {
+    answer_json: answerJson,
+  })
+}
+
+export function getMySubmission(assignmentId) {
+  return service.get(url(`/assignments/${assignmentId}/submission`))
 }
 
 export function getSubmissionFeedback(submissionId) {

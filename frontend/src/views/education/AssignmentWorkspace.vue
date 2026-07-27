@@ -173,14 +173,23 @@ export default {
         const submissions = await this.$store.dispatch('education/fetchSubmissions', this.assignmentId)
         if (submissions.length) this.selectSubmission(submissions[0])
       } else {
-        const submissions = await this.$store.dispatch('education/fetchSubmissions', this.assignmentId)
-        const submission = submissions[0] || assignment.submission || assignment.current_submission
+        const recovery = await this.$store.dispatch(
+          'education/fetchMySubmission',
+          this.assignmentId
+        )
+        const submission = recovery.submission
         if (submission) {
           await this.$store.dispatch('education/fetchFeedback', submission.id)
         }
-        const content = submission && (submission.content || submission.answer)
+        const latestVersion = recovery.versions && recovery.versions[recovery.versions.length - 1]
+        const content = (recovery.draft && recovery.draft.answer_json)
+          || (latestVersion && latestVersion.answer_json)
         const localDraft = localStorage.getItem(this.draftKey)
-        this.answer = typeof content === 'string' ? content : (content && content.text) || localDraft || ''
+        this.answer = typeof content === 'string'
+          ? content
+          : (content && (content.text || content.writing || content.response))
+            || localDraft
+            || ''
       }
     } catch (error) {
       this.$message.error('作业加载失败或你无权访问')
@@ -203,15 +212,28 @@ export default {
       this.feedback = { content: existing.content || '', next_step: existing.next_step || '' }
     },
     async handleSaveSubmission() {
-      localStorage.setItem(this.draftKey, this.answer)
-      this.$message.success('草稿已保存在本机')
+      try {
+        await this.$store.dispatch('education/saveSubmissionDraft', {
+          assignmentId: this.assignmentId,
+          answerJson: { text: this.answer },
+        })
+        localStorage.removeItem(this.draftKey)
+        this.$message.success('草稿已保存，可在其他设备继续')
+      } catch (error) {
+        localStorage.setItem(this.draftKey, this.answer)
+        this.$message.warning('服务端暂不可用，草稿已临时保存在本机')
+      }
     },
     async handleSubmitAssignment() {
       try {
         await this.$confirm('正式提交后将进入反馈流程，确认提交？', '提交作业')
+        await this.$store.dispatch('education/saveSubmissionDraft', {
+          assignmentId: this.assignmentId,
+          answerJson: { text: this.answer },
+        })
         await this.$store.dispatch('education/submitAssignment', {
           assignmentId: this.assignmentId,
-          submission: { answer_json: { text: this.answer } },
+          submission: {},
         })
         localStorage.removeItem(this.draftKey)
         this.$message.success('作业已提交')

@@ -94,6 +94,27 @@ def list_courses():
     )
 
 
+@education_api.get("/courses/<course_id>")
+@jwt_required()
+def get_course(course_id):
+    user_id = get_jwt_identity()
+    row = (
+        db.session.query(Course, CourseMembership)
+        .join(CourseMembership, CourseMembership.course_id == Course.id)
+        .filter(
+            Course.id == course_id,
+            CourseMembership.user_id == user_id,
+            CourseMembership.status == "active",
+            Course.status != "archived",
+        )
+        .first()
+    )
+    if not row:
+        return jsonify({"error": "course not found"}), 404
+    course, membership = row
+    return jsonify(course.to_dict(membership.role))
+
+
 @education_api.get("/courses/<course_id>/members")
 @jwt_required()
 def list_members(course_id):

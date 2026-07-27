@@ -48,6 +48,16 @@ assertContains(
 )
 assertContains(
   'src/api/education.js',
+  'saveSubmissionDraft',
+  'student drafts must persist through the Education service'
+)
+assertContains(
+  'src/api/education.js',
+  '`/assignments/${assignmentId}/submission`',
+  'students must recover their own draft and immutable submission history'
+)
+assertContains(
+  'src/api/education.js',
   'answer_json: data.answer_json',
   'submission payload must preserve the immutable answer contract'
 )
@@ -71,6 +81,31 @@ assertContains(
   'src/store/modules/education.js',
   'activeCourse.membership_role',
   'role must be derived from server membership, not workspace sub_role'
+)
+assertContains(
+  'src/store/index.js',
+  'education,',
+  'Education Vuex module must be registered in the application store'
+)
+assertContains(
+  'src/router/index.js',
+  "path: '/education'",
+  'Education home must have a production route'
+)
+assertContains(
+  'src/router/index.js',
+  "'feature.education.enabled'",
+  'Education routes must honor the gray feature gate'
+)
+assertContains(
+  'src/components/Sidebar/index.vue',
+  "label: '教学空间', route: '/education'",
+  'the sidebar must expose one membership-driven Education space'
+)
+assertNotContains(
+  'src/components/Sidebar/index.vue',
+  'activeSubRole',
+  'sidebar navigation must not treat workspace sub_role as authority'
 )
 assertNotContains(
   'src/store/modules/education.js',
@@ -122,6 +157,11 @@ assertContains(
   'src/views/education/AssignmentWorkspace.vue',
   'data-testid="teacher-feedback-editor"',
   'teachers need a stable review locator'
+)
+assertContains(
+  'src/views/education/AssignmentWorkspace.vue',
+  "'education/saveSubmissionDraft'",
+  'the editor must save a server draft before final submission'
 )
 
 assertContains(

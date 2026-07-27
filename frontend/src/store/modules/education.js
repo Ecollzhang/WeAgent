@@ -4,6 +4,8 @@ import {
   createCourse,
   createCourseInvitation,
   getAssignmentSubmissions,
+  getAssignment,
+  getContentVersions,
   getCourseAnalytics,
   getCourseAssignments,
   getCourseMembers,
@@ -11,11 +13,15 @@ import {
   getCourseUnits,
   getLessonPublication,
   getLessonRelease,
+  getLesson,
+  getLessonContents,
+  getMySubmission,
   getSubmissionFeedback,
   publishAssignment,
   publishLesson,
   releaseFeedback,
   saveLessonVersion,
+  saveSubmissionDraft,
   searchEducationResources,
   submitAssignment,
 } from '../../api/education'
@@ -174,10 +180,7 @@ export default {
     },
 
     async fetchLesson({ commit, state }, lessonId) {
-      const lesson = state.units
-        .reduce((all, unit) => all.concat(unit.lessons || []), [])
-        .find(item => item.id === lessonId)
-      if (!lesson) throw new Error('Lesson is unavailable in course structure')
+      const lesson = payload(await getLesson(lessonId))
       let publication = {}
       try {
         publication = payload(
@@ -188,7 +191,20 @@ export default {
       } catch (error) {
         if (lesson.status === 'published') throw error
       }
-      const value = { ...lesson, publication }
+      let currentVersion = null
+      if (state.activeCourse.membership_role === 'teacher') {
+        const contents = items(await getLessonContents(lessonId))
+        const plan = contents.find(item => item.kind === 'lesson_plan')
+        if (plan) {
+          const versions = items(await getContentVersions(plan.id))
+          currentVersion = versions[versions.length - 1] || null
+        }
+      }
+      const value = {
+        ...lesson,
+        publication,
+        current_version: currentVersion,
+      }
       commit('SET_ACTIVE_LESSON', value)
       return value
     },
@@ -228,10 +244,8 @@ export default {
       return payload(await publishLesson(lessonId, versionId))
     },
 
-    async fetchAssignment({ commit }, { assignmentId, courseId }) {
-      const value = items(await getCourseAssignments(courseId))
-      const assignment = value.find(item => item.id === assignmentId)
-      if (!assignment) throw new Error('Assignment is unavailable')
+    async fetchAssignment({ commit }, { assignmentId }) {
+      const assignment = payload(await getAssignment(assignmentId))
       commit('SET_ACTIVE_ASSIGNMENT', assignment)
       return assignment
     },
@@ -260,6 +274,14 @@ export default {
 
     async submitAssignment(context, { assignmentId, submission }) {
       return payload(await submitAssignment(assignmentId, submission))
+    },
+
+    async saveSubmissionDraft(context, { assignmentId, answerJson }) {
+      return payload(await saveSubmissionDraft(assignmentId, answerJson))
+    },
+
+    async fetchMySubmission(context, assignmentId) {
+      return payload(await getMySubmission(assignmentId))
     },
 
     async releaseFeedback(context, { submissionId, feedback }) {

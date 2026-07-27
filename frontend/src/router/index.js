@@ -1,6 +1,7 @@
 import Vue from 'vue'
 import Router from 'vue-router'
 import store from '../store'
+import { checkEnabled } from '../store/modules/grayscale'
 
 Vue.use(Router)
 
@@ -91,34 +92,48 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/education',
+    name: 'EducationHome',
+    component: () => import('../views/education/EducationHome.vue'),
+    meta: { requiresAuth: true, education: true },
+  },
+  {
+    path: '/education/courses/:courseId',
+    name: 'EducationCourse',
+    component: () => import('../views/education/CourseSpace.vue'),
+    meta: { requiresAuth: true, education: true },
+  },
+  {
+    path: '/education/courses/:courseId/lessons/:lessonId',
+    name: 'EducationLesson',
+    component: () => import('../views/education/LessonWorkbench.vue'),
+    meta: { requiresAuth: true, education: true },
+  },
+  {
+    path: '/education/courses/:courseId/assignments/:assignmentId',
+    name: 'EducationAssignment',
+    component: () => import('../views/education/AssignmentWorkspace.vue'),
+    meta: { requiresAuth: true, education: true },
+  },
+  {
     path: '/courses',
-    name: 'courses',
-    component: () => import('../views/DomainPlaceholder.vue'),
-    meta: { requiresAuth: true },
+    redirect: '/education',
   },
   {
     path: '/assignments',
-    name: 'assignments',
-    component: () => import('../views/DomainPlaceholder.vue'),
-    meta: { requiresAuth: true },
+    redirect: '/education',
   },
   {
     path: '/resources',
-    name: 'resources',
-    component: () => import('../views/DomainPlaceholder.vue'),
-    meta: { requiresAuth: true },
+    redirect: '/education',
   },
   {
     path: '/students',
-    name: 'students',
-    component: () => import('../views/DomainPlaceholder.vue'),
-    meta: { requiresAuth: true },
+    redirect: '/education',
   },
   {
     path: '/grades',
-    name: 'grades',
-    component: () => import('../views/DomainPlaceholder.vue'),
-    meta: { requiresAuth: true },
+    redirect: '/education',
   },
   {
     path: '/documents',
@@ -165,12 +180,28 @@ const router = new Router({
 })
 
 // Navigation guard
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const isAuthenticated = store.getters['user/isAuthenticated']
 
   if (to.matched.some(record => record.meta.requiresAuth !== false)) {
     if (!isAuthenticated) {
       next({ name: 'Login' })
+    } else if (to.matched.some(record => record.meta.education)) {
+      try {
+        await store.dispatch('grayscale/loadDomainConfig', 'edu')
+      } catch (error) {
+        next({ name: 'Dashboard' })
+        return
+      }
+      if (!checkEnabled(
+        store.state.grayscale,
+        'edu',
+        'feature.education.enabled'
+      )) {
+        next({ name: 'Dashboard' })
+      } else {
+        next()
+      }
     } else {
       next()
     }

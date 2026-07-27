@@ -138,6 +138,20 @@ def test_course_authorization_uses_membership_not_client_sub_role(education_app)
     assert denied_invite.status_code == 404
 
 
+def test_course_detail_is_scoped_and_returns_server_membership_role(education_app):
+    client = education_app.test_client()
+    teacher = auth_headers(education_app, "teacher-1")
+    outsider = auth_headers(education_app, "outsider")
+    course = create_course(client, teacher).get_json()
+
+    allowed = client.get(f"/api/edu/courses/{course['id']}", headers=teacher)
+    denied = client.get(f"/api/edu/courses/{course['id']}", headers=outsider)
+
+    assert allowed.status_code == 200
+    assert allowed.get_json()["membership_role"] == "teacher"
+    assert denied.status_code == 404
+
+
 def test_revoked_and_expired_or_exhausted_invitations_are_rejected(education_app):
     client = education_app.test_client()
     teacher = auth_headers(education_app, "teacher-1")
