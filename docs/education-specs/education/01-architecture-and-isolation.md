@@ -183,9 +183,19 @@ draft content versions
 ### 7.1 数据库
 
 - Education 主实体只进入 `weagent_edu`。
+- 用户上传文件和从 Agent 采用的生成文件以 `EducationAsset` 进入 `weagent_edu`；
+  当前阶段使用数据库二进制存储，文件路径不是业务真源。
 - 核心数据通过 ID 引用，不跨库外键。
 - 优先使用现有 `AgentRun.meta`、Message meta 和 Artifact ID，避免为 Education 修改核心表。
 - 若核心需要新增通用扩展点，必须保持字段可空并不改变其他领域行为。
+
+### 7.2 临时文件
+
+- Docker、conversation workspace 和 `/workspace/shared` 只保存一次运行的投影与中间文件。
+- Agent 产物必须经过 schema 校验并由 Education 显式采用，才会成为持久化版本或
+  `EducationAsset`。
+- 删除聊天、核心 AgentRun 或 sandbox 不得删除已采用的课程内容。
+- 文件存储经 adapter 抽象；后续可切换 S3/MinIO，但不改变课程和 Agent 工具 API。
 
 ### 7.2 前端
 

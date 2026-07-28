@@ -76,6 +76,10 @@
 
 ## 3. V1：完整多模块系统
 
+- EducationAsset 数据库存储和 sandbox 删除恢复。
+- 角色感知的教师/学生三模块工作台。
+- 每课程一个题库、试卷库和知识库。
+- Education Tool Gateway 与 Agent 业务工具。
 - 多 Unit、多课时管理体验。
 - 题库和组卷蓝图。
 - 自动组卷和题目去重。
