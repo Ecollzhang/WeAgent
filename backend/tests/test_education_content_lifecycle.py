@@ -286,10 +286,19 @@ def test_publish_separates_private_plan_from_student_courseware(app):
         f"/api/edu/lessons/{lesson['id']}/release",
         headers=student,
     ).get_json()
-    materials = student_release["student_release_manifest"]["materials"]
+    manifest = student_release["student_release_manifest"]
+    materials = manifest["materials"]
     assert materials[0]["kind"] == "rich_document"
     assert materials[0]["rendered_html"].startswith("<article>")
-    assert "lesson_plan" not in str(student_release["student_release_manifest"])
+    assert manifest["learning_outline"]["objectives"][0]["description"].startswith(
+        "Read for structure"
+    )
+    assert (
+        manifest["learning_outline"]["stages"][0]["student_activity"]
+        == "Annotate and discuss"
+    )
+    assert "Model evidence selection" not in str(manifest)
+    assert "lesson_plan" not in str(manifest)
 
 
 def test_teacher_uploads_office_material_and_student_downloads_after_publish(app):

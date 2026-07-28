@@ -24,6 +24,12 @@
       >课程知识中心</el-button>
       <el-button
         v-if="isTeacher"
+        data-testid="create-lesson-open"
+        icon="el-icon-circle-plus-outline"
+        @click="openLessonDialog"
+      >新建课时</el-button>
+      <el-button
+        v-if="isTeacher"
         data-testid="create-assignment-open"
         type="primary"
         icon="el-icon-edit-outline"
@@ -83,7 +89,14 @@
         </div>
         <div v-else class="small-empty">
           <i class="el-icon-notebook-2"></i>
-          <p>{{ isTeacher ? '还没有课时。后端内容能力就绪后可在这里新建。' : '教师尚未发布学习内容。' }}</p>
+          <p>{{ isTeacher ? '还没有课时。创建第一个课时后即可编写教案、制作课件和发布作业。' : '教师尚未发布学习内容。' }}</p>
+          <el-button
+            v-if="isTeacher"
+            data-testid="create-first-lesson"
+            type="primary"
+            plain
+            @click="openLessonDialog"
+          >创建第一个课时</el-button>
         </div>
       </section>
 
@@ -161,6 +174,92 @@
         </div>
       </section>
     </template>
+
+    <el-dialog title="新建课时" :visible.sync="lessonDialog" width="680px">
+      <el-form label-position="top">
+        <div class="form-grid">
+          <el-form-item label="所属单元">
+            <el-select v-model="lessonForm.unit_id" style="width:100%">
+              <el-option label="新建单元" value="__new__" />
+              <el-option
+                v-for="unit in units"
+                :key="unit.id"
+                :label="unit.title"
+                :value="unit.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="lessonForm.unit_id === '__new__'" label="新单元名称">
+            <el-input
+              v-model.trim="lessonForm.unit_title"
+              maxlength="100"
+              placeholder="例如：第一单元 · 成长与选择"
+            />
+          </el-form-item>
+          <el-form-item v-else label="课时顺序">
+            <el-input-number
+              v-model="lessonForm.position"
+              :min="1"
+              :max="200"
+              style="width:100%"
+            />
+          </el-form-item>
+        </div>
+        <el-form-item label="课时名称">
+          <el-input
+            v-model.trim="lessonForm.title"
+            data-testid="lesson-title"
+            maxlength="120"
+            placeholder="例如：A Turning Point · 叙事阅读与续写"
+          />
+        </el-form-item>
+        <div class="form-grid form-grid-three">
+          <el-form-item label="学习领域">
+            <el-select v-model="lessonForm.learning_domain" style="width:100%">
+              <el-option label="阅读与写作整合" value="integrated" />
+              <el-option label="阅读" value="reading" />
+              <el-option label="写作" value="writing" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="课文类型">
+            <el-select v-model="lessonForm.text_genre_code" style="width:100%">
+              <el-option
+                v-for="genre in genreOptions"
+                :key="genre.value"
+                :label="genre.label"
+                :value="genre.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="课时分钟">
+            <el-input-number
+              v-model="lessonForm.duration_minutes"
+              :min="5"
+              :max="180"
+              :step="5"
+              style="width:100%"
+            />
+          </el-form-item>
+        </div>
+        <el-form-item label="主题标签（可选）">
+          <el-input
+            v-model.trim="lessonForm.theme_code"
+            maxlength="80"
+            placeholder="例如：growth_and_choices"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="lessonDialog = false">取消</el-button>
+        <el-button
+          data-testid="create-lesson-submit"
+          type="primary"
+          :loading="$store.getters['education/saving']"
+          :disabled="!canCreateLesson"
+          @click="handleCreateLesson"
+        >创建并编写教案</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog title="发布作业" :visible.sync="assignmentDialog" width="650px">
       <el-form label-position="top">
@@ -278,6 +377,7 @@ export default {
   data() {
     return {
       activeTab: 'lessons',
+      lessonDialog: false,
       assignmentDialog: false,
       invitationDialog: false,
       displayNameDialog: false,
@@ -285,6 +385,16 @@ export default {
       rosterText: '',
       displayName: '',
       invitationToken: '',
+      lessonForm: {
+        unit_id: '__new__',
+        unit_title: '第一单元',
+        title: '',
+        learning_domain: 'integrated',
+        text_genre_code: 'narrative',
+        theme_code: '',
+        duration_minutes: 45,
+        position: 1,
+      },
       assignmentForm: {
         title: '',
         instructions: '',
@@ -313,6 +423,41 @@ export default {
       return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
     },
     visibleTabs() { return this.tabs.filter(tab => !tab.teacherOnly || this.isTeacher) },
+    genreOptions() {
+      if (this.course && this.course.subject_code === 'primary_chinese') {
+        return [
+          { value: 'narrative', label: '记叙文' },
+          { value: 'scenery', label: '写景文' },
+          { value: 'expository', label: '说明文' },
+          { value: 'fairy_tale', label: '童话' },
+          { value: 'fable', label: '寓言' },
+          { value: 'poetry', label: '现代诗' },
+          { value: 'ancient_poetry', label: '古诗文' },
+          { value: 'practical', label: '实用类文本' },
+          { value: 'composition', label: '习作' },
+        ]
+      }
+      return [
+        { value: 'narrative', label: 'Narrative · 叙事' },
+        { value: 'expository', label: 'Expository · 说明' },
+        { value: 'argumentative', label: 'Argumentative · 议论' },
+        { value: 'practical', label: 'Practical · 应用' },
+        { value: 'news', label: 'News · 新闻' },
+        { value: 'biography', label: 'Biography · 传记' },
+        { value: 'literary', label: 'Literary · 文学' },
+      ]
+    },
+    canCreateLesson() {
+      return Boolean(
+        this.lessonForm.title
+        && this.lessonForm.text_genre_code
+        && this.lessonForm.duration_minutes
+        && (
+          this.lessonForm.unit_id !== '__new__'
+          || this.lessonForm.unit_title
+        )
+      )
+    },
     flatLessons() {
       return this.units.reduce((all, unit) => {
         const lessons = unit.lessons || []
@@ -341,6 +486,47 @@ export default {
     }
   },
   methods: {
+    openLessonDialog() {
+      const firstUnit = this.units[0]
+      this.lessonForm = {
+        unit_id: firstUnit ? firstUnit.id : '__new__',
+        unit_title: '第一单元',
+        title: '',
+        learning_domain: 'integrated',
+        text_genre_code: this.course && this.course.subject_code === 'primary_chinese'
+          ? 'fable'
+          : 'narrative',
+        theme_code: '',
+        duration_minutes: 45,
+        position: this.flatLessons.length + 1,
+      }
+      this.lessonDialog = true
+    },
+    async handleCreateLesson() {
+      const domain = this.lessonForm.learning_domain
+      try {
+        const lesson = await this.$store.dispatch('education/createLesson', {
+          courseId: this.courseId,
+          unitId: this.lessonForm.unit_id === '__new__' ? '' : this.lessonForm.unit_id,
+          unitTitle: this.lessonForm.unit_title,
+          lesson: {
+            title: this.lessonForm.title,
+            learning_domain: domain,
+            theme_code: this.lessonForm.theme_code,
+            text_genre_code: this.lessonForm.text_genre_code,
+            lesson_type_code: domain === 'integrated' ? 'reading_writing' : domain,
+            duration_minutes: this.lessonForm.duration_minutes,
+            position: this.lessonForm.position,
+          },
+        })
+        this.lessonDialog = false
+        this.$message.success('课时已创建，可以开始编写教案')
+        this.openLesson(lesson)
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '课时创建失败')
+      }
+    },
     async saveDisplayName() {
       try {
         await this.$store.dispatch('education/updateMyDisplayName', {
@@ -538,5 +724,10 @@ export default {
 .metric-grid b { margin-top: 7px; color: #237e74; font-size: 24px; }
 .analytics-note { margin-top: 16px; padding: 16px; display: flex; gap: 12px; border-radius: 10px; background: #eef8f6; color: #4d675f; font-size: 13px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 900px) { .metric-grid { grid-template-columns: repeat(2, 1fr); } }
+.form-grid-three { grid-template-columns: 1.2fr 1.2fr .8fr; }
+.small-empty .el-button { margin-top: 12px; }
+@media (max-width: 900px) {
+  .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .form-grid-three { grid-template-columns: 1fr; }
+}
 </style>

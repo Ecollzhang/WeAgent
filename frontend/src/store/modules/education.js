@@ -6,6 +6,8 @@ import {
   createKnowledgeResource,
   createLessonContent,
   createLessonActivity,
+  createUnit as createCourseUnit,
+  createLesson as createCourseLesson,
   createAssignment,
   createCourse,
   createCourseInvitation,
@@ -260,6 +262,23 @@ export default {
       return result
     },
 
+    async createLesson({ dispatch }, { courseId, unitId, unitTitle, lesson }) {
+      let resolvedUnitId = unitId || ''
+      if (!resolvedUnitId) {
+        const unit = payload(await createCourseUnit(courseId, {
+          title: unitTitle,
+          position: 1,
+        }))
+        resolvedUnitId = unit.id
+      }
+      const created = payload(await createCourseLesson(courseId, {
+        ...lesson,
+        unit_id: resolvedUnitId,
+      }))
+      await dispatch('fetchCourseOverview', courseId)
+      return created
+    },
+
     async fetchLesson({ commit, state }, lessonId) {
       const lesson = payload(await getLesson(lessonId))
       let publication = {}
@@ -271,6 +290,7 @@ export default {
         )
       }
       let currentVersion = null
+      let publishedVersion = null
       let lessonPlanContent = null
       let materialVersion = null
       let materialContent = null
@@ -287,10 +307,18 @@ export default {
           materialVersion = versions[versions.length - 1] || null
         }
       } else {
-        const releaseMaterials = (
+        const releaseManifest = publication.student_release_manifest || {}
+        const releaseMaterials = releaseManifest.materials || []
+        const learningOutline = (
           publication.student_release_manifest
-          && publication.student_release_manifest.materials
-        ) || []
+          && publication.student_release_manifest.learning_outline
+        ) || {}
+        publishedVersion = {
+          id: publication.lesson_plan_version_id || publication.id,
+          version_number: publication.version_number,
+          published_at: publication.published_at,
+          source_json: learningOutline,
+        }
         const htmlMaterial = releaseMaterials.find(item => item.kind === 'rich_document')
         if (htmlMaterial) materialVersion = htmlMaterial
       }
@@ -299,6 +327,7 @@ export default {
         ...lesson,
         publication,
         current_version: currentVersion,
+        published_version: publishedVersion,
         lesson_plan_content: lessonPlanContent,
         material_version: materialVersion,
         material_content: materialContent,

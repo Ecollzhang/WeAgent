@@ -124,6 +124,16 @@ assertContains(
 )
 assertContains(
   'src/store/modules/education.js',
+  'student_release_manifest.learning_outline',
+  'student lesson pages must receive the safe published learning outline'
+)
+assertContains(
+  'src/store/modules/education.js',
+  'published_version: publishedVersion',
+  'the student version label must use the immutable publication metadata'
+)
+assertContains(
+  'src/store/modules/education.js',
   'saveContentVersion',
   'subsequent lesson saves must append a version instead of creating duplicate content'
 )
@@ -167,6 +177,26 @@ assertContains(
   'src/views/education/CourseSpace.vue',
   'data-testid="copy-invitation-token"',
   'teacher invitations need a one-click copy action'
+)
+assertContains(
+  'src/views/education/CourseSpace.vue',
+  'data-testid="create-lesson-open"',
+  'a teacher must be able to start the first lesson from an empty course'
+)
+assertContains(
+  'src/views/education/CourseSpace.vue',
+  'data-testid="create-lesson-submit"',
+  'the new lesson dialog needs a stable browser UAT action'
+)
+assertContains(
+  'src/store/modules/education.js',
+  'createCourseUnit',
+  'the course workspace must persist a unit before creating its first lesson'
+)
+assertContains(
+  'src/store/modules/education.js',
+  'createCourseLesson',
+  'the course workspace must persist and refresh a newly created lesson'
 )
 assertContains(
   'src/views/education/CourseSpace.vue',

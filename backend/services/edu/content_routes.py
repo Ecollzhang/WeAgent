@@ -73,6 +73,51 @@ def _student_safe_payload(value):
     return value
 
 
+def _student_learning_outline(source):
+    """Project a lesson plan into a small, student-safe learning contract."""
+    source = source if isinstance(source, dict) else {}
+    objectives = []
+    for item in source.get("objectives") or []:
+        if isinstance(item, str):
+            objectives.append(item)
+        elif isinstance(item, dict):
+            projected = {
+                key: item[key]
+                for key in ("id", "description", "text", "objective", "title")
+                if item.get(key) not in (None, "")
+            }
+            if projected:
+                objectives.append(projected)
+    stages = []
+    for item in source.get("stages") or []:
+        if not isinstance(item, dict):
+            continue
+        projected = {
+            key: item[key]
+            for key in (
+                "id",
+                "name",
+                "title",
+                "duration_minutes",
+                "description",
+                "student_activity",
+                "activity",
+                "task",
+            )
+            if item.get(key) not in (None, "")
+        }
+        if projected:
+            stages.append(_student_safe_payload(projected))
+    return {
+        "learning_domain": source.get("learning_domain"),
+        "text_genre_code": source.get("text_genre_code"),
+        "lesson_type_code": source.get("lesson_type_code"),
+        "duration_minutes": source.get("duration_minutes"),
+        "objectives": objectives,
+        "stages": stages,
+    }
+
+
 def _membership(course_id, user_id, role=None):
     query = CourseMembership.query.filter_by(
         course_id=course_id, user_id=user_id, status="active"
@@ -726,6 +771,7 @@ def publish_lesson(lesson_id):
                 "id": lesson.id, "title": lesson.title,
                 "learning_domain": lesson.learning_domain,
             },
+            "learning_outline": _student_learning_outline(plan.source_json),
             "activities": student_activities,
             "materials": [
                 {
