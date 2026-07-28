@@ -108,6 +108,28 @@ class EducationContentVersion(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
+class EducationMaterial(TimestampMixin, db.Model):
+    __tablename__ = "edu_materials"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    course_id = db.Column(
+        db.String(36), db.ForeignKey("edu_courses.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    lesson_id = db.Column(
+        db.String(36), db.ForeignKey("edu_lessons.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    owner_user_id = db.Column(db.String(100), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    original_filename = db.Column(db.String(255), nullable=False)
+    extension = db.Column(db.String(20), nullable=False)
+    mime_type = db.Column(db.String(120), nullable=False)
+    storage_path = db.Column(db.String(1000), nullable=False)
+    file_size = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")
+
+
 class PublishedLessonVersion(db.Model):
     __tablename__ = "edu_published_lesson_versions"
     __table_args__ = (

@@ -11,13 +11,14 @@ if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
 from app.services.domain_base import DomainServiceBase
+from services.edu.runtime_client import CoreRuntimeClient
 
 try:
     from .config import Config
     from .extensions import db
 except ImportError:  # Support ``python services/edu/app.py``.
-    from config import Config
-    from extensions import db
+    from services.edu.config import Config
+    from services.edu.extensions import db
 
 
 def create_edu_app(config_object=Config):
@@ -25,6 +26,7 @@ def create_edu_app(config_object=Config):
     service = DomainServiceBase(config_object, db_instance=db)
     app = service.app
     app.extensions["domain_service"] = service
+    app.extensions["education_runtime_client"] = CoreRuntimeClient()
 
     @app.before_request
     def enforce_feature_gate():
@@ -40,9 +42,9 @@ def create_edu_app(config_object=Config):
         from .workflow_routes import education_workflow_api
         from .content_routes import education_content_api
     except ImportError:
-        from routes import education_api
-        from workflow_routes import education_workflow_api
-        from content_routes import education_content_api
+        from services.edu.routes import education_api
+        from services.edu.workflow_routes import education_workflow_api
+        from services.edu.content_routes import education_content_api
     app.register_blueprint(education_api, url_prefix="/api/edu")
     app.register_blueprint(education_workflow_api, url_prefix="/api/edu")
     app.register_blueprint(education_content_api, url_prefix="/api/edu")

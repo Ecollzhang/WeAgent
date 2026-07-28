@@ -31,3 +31,10 @@ class Config:
     EDUCATION_FEATURE_ENABLED = os.getenv(
         'EDUCATION_FEATURE_ENABLED', 'true'
     ).lower() in ('1', 'true', 'yes', 'on')
+    EDUCATION_UPLOAD_FOLDER = os.getenv(
+        'EDUCATION_UPLOAD_FOLDER',
+        os.path.join(os.path.dirname(__file__), 'data', 'uploads'),
+    )
+    EDUCATION_MAX_UPLOAD_BYTES = int(
+        os.getenv('EDUCATION_MAX_UPLOAD_BYTES', str(25 * 1024 * 1024))
+    )

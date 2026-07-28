@@ -1,4 +1,5 @@
 from datetime import timedelta
+from io import BytesIO
 
 import pytest
 from flask_jwt_extended import create_access_token
@@ -147,6 +148,7 @@ def test_teacher_builds_versioned_lesson_and_student_only_sees_safe_snapshot(app
     assert second.status_code == 201
     assert second.get_json()["version"]["version_number"] == 2
     assert second.get_json()["version"]["parent_version_id"] == first["version"]["id"]
+    assert second.get_json()["version"]["created_at"]
 
     activity = client.post(
         f"/api/edu/lessons/{lesson_id}/activities",
@@ -156,7 +158,18 @@ def test_teacher_builds_versioned_lesson_and_student_only_sees_safe_snapshot(app
             "title": "Read and annotate",
             "position": 1,
             "content_version_id": second.get_json()["version"]["id"],
-            "student_payload": {"prompt": "Find evidence for the turning point."},
+            "student_payload": {
+                "prompt": "Find evidence for the turning point.",
+                "questions": [
+                    {
+                        "id": "Q1",
+                        "prompt": "What changes?",
+                        "answer": "This must never reach the student payload.",
+                        "explanation": "Teacher-only explanation.",
+                        "score": 2,
+                    }
+                ],
+            },
             "teacher_payload": {
                 "answer_key": "The character decides to ask for help.",
                 "rubric": {"evidence": 2},
@@ -164,6 +177,8 @@ def test_teacher_builds_versioned_lesson_and_student_only_sees_safe_snapshot(app
         },
     )
     assert activity.status_code == 201
+    assert "answer" not in str(activity.get_json()["student_payload"])
+    assert "explanation" not in str(activity.get_json()["student_payload"])
 
     publication = client.post(
         f"/api/edu/lessons/{lesson_id}/publish",
@@ -218,6 +233,119 @@ def test_teacher_builds_versioned_lesson_and_student_only_sees_safe_snapshot(app
         f"/api/edu/courses/{created_course['id']}/structure",
         headers=outsider,
     ).status_code == 404
+
+
+def test_publish_separates_private_plan_from_student_courseware(app):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    student = headers(app, "student")
+    created_course = course(client, teacher)
+    join(client, teacher, student, created_course["id"])
+    lesson = client.post(
+        f"/api/edu/courses/{created_course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Visual reading lesson",
+            "learning_domain": "integrated",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "lesson_plan",
+            "visibility_scope": "course_teacher",
+            "schema_name": "lesson_plan_json",
+            "source_json": lesson_plan(),
+        },
+    )
+    courseware = client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "rich_document",
+            "visibility_scope": "course_students",
+            "schema_name": "rich_document_html",
+            "source_json": {"title": "Turning points", "format": "html"},
+            "rendered_html": "<article><h1>Turning points</h1></article>",
+        },
+    )
+    assert courseware.status_code == 201
+
+    published = client.post(
+        f"/api/edu/lessons/{lesson['id']}/publish",
+        headers={**teacher, "Idempotency-Key": "publish-courseware"},
+    )
+
+    assert published.status_code == 201
+    student_release = client.get(
+        f"/api/edu/lessons/{lesson['id']}/release",
+        headers=student,
+    ).get_json()
+    materials = student_release["student_release_manifest"]["materials"]
+    assert materials[0]["kind"] == "rich_document"
+    assert materials[0]["rendered_html"].startswith("<article>")
+    assert "lesson_plan" not in str(student_release["student_release_manifest"])
+
+
+def test_teacher_uploads_office_material_and_student_downloads_after_publish(app):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    student = headers(app, "student")
+    created_course = course(client, teacher)
+    join(client, teacher, student, created_course["id"])
+    lesson = client.post(
+        f"/api/edu/courses/{created_course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Uploaded reading lesson",
+            "learning_domain": "reading",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "lesson_plan",
+            "schema_name": "lesson_plan_json",
+            "source_json": {
+                **lesson_plan(),
+                "learning_domain": "reading",
+            },
+        },
+    )
+    uploaded = client.post(
+        f"/api/edu/lessons/{lesson['id']}/materials",
+        headers=teacher,
+        data={
+            "title": "Reading slides",
+            "file": (BytesIO(b"fake-pptx"), "reading-slides.pptx"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 201
+    material = uploaded.get_json()
+    assert client.get(
+        material["download_url"], headers=student
+    ).status_code == 404
+
+    published = client.post(
+        f"/api/edu/lessons/{lesson['id']}/publish",
+        headers={**teacher, "Idempotency-Key": "publish-upload"},
+    )
+
+    assert published.status_code == 201
+    downloaded = client.get(material["download_url"], headers=student)
+    assert downloaded.status_code == 200
+    assert downloaded.data == b"fake-pptx"
 
 
 @pytest.mark.parametrize(

@@ -91,6 +91,24 @@ class CourseMembership(TimestampMixin, db.Model):
         }
 
 
+class CourseMemberProfile(TimestampMixin, db.Model):
+    """Course-local display identity; never changes the login username."""
+    __tablename__ = "edu_course_member_profiles"
+    __table_args__ = (
+        db.UniqueConstraint("course_id", "user_id", name="uq_edu_course_member_profile"),
+    )
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    course_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_courses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = db.Column(db.String(100), nullable=False, index=True)
+    display_name = db.Column(db.String(80), nullable=False)
+
+
 class CourseInvitation(TimestampMixin, db.Model):
     __tablename__ = "edu_course_invitations"
 

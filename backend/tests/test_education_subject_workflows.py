@@ -193,3 +193,142 @@ def test_workflow_validation_rejects_cycles_code_and_missing_gate(
 
     assert response.status_code == 400
     assert error_fragment in response.get_json()["error"]
+
+
+def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_app):
+    class FakeCoreRuntime:
+        def __init__(self):
+            self.started = None
+            self.snapshot = {
+                "status": "running",
+                "agent_runs": [
+                    {
+                        "agent_id": "_edu_1",
+                        "status": "done",
+                        "content": "任务已完成，生成文件：/workspace/shared/lesson_plan_draft.json",
+                    },
+                    {"agent_id": "_edu_3", "status": "running", "content": ""},
+                ],
+            }
+
+        def start_workflow(self, *, authorization, title, prompt, agent_ids, workflow):
+            self.started = {
+                "authorization": authorization,
+                "title": title,
+                "prompt": prompt,
+                "agent_ids": agent_ids,
+                "workflow": workflow,
+            }
+            return {
+                "conversation_id": "core-conversation-1",
+                "sandbox_session_id": "sandbox-session-1",
+                "message_id": "core-message-1",
+            }
+
+        def get_snapshot(self, *, authorization, conversation_id):
+            assert conversation_id == "core-conversation-1"
+            return self.snapshot
+
+        def get_workspace_json(
+            self, *, authorization, sandbox_session_id, path, artifact_role=None
+        ):
+            assert sandbox_session_id == "sandbox-session-1"
+            assert path == "/workspace/shared/lesson_plan_draft.json"
+            return {
+                "objectives": ["理解叙事顺序"],
+                "activities": "阅读并续写",
+                "assessment": "完成短文",
+            }
+
+    runtime = FakeCoreRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, teacher, student = course_with_student(education_app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "阅读与写作",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+
+    response = client.post(
+        "/api/edu/workflow-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "lesson_id": lesson["id"],
+            "workflow_code": "reading_lesson",
+            "teacher_requirements": "侧重叙事顺序和读写迁移",
+        },
+    )
+    denied = client.post(
+        "/api/edu/workflow-runs",
+        headers=student,
+        json={
+            "course_id": course["id"],
+            "lesson_id": lesson["id"],
+            "workflow_code": "reading_lesson",
+        },
+    )
+
+    assert response.status_code == 202
+    created = response.get_json()
+    assert created["status"] == "running"
+    assert created["conversation_id"] == "core-conversation-1"
+    assert created["sandbox_session_id"] == "sandbox-session-1"
+    assert [node["agent_role"] for node in created["nodes"][:3]] == [
+        "course_designer",
+        "exercise_generator",
+        "teaching_reviewer",
+    ]
+    assert created["nodes"][0]["workspace_path"] == "/workspace/agents/课程设计师"
+    assert runtime.started["agent_ids"] == ["_edu_1", "_edu_3", "_edu_9"]
+    assert "/workspace/shared/exercises_draft.json" in runtime.started["prompt"]
+    assert "questions" in runtime.started["prompt"]
+    assert "【内容设计规范】" in runtime.started["prompt"]
+    assert "【机器产物规范】" in runtime.started["prompt"]
+    assert "difficulty 只能是 easy、medium、hard" in runtime.started["prompt"]
+    assert "options 只能是未编号的纯文本数组" in runtime.started["prompt"]
+    assert "不得生成 .js" in runtime.started["prompt"]
+    assert denied.status_code == 404
+
+    refreshed = client.get(
+        f"/api/edu/workflow-runs/{created['id']}",
+        headers=teacher,
+    )
+    assert refreshed.status_code == 200
+    snapshot = refreshed.get_json()
+    assert snapshot["nodes"][0]["status"] == "done"
+    assert snapshot["nodes"][1]["status"] == "running"
+    assert snapshot["nodes"][0]["output"]["objectives"] == ["理解叙事顺序"]
+
+    runtime.snapshot = {
+        "status": "running",
+        "agent_runs": [
+            {
+                "agent_id": "moderator",
+                "status": "done",
+                "content": "selected model is unavailable",
+            }
+        ],
+    }
+    failed_run = client.post(
+        "/api/edu/workflow-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "lesson_id": lesson["id"],
+            "workflow_code": "reading_lesson",
+        },
+    ).get_json()
+    failed_snapshot = client.get(
+        f"/api/edu/workflow-runs/{failed_run['id']}",
+        headers=teacher,
+    ).get_json()
+    assert failed_snapshot["status"] == "failed"
+    assert "未生成 worker" in failed_snapshot["error_summary"]

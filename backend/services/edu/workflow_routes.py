@@ -1,18 +1,318 @@
 """Subject-pack, Agent-team and safe workflow APIs."""
 
-from flask import Blueprint, jsonify, request
+import json
+import re
+import threading
+from datetime import datetime, timedelta
+
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from .extensions import db
 from .routes import teacher_course_or_none
 from .subject_packs import AGENT_ROLES, SUBJECT_PACKS, WORKFLOW_TEMPLATES
-from .workflow_models import EducationWorkflow
+from .content_models import Lesson
+from .runtime_client import CoreRuntimeError
+from .workflow_models import EducationAgentRun, EducationWorkflow
 
 
 education_workflow_api = Blueprint("education_workflow_api", __name__)
 NODE_TYPES = {"agent_task", "capability_task", "transform", "validation", "approval"}
 EXECUTABLE_FIELDS = {"code", "script", "shell", "command", "expression"}
 ALLOWED_MODES = {"strict", "guided"}
+ROLE_RUNTIME = {
+    "course_designer": ("_edu_1", "课程设计师"),
+    "courseware_maker": ("_edu_2", "课件制作师"),
+    "exercise_generator": ("_edu_3", "习题生成器"),
+    "learning_analyst": ("_edu_4", "学情分析师"),
+    "learning_planner": ("_edu_5", "学习规划师"),
+    "practice_coach": ("_edu_6", "练习教练"),
+    "note_organizer": ("_edu_7", "笔记整理师"),
+    "research_worker": ("_edu_8", "资料研究员"),
+    "teaching_reviewer": ("_edu_9", "教学审校员"),
+}
+ROLE_ARTIFACTS = {
+    "course_designer": "/workspace/shared/lesson_plan_draft.json",
+    "exercise_generator": "/workspace/shared/exercises_draft.json",
+    "teaching_reviewer": "/workspace/shared/review_conclusion.json",
+}
+
+
+def _template(code):
+    return next((item for item in WORKFLOW_TEMPLATES if item["code"] == code), None)
+
+
+def _expire_stale_pending_run(run):
+    """Make interrupted background launches retryable after a service restart."""
+    started = run.started_at or run.created_at
+    if (
+        run.status == "pending"
+        and not run.conversation_id
+        and started
+        and started < datetime.utcnow() - timedelta(minutes=2)
+    ):
+        run.status = "failed"
+        run.error_summary = "Agent 启动过程被中断，请重新运行"
+        run.finished_at = datetime.utcnow()
+        return True
+    return False
+
+
+def _run_nodes(template):
+    nodes = []
+    for item in template["nodes"]:
+        node = dict(item)
+        node["status"] = "pending"
+        if node["type"] == "agent_task":
+            agent_id, agent_name = ROLE_RUNTIME[node["agent_role"]]
+            node.update(
+                {
+                    "agent_id": agent_id,
+                    "agent_name": agent_name,
+                    "workspace_path": f"/workspace/agents/{agent_name}",
+                    "output": {},
+                }
+            )
+        nodes.append(node)
+    return nodes
+
+
+def _workflow_payload(template, nodes):
+    edges = [
+        {"from": nodes[index]["id"], "to": nodes[index + 1]["id"]}
+        for index in range(len(nodes) - 1)
+    ]
+    return {
+        "id": template["code"],
+        "name": template["name"],
+        "nodes": [
+            {
+                key: value
+                for key, value in node.items()
+                if key in {"id", "type", "agent_role", "agent_id", "gate"}
+            }
+            for node in nodes
+        ],
+        "edges": edges,
+        "parallel_groups": [],
+    }
+
+
+def _extract_json(content):
+    text = str(content or "").strip()
+    if not text:
+        return {}
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    candidate = fenced.group(1) if fenced else text
+    try:
+        value = json.loads(candidate)
+        return value if isinstance(value, dict) else {"value": value}
+    except (TypeError, ValueError):
+        start, end = candidate.find("{"), candidate.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                value = json.loads(candidate[start : end + 1])
+                return value if isinstance(value, dict) else {"value": value}
+            except (TypeError, ValueError):
+                pass
+    return {"text": text}
+
+
+def _repair_agent_artifact(
+    app, run_id, agent_role, agent_id, artifact_path, authorization, validation_error
+):
+    """Run the bounded validator → producer repair loop outside polling requests."""
+    with app.app_context():
+        run = EducationAgentRun.query.filter_by(id=run_id).first()
+        if not run:
+            return
+        try:
+            repaired = app.extensions["education_runtime_client"].repair_workspace_json(
+                authorization=authorization,
+                sandbox_session_id=run.sandbox_session_id,
+                agent_id=agent_id,
+                path=artifact_path,
+                validation_error=validation_error,
+                artifact_role=agent_role,
+            )
+            nodes = []
+            for stored in run.nodes or []:
+                node = dict(stored)
+                if node.get("agent_role") == agent_role:
+                    node["output"] = repaired
+                    node["validation_status"] = "repaired"
+                    node.pop("validation_error", None)
+                nodes.append(node)
+            output = dict(run.output or {})
+            output[agent_role] = repaired
+            run.nodes = nodes
+            run.output = output
+        except CoreRuntimeError as exc:
+            nodes = []
+            for stored in run.nodes or []:
+                node = dict(stored)
+                if node.get("agent_role") == agent_role:
+                    node["validation_status"] = "failed"
+                    node["validation_error"] = str(exc)
+                nodes.append(node)
+            run.nodes = nodes
+        finally:
+            db.session.commit()
+            db.session.remove()
+
+
+def _sync_run(run, authorization):
+    runtime = current_app.extensions["education_runtime_client"]
+    snapshot = runtime.get_snapshot(
+        authorization=authorization,
+        conversation_id=run.conversation_id,
+    )
+    latest_by_agent = {}
+    for item in snapshot.get("agent_runs", []):
+        if item.get("agent_id"):
+            latest_by_agent[item["agent_id"]] = item
+
+    workflow_agent_ids = {
+        node.get("agent_id")
+        for node in run.nodes or []
+        if node.get("type") == "agent_task" and node.get("agent_id")
+    }
+    moderator = latest_by_agent.get("moderator")
+    has_worker_activity = any(agent_id in latest_by_agent for agent_id in workflow_agent_ids)
+    if (
+        moderator
+        and moderator.get("status") in {"done", "error", "stopped"}
+        and not has_worker_activity
+    ):
+        nodes = []
+        for stored in run.nodes or []:
+            node = dict(stored)
+            if node.get("type") == "agent_task":
+                node["status"] = "skipped"
+            nodes.append(node)
+        run.nodes = nodes
+        run.status = "failed"
+        detail = str(moderator.get("error") or moderator.get("content") or "").strip()
+        run.error_summary = (
+            "主持 Agent 未生成 worker 执行计划"
+            + (f"：{detail[:500]}" if detail else "")
+        )
+        run.finished_at = datetime.utcnow()
+        db.session.commit()
+        return run
+
+    nodes = []
+    done_count = 0
+    failed_count = 0
+    agent_count = 0
+    outputs = dict(run.output or {})
+    repairs = []
+    for stored in run.nodes or []:
+        node = dict(stored)
+        if node.get("type") == "agent_task":
+            agent_count += 1
+            core = latest_by_agent.get(node.get("agent_id"))
+            if core:
+                status = core.get("status")
+                if status == "done":
+                    node["status"] = "done"
+                    node["output"] = _extract_json(core.get("content"))
+                    artifact_path = ROLE_ARTIFACTS.get(node.get("agent_role"))
+                    if artifact_path and run.sandbox_session_id:
+                        try:
+                            node["output"] = runtime.get_workspace_json(
+                                authorization=authorization,
+                                sandbox_session_id=run.sandbox_session_id,
+                                path=artifact_path,
+                                artifact_role=node.get("agent_role"),
+                            )
+                        except CoreRuntimeError as exc:
+                            # Keep the visible message fallback, but ask the producing
+                            # Agent to repair its own structured file exactly once.
+                            if not node.get("validation_attempted"):
+                                node["validation_attempted"] = True
+                                node["validation_status"] = "repairing"
+                                node["validation_error"] = str(exc)
+                                repairs.append(
+                                    (
+                                        node.get("agent_role"),
+                                        node.get("agent_id"),
+                                        artifact_path,
+                                        str(exc),
+                                    )
+                                )
+                    outputs[node["agent_role"]] = node["output"]
+                    done_count += 1
+                elif status in {"error", "stopped"}:
+                    node["status"] = "failed"
+                    node["error"] = core.get("error") or "Agent execution failed"
+                    failed_count += 1
+                else:
+                    node["status"] = "running"
+        nodes.append(node)
+
+    if failed_count:
+        run.status = "partial" if done_count else "failed"
+    elif agent_count and done_count == agent_count:
+        run.status = "awaiting_approval"
+        for node in nodes:
+            if node.get("type") == "approval":
+                node["status"] = "awaiting_approval"
+        run.finished_at = datetime.utcnow()
+    else:
+        run.status = "running"
+    run.nodes = nodes
+    run.output = outputs
+    db.session.commit()
+    if repairs:
+        app = current_app._get_current_object()
+        for agent_role, agent_id, artifact_path, validation_error in repairs:
+            args = (
+                app,
+                run.id,
+                agent_role,
+                agent_id,
+                artifact_path,
+                authorization,
+                validation_error,
+            )
+            if app.config.get("TESTING"):
+                _repair_agent_artifact(*args)
+            else:
+                threading.Thread(
+                    target=_repair_agent_artifact,
+                    args=args,
+                    daemon=True,
+                    name=f"education-json-repair-{run.id[:8]}",
+                ).start()
+    return run
+
+
+def _start_core_run(app, run_id, authorization, title, prompt, agent_ids, workflow):
+    """Create the slow core Conversation/sandbox outside the HTTP request."""
+    with app.app_context():
+        run = EducationAgentRun.query.filter_by(id=run_id).first()
+        if not run:
+            return
+        try:
+            started = app.extensions["education_runtime_client"].start_workflow(
+                authorization=authorization,
+                title=title,
+                prompt=prompt,
+                agent_ids=agent_ids,
+                workflow=workflow,
+            )
+            run.status = "running"
+            run.conversation_id = started["conversation_id"]
+            run.sandbox_session_id = started.get("sandbox_session_id")
+            run.core_message_id = started.get("message_id")
+        except CoreRuntimeError as exc:
+            run.status = "failed"
+            run.error_summary = str(exc)
+            run.finished_at = datetime.utcnow()
+        finally:
+            db.session.commit()
+            db.session.remove()
 
 
 def validate_workflow(payload):
@@ -135,3 +435,125 @@ def list_course_workflows(course_id):
         EducationWorkflow.created_at.asc()
     ).all()
     return jsonify({"items": [workflow.to_dict() for workflow in workflows]})
+
+
+@education_workflow_api.post("/workflow-runs")
+@jwt_required()
+def start_workflow_run():
+    user_id = get_jwt_identity()
+    payload = request.get_json(silent=True) or {}
+    course_id = str(payload.get("course_id") or "").strip()
+    lesson_id = str(payload.get("lesson_id") or "").strip()
+    workflow_code = str(payload.get("workflow_code") or "reading_lesson").strip()
+    course = teacher_course_or_none(course_id, user_id)
+    if not course:
+        return jsonify({"error": "course not found"}), 404
+    lesson = Lesson.query.filter_by(id=lesson_id, course_id=course_id).first()
+    if not lesson:
+        return jsonify({"error": "lesson not found"}), 404
+    template = _template(workflow_code)
+    if not template:
+        return jsonify({"error": "workflow template not found"}), 404
+    nodes = _run_nodes(template)
+    agent_ids = [
+        node["agent_id"] for node in nodes if node.get("type") == "agent_task"
+    ]
+    requirements = str(payload.get("teacher_requirements") or "").strip()
+    prompt = (
+        "请按选定教育工作流协作生成一份可编辑教案和结构化习题草稿。\n"
+        f"课程：{course.title}\n"
+        f"学科：{course.subject_code}；学段：{course.grade_band}\n"
+        f"课时：{lesson.title}\n"
+        f"学习领域：{lesson.learning_domain}；文本类型：{lesson.text_genre_code}；"
+        f"课型：{lesson.lesson_type_code}；时长：{lesson.duration_minutes} 分钟\n"
+        f"教师补充要求：{requirements or '无'}\n"
+        "【课程设计师】调用课程设计 Skill，输出严格 JSON 到 "
+        "/workspace/shared/lesson_plan_draft.json；字段至少包括 objectives（数组）、"
+        "activities（字符串）、assessment（字符串）。\n"
+        "【习题生成器】调用“中英阅读与写作习题设计”Skill，先读取上述教案 JSON。\n"
+        "【内容设计规范】根据当前学科、学段、课型和文本类型设计可作答的阅读与写作"
+        "练习；题目必须覆盖教学目标，具备合理的难度梯度、用时和分值，答案与解析"
+        "仅供教师使用。\n"
+        "【机器产物规范】唯一正式产物写到 "
+        "/workspace/shared/exercises_draft.json。根对象只使用 meta 和 questions；"
+        "questions 至少一道，每题必须包含 id、type、prompt、answer、difficulty、"
+        "score，可选 options、explanation、common_mistakes、knowledge_points、"
+        "objective_ids。type 只能是 single_choice、multiple_choice、fill_blank、"
+        "short_answer、writing；difficulty 只能是 easy、medium、hard。"
+        "options 只能是未编号的纯文本数组，例如 [\"Excitement\", \"Nervousness\"]，"
+        "禁止包含 A.、B. 等标签或对象。不得使用中文枚举、同义字段或历史 schema。"
+        "写入后必须做 JSON 解析和 schema 自检；不得生成 .js、可执行代码、Markdown "
+        "代码块或只回复文件路径。\n"
+        "【教学审校员】读取教案与习题 JSON，检查目标覆盖、答案、难度、年级适配和"
+        "学生端答案泄露，写入 /workspace/shared/review_conclusion.json。\n"
+        "所有内容仅保存为教师草稿，不得自动发布。"
+    )
+    workflow = _workflow_payload(template, nodes)
+    run = EducationAgentRun(
+        course_id=course_id,
+        lesson_id=lesson_id,
+        requested_by=user_id,
+        workflow_code=template["code"],
+        workflow_name=template["name"],
+        status="pending",
+        nodes=nodes,
+        input_payload={"teacher_requirements": requirements},
+        started_at=datetime.utcnow(),
+    )
+    db.session.add(run)
+    db.session.commit()
+
+    app = current_app._get_current_object()
+    launch_args = (
+        app,
+        run.id,
+        request.headers.get("Authorization", ""),
+        f"{course.title} · {lesson.title} · Agent 教案协作",
+        prompt,
+        agent_ids,
+        workflow,
+    )
+    if app.config.get("TESTING"):
+        _start_core_run(*launch_args)
+    else:
+        threading.Thread(
+            target=_start_core_run,
+            args=launch_args,
+            daemon=True,
+            name=f"education-run-{run.id[:8]}",
+        ).start()
+    db.session.expire_all()
+    refreshed = EducationAgentRun.query.filter_by(id=run.id).first()
+    return jsonify(refreshed.to_dict()), 202
+
+
+@education_workflow_api.get("/workflow-runs/<run_id>")
+@jwt_required()
+def get_workflow_run(run_id):
+    user_id = get_jwt_identity()
+    run = EducationAgentRun.query.filter_by(id=run_id).first()
+    if not run or not teacher_course_or_none(run.course_id, user_id):
+        return jsonify({"error": "workflow run not found"}), 404
+    if _expire_stale_pending_run(run):
+        db.session.commit()
+    if run.status in {"running", "pending", "awaiting_approval"} and run.conversation_id:
+        try:
+            _sync_run(run, request.headers.get("Authorization", ""))
+        except CoreRuntimeError as exc:
+            run.error_summary = str(exc)
+            db.session.commit()
+    return jsonify(run.to_dict())
+
+
+@education_workflow_api.get("/courses/<course_id>/workflow-runs")
+@jwt_required()
+def list_workflow_runs(course_id):
+    user_id = get_jwt_identity()
+    if not teacher_course_or_none(course_id, user_id):
+        return jsonify({"error": "course not found"}), 404
+    runs = EducationAgentRun.query.filter_by(course_id=course_id).order_by(
+        EducationAgentRun.created_at.desc()
+    ).all()
+    if any(_expire_stale_pending_run(run) for run in runs):
+        db.session.commit()
+    return jsonify({"items": [run.to_dict() for run in runs]})

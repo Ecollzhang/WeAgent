@@ -1,4 +1,7 @@
 from datetime import timedelta
+from pathlib import Path
+import subprocess
+import sys
 
 
 class EducationTestConfig:
@@ -36,6 +39,28 @@ def test_education_business_routes_require_a_token():
     response = app.test_client().get("/api/edu/courses")
 
     assert response.status_code == 401
+
+
+def test_education_entrypoint_resolves_its_own_config_when_run_as_a_file():
+    backend_root = Path(__file__).resolve().parents[1]
+    entrypoint = backend_root / "services" / "edu" / "app.py"
+    probe = (
+        "import runpy; "
+        f"ns = runpy.run_path({str(entrypoint)!r}, run_name='education_entrypoint_probe'); "
+        "print(ns['Config'].SERVICE_NAME)"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=backend_root,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "weagent-edu"
 
 
 def test_education_service_rejects_business_routes_when_feature_is_disabled():

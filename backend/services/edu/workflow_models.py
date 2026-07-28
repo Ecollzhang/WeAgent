@@ -48,3 +48,55 @@ class EducationWorkflow(db.Model):
             "max_retries": self.max_retries,
             "max_parallelism": self.max_parallelism,
         }
+
+
+class EducationAgentRun(db.Model):
+    __tablename__ = "edu_agent_runs"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    course_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_courses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    lesson_id = db.Column(db.String(36), nullable=True, index=True)
+    requested_by = db.Column(db.String(100), nullable=False, index=True)
+    workflow_code = db.Column(db.String(100), nullable=False)
+    workflow_name = db.Column(db.String(200), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="pending", index=True)
+    conversation_id = db.Column(db.String(36), nullable=True, index=True)
+    sandbox_session_id = db.Column(db.String(100), nullable=True, index=True)
+    core_message_id = db.Column(db.String(36), nullable=True)
+    nodes = db.Column(db.JSON, nullable=False, default=list)
+    input_payload = db.Column(db.JSON, nullable=False, default=dict)
+    output = db.Column(db.JSON, nullable=False, default=dict)
+    error_summary = db.Column(db.Text, nullable=True)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "course_id": self.course_id,
+            "lesson_id": self.lesson_id,
+            "requested_by": self.requested_by,
+            "workflow_code": self.workflow_code,
+            "workflow_name": self.workflow_name,
+            "status": self.status,
+            "conversation_id": self.conversation_id,
+            "sandbox_session_id": self.sandbox_session_id,
+            "core_message_id": self.core_message_id,
+            "nodes": self.nodes or [],
+            "input_payload": self.input_payload or {},
+            "output": self.output or {},
+            "error_summary": self.error_summary,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

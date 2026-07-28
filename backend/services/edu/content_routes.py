@@ -2,16 +2,20 @@
 
 import hashlib
 import json
+import os
+import uuid
 from datetime import datetime
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from werkzeug.utils import secure_filename
 
 from .content_models import (
     Assignment,
     CourseUnit,
     EducationContent,
     EducationContentVersion,
+    EducationMaterial,
     Feedback,
     LearningEvent,
     Lesson,
@@ -43,6 +47,23 @@ CONTENT_KINDS = {
     "lesson_plan", "rich_document", "slide_document", "assessment", "rubric",
     "teacher_feedback", "student_note", "learning_plan", "knowledge_card",
 }
+MATERIAL_EXTENSIONS = {"pdf", "doc", "docx", "ppt", "pptx", "html", "htm"}
+STUDENT_PRIVATE_KEYS = {
+    "answer", "answers", "answer_key", "correct_answer", "explanation",
+    "common_mistakes", "rubric", "teacher_payload",
+}
+
+
+def _student_safe_payload(value):
+    if isinstance(value, list):
+        return [_student_safe_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _student_safe_payload(item)
+            for key, item in value.items()
+            if key not in STUDENT_PRIVATE_KEYS and not key.startswith("teacher_")
+        }
+    return value
 
 
 def _membership(course_id, user_id, role=None):
@@ -126,6 +147,23 @@ def _version_dict(version):
         "parent_version_id": version.parent_version_id,
         "change_summary": version.change_summary, "checksum": version.checksum,
         "created_by_user_id": version.created_by_user_id,
+        "created_at": version.created_at.isoformat(),
+    }
+
+
+def _material_dict(material):
+    return {
+        "id": material.id,
+        "course_id": material.course_id,
+        "lesson_id": material.lesson_id,
+        "title": material.title,
+        "original_filename": material.original_filename,
+        "extension": material.extension,
+        "mime_type": material.mime_type,
+        "file_size": material.file_size,
+        "status": material.status,
+        "download_url": f"/api/edu/materials/{material.id}/download",
+        "created_at": material.created_at.isoformat(),
     }
 
 
@@ -246,7 +284,25 @@ def get_lesson(lesson_id):
         membership.role != "teacher" and lesson.status != "published"
     ):
         return jsonify({"error": "lesson not found"}), 404
-    return jsonify(_lesson_dict(lesson))
+    activities = LessonActivity.query.filter_by(lesson_id=lesson.id).order_by(
+        LessonActivity.position.asc()
+    ).all()
+    if membership.role != "teacher":
+        activities = [row for row in activities if row.status == "published"]
+    result = _lesson_dict(lesson)
+    result["activities"] = [
+        {
+            "id": row.id,
+            "activity_type": row.activity_type,
+            "title": row.title,
+            "position": row.position,
+            "status": row.status,
+            **(row.student_payload or {}),
+            **({"teacher_payload": row.teacher_payload} if membership.role == "teacher" else {}),
+        }
+        for row in activities
+    ]
+    return jsonify(result)
 
 
 @education_content_api.post("/lessons/<lesson_id>/activities")
@@ -265,7 +321,7 @@ def create_activity(lesson_id):
         course_id=lesson.course_id, lesson_id=lesson.id, activity_type=activity_type,
         title=title, position=int(data.get("position") or 0),
         content_version_id=data.get("content_version_id"),
-        student_payload=data.get("student_payload") or {},
+        student_payload=_student_safe_payload(data.get("student_payload") or {}),
         teacher_payload=data.get("teacher_payload") or {},
     )
     db.session.add(activity)
@@ -274,8 +330,91 @@ def create_activity(lesson_id):
         "id": activity.id, "lesson_id": activity.lesson_id,
         "activity_type": activity.activity_type, "title": activity.title,
         "position": activity.position, "content_version_id": activity.content_version_id,
-        "student_payload": activity.student_payload,
+        "student_payload": activity.student_payload, "status": activity.status,
     }), 201
+
+
+@education_content_api.post("/lessons/<lesson_id>/materials")
+@jwt_required()
+def upload_material(lesson_id):
+    user_id = get_jwt_identity()
+    lesson = _lesson_for_member(lesson_id, user_id, "teacher")
+    if not lesson:
+        return jsonify({"error": "lesson not found"}), 404
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"error": "file is required"}), 400
+    filename = secure_filename(uploaded.filename)
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if extension not in MATERIAL_EXTENSIONS:
+        return jsonify({
+            "error": "unsupported material type",
+            "supported_extensions": sorted(MATERIAL_EXTENSIONS),
+        }), 400
+    content = uploaded.read()
+    max_bytes = int(current_app.config.get("EDUCATION_MAX_UPLOAD_BYTES", 25 * 1024 * 1024))
+    if not content or len(content) > max_bytes:
+        return jsonify({"error": "material is empty or exceeds the upload limit"}), 400
+    folder = os.path.abspath(
+        current_app.config.get(
+            "EDUCATION_UPLOAD_FOLDER",
+            os.path.join(current_app.instance_path, "education_uploads"),
+        )
+    )
+    os.makedirs(folder, exist_ok=True)
+    stored_name = f"{uuid.uuid4().hex}.{extension}"
+    storage_path = os.path.join(folder, stored_name)
+    with open(storage_path, "wb") as handle:
+        handle.write(content)
+    material = EducationMaterial(
+        course_id=lesson.course_id,
+        lesson_id=lesson.id,
+        owner_user_id=user_id,
+        title=str(request.form.get("title") or uploaded.filename).strip(),
+        original_filename=uploaded.filename,
+        extension=extension,
+        mime_type=uploaded.mimetype or "application/octet-stream",
+        storage_path=storage_path,
+        file_size=len(content),
+    )
+    db.session.add(material)
+    db.session.commit()
+    return jsonify(_material_dict(material)), 201
+
+
+@education_content_api.get("/lessons/<lesson_id>/materials")
+@jwt_required()
+def list_materials(lesson_id):
+    user_id = get_jwt_identity()
+    lesson = _lesson_for_member(lesson_id, user_id)
+    if not lesson:
+        return jsonify({"error": "lesson not found"}), 404
+    membership = _membership(lesson.course_id, user_id)
+    query = EducationMaterial.query.filter_by(lesson_id=lesson.id)
+    if membership.role != "teacher":
+        query = query.filter_by(status="published")
+    rows = query.order_by(EducationMaterial.created_at.asc()).all()
+    return jsonify({"items": [_material_dict(row) for row in rows]})
+
+
+@education_content_api.get("/materials/<material_id>/download")
+@jwt_required()
+def download_material(material_id):
+    user_id = get_jwt_identity()
+    material = EducationMaterial.query.filter_by(id=material_id).first()
+    if not material:
+        return jsonify({"error": "material not found"}), 404
+    membership = _membership(material.course_id, user_id)
+    if not membership or (membership.role != "teacher" and material.status != "published"):
+        return jsonify({"error": "material not found"}), 404
+    if not os.path.isfile(material.storage_path):
+        return jsonify({"error": "material file is unavailable"}), 404
+    return send_file(
+        material.storage_path,
+        mimetype=material.mime_type,
+        as_attachment=True,
+        download_name=material.original_filename,
+    )
 
 
 def _create_version(content, data, user_id):
@@ -480,8 +619,6 @@ def publish_lesson(lesson_id):
     activities = LessonActivity.query.filter_by(
         lesson_id=lesson.id, status="draft"
     ).order_by(LessonActivity.position.asc()).all()
-    if not activities:
-        return jsonify({"error": "lesson requires at least one activity"}), 400
     plan = (
         db.session.query(EducationContentVersion)
         .join(EducationContent, EducationContent.id == EducationContentVersion.content_id)
@@ -493,6 +630,31 @@ def publish_lesson(lesson_id):
     )
     if not plan:
         return jsonify({"error": "lesson requires a current lesson plan"}), 400
+    student_contents = (
+        db.session.query(EducationContent, EducationContentVersion)
+        .join(
+            EducationContentVersion,
+            EducationContent.current_version_id == EducationContentVersion.id,
+        )
+        .filter(
+            EducationContent.lesson_id == lesson.id,
+            EducationContent.kind != "lesson_plan",
+            EducationContent.visibility_scope == "course_students",
+        )
+        .order_by(EducationContent.created_at.asc())
+        .all()
+    )
+    uploaded_materials = EducationMaterial.query.filter(
+        EducationMaterial.lesson_id == lesson.id,
+        EducationMaterial.status.in_(("draft", "published")),
+    ).order_by(EducationMaterial.created_at.asc()).all()
+    if not activities and not student_contents and not uploaded_materials:
+        return jsonify({
+            "error": (
+                "lesson requires student courseware, an uploaded material, "
+                "or at least one learning activity"
+            )
+        }), 400
     student_activities = [
         {
             "id": row.id, "type": row.activity_type, "title": row.title,
@@ -520,6 +682,20 @@ def publish_lesson(lesson_id):
                 "learning_domain": lesson.learning_domain,
             },
             "activities": student_activities,
+            "materials": [
+                {
+                    "content_id": content.id,
+                    "version_id": version.id,
+                    "kind": content.kind,
+                    "schema_name": version.schema_name,
+                    "source_json": version.source_json,
+                    "rendered_html": version.rendered_html,
+                }
+                for content, version in student_contents
+            ] + [
+                {"kind": "file", **_material_dict(material)}
+                for material in uploaded_materials
+            ],
         },
         teacher_evaluation_manifest={"activities": teacher_activities},
         idempotency_key=key, published_by=user_id,
@@ -530,6 +706,8 @@ def publish_lesson(lesson_id):
     lesson.current_published_version_id = publication.id
     for row in activities:
         row.status = "published"
+    for material in uploaded_materials:
+        material.status = "published"
     _event(lesson.course_id, user_id, "LessonPublished", "lesson", lesson.id)
     db.session.commit()
     return jsonify(_publication_dict(publication, include_teacher=True)), 201

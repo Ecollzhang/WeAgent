@@ -4,11 +4,11 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from .extensions import db
-from .models import Course, CourseInvitation, CourseMembership
+from .models import Course, CourseInvitation, CourseMemberProfile, CourseMembership
 
 
 education_api = Blueprint("education_api", __name__)
@@ -125,7 +125,67 @@ def list_members(course_id):
         course_id=course_id,
         status="active",
     ).order_by(CourseMembership.created_at.asc()).all()
-    return jsonify({"items": [member.to_dict() for member in members]})
+    local_profiles = {
+        profile.user_id: profile
+        for profile in CourseMemberProfile.query.filter_by(course_id=course_id).all()
+    }
+    profiles = {}
+    try:
+        profiles = current_app.extensions["education_runtime_client"].get_user_profiles(
+            authorization=request.headers.get("Authorization", ""),
+            user_ids=[member.user_id for member in members],
+        )
+    except Exception:
+        # Account projection is helpful but must not make course membership unavailable.
+        profiles = {}
+    items = []
+    for member in members:
+        item = member.to_dict()
+        profile = profiles.get(member.user_id) or {
+            "id": member.user_id,
+            "username": member.user_id,
+            "avatar_url": "",
+        }
+        item["profile"] = profile
+        local_profile = local_profiles.get(member.user_id)
+        item["display_name"] = (
+            local_profile.display_name
+            if local_profile
+            else profile.get("username") or member.user_id
+        )
+        items.append(item)
+    return jsonify({"items": items})
+
+
+@education_api.put("/courses/<course_id>/me/profile")
+@jwt_required()
+def update_my_course_profile(course_id):
+    user_id = get_jwt_identity()
+    if not active_membership(course_id, user_id):
+        return jsonify({"error": "course not found"}), 404
+    display_name = str(
+        (request.get_json(silent=True) or {}).get("display_name") or ""
+    ).strip()
+    if not 1 <= len(display_name) <= 80:
+        return jsonify({"error": "display_name must contain 1 to 80 characters"}), 400
+    profile = CourseMemberProfile.query.filter_by(
+        course_id=course_id, user_id=user_id
+    ).first()
+    if profile:
+        profile.display_name = display_name
+    else:
+        profile = CourseMemberProfile(
+            course_id=course_id,
+            user_id=user_id,
+            display_name=display_name,
+        )
+        db.session.add(profile)
+    db.session.commit()
+    return jsonify({
+        "course_id": course_id,
+        "user_id": user_id,
+        "display_name": profile.display_name,
+    })
 
 
 @education_api.post("/courses/<course_id>/invitations")

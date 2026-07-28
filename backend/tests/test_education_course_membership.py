@@ -118,6 +118,77 @@ def test_invitation_joins_two_students_idempotently_and_hides_token_hash(educati
     }
 
 
+def test_member_list_projects_editable_core_account_names(education_app):
+    class FakeRuntime:
+        def get_user_profiles(self, *, authorization, user_ids):
+            names = {"teacher-1": "王老师", "student-a": "小林"}
+            return {
+                user_id: {
+                    "id": user_id,
+                    "username": names.get(user_id, user_id),
+                    "avatar_url": "",
+                }
+                for user_id in user_ids
+            }
+
+    education_app.extensions["education_runtime_client"] = FakeRuntime()
+    client = education_app.test_client()
+    teacher = auth_headers(education_app, "teacher-1")
+    student = auth_headers(education_app, "student-a")
+    course = create_course(client, teacher).get_json()
+    invitation = client.post(
+        f"/api/edu/courses/{course['id']}/invitations",
+        headers=teacher,
+        json={},
+    ).get_json()
+    client.post(
+        "/api/edu/invitations/accept",
+        headers=student,
+        json={"token": invitation["token"]},
+    )
+
+    response = client.get(
+        f"/api/edu/courses/{course['id']}/members",
+        headers=teacher,
+    )
+
+    members = response.get_json()["items"]
+    assert [member["display_name"] for member in members] == ["王老师", "小林"]
+    assert members[0]["profile"]["username"] == "王老师"
+
+
+def test_teacher_and_student_can_set_course_display_name_without_changing_login(education_app):
+    client = education_app.test_client()
+    teacher = auth_headers(education_app, "teacher-1")
+    student = auth_headers(education_app, "student-a")
+    course = create_course(client, teacher).get_json()
+    invitation = client.post(
+        f"/api/edu/courses/{course['id']}/invitations",
+        headers=teacher,
+        json={},
+    ).get_json()
+    client.post(
+        "/api/edu/invitations/accept",
+        headers=student,
+        json={"token": invitation["token"]},
+    )
+
+    renamed = client.put(
+        f"/api/edu/courses/{course['id']}/me/profile",
+        headers=student,
+        json={"display_name": "林同学"},
+    )
+
+    assert renamed.status_code == 200
+    members = client.get(
+        f"/api/edu/courses/{course['id']}/members",
+        headers=teacher,
+    ).get_json()["items"]
+    student_row = next(row for row in members if row["user_id"] == "student-a")
+    assert student_row["display_name"] == "林同学"
+    assert student_row["user_id"] == "student-a"
+
+
 def test_course_authorization_uses_membership_not_client_sub_role(education_app):
     client = education_app.test_client()
     teacher = auth_headers(education_app, "teacher-1")
