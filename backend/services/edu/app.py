@@ -41,13 +41,31 @@ def create_edu_app(config_object=Config):
         from .routes import education_api
         from .workflow_routes import education_workflow_api
         from .content_routes import education_content_api
+        from .asset_routes import education_asset_api
+        from .knowledge_routes import education_knowledge_api
     except ImportError:
         from services.edu.routes import education_api
         from services.edu.workflow_routes import education_workflow_api
         from services.edu.content_routes import education_content_api
+        from services.edu.asset_routes import education_asset_api
+        from services.edu.knowledge_routes import education_knowledge_api
     app.register_blueprint(education_api, url_prefix="/api/edu")
     app.register_blueprint(education_workflow_api, url_prefix="/api/edu")
     app.register_blueprint(education_content_api, url_prefix="/api/edu")
+    app.register_blueprint(education_asset_api, url_prefix="/api/edu")
+    app.register_blueprint(education_knowledge_api, url_prefix="/api/edu")
+
+    @app.cli.command("migrate-education")
+    def migrate_education_command():
+        from .schema_maintenance import migrate_existing_education_schema
+
+        db.create_all()
+        changes = migrate_existing_education_schema()
+        print(
+            "Education schema is current"
+            if not changes
+            else f"Applied Education schema changes: {', '.join(changes)}"
+        )
     return app
 
 
@@ -57,6 +75,11 @@ app = create_edu_app()
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
+        try:
+            from .schema_maintenance import migrate_existing_education_schema
+        except ImportError:
+            from services.edu.schema_maintenance import migrate_existing_education_schema
+        migrate_existing_education_schema()
     service = app.extensions["domain_service"]
     print(f"[WeAgent] Education service listening on http://127.0.0.1:{service.port}")
     service.run(debug=True)

@@ -125,7 +125,13 @@ class EducationMaterial(TimestampMixin, db.Model):
     original_filename = db.Column(db.String(255), nullable=False)
     extension = db.Column(db.String(20), nullable=False)
     mime_type = db.Column(db.String(120), nullable=False)
-    storage_path = db.Column(db.String(1000), nullable=False)
+    storage_path = db.Column(db.String(1000), nullable=True)
+    asset_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_assets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     file_size = db.Column(db.Integer, nullable=False)
     status = db.Column(db.String(20), nullable=False, default="draft")
 

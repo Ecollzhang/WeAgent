@@ -3,13 +3,19 @@
 import hashlib
 import json
 import os
-import uuid
 from datetime import datetime
+from io import BytesIO
 
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from werkzeug.utils import secure_filename
 
+from .asset_models import EducationAsset
+from .asset_service import (
+    AssetServiceError,
+    create_database_asset,
+    validate_asset_access,
+)
 from .content_models import (
     Assignment,
     CourseUnit,
@@ -161,6 +167,7 @@ def _material_dict(material):
         "extension": material.extension,
         "mime_type": material.mime_type,
         "file_size": material.file_size,
+        "asset_id": material.asset_id,
         "status": material.status,
         "download_url": f"/api/edu/materials/{material.id}/download",
         "created_at": material.created_at.isoformat(),
@@ -355,17 +362,23 @@ def upload_material(lesson_id):
     max_bytes = int(current_app.config.get("EDUCATION_MAX_UPLOAD_BYTES", 25 * 1024 * 1024))
     if not content or len(content) > max_bytes:
         return jsonify({"error": "material is empty or exceeds the upload limit"}), 400
-    folder = os.path.abspath(
-        current_app.config.get(
-            "EDUCATION_UPLOAD_FOLDER",
-            os.path.join(current_app.instance_path, "education_uploads"),
+    try:
+        asset = create_database_asset(
+            course_id=lesson.course_id,
+            lesson_id=lesson.id,
+            actor_user_id=user_id,
+            content=content,
+            original_filename=uploaded.filename,
+            media_type=uploaded.mimetype or "application/octet-stream",
+            title=str(request.form.get("title") or uploaded.filename).strip(),
+            purpose="lesson_material",
+            visibility_scope="course_teacher",
         )
-    )
-    os.makedirs(folder, exist_ok=True)
-    stored_name = f"{uuid.uuid4().hex}.{extension}"
-    storage_path = os.path.join(folder, stored_name)
-    with open(storage_path, "wb") as handle:
-        handle.write(content)
+    except AssetServiceError as error:
+        db.session.rollback()
+        return jsonify(
+            {"error": error.message, "error_code": error.error_code}
+        ), error.status_code
     material = EducationMaterial(
         course_id=lesson.course_id,
         lesson_id=lesson.id,
@@ -374,7 +387,10 @@ def upload_material(lesson_id):
         original_filename=uploaded.filename,
         extension=extension,
         mime_type=uploaded.mimetype or "application/octet-stream",
-        storage_path=storage_path,
+        # Empty string keeps inserts compatible with pre-migration schemas whose
+        # legacy path column was NOT NULL; ``asset_id`` is authoritative.
+        storage_path="",
+        asset_id=asset.id,
         file_size=len(content),
     )
     db.session.add(material)
@@ -407,7 +423,21 @@ def download_material(material_id):
     membership = _membership(material.course_id, user_id)
     if not membership or (membership.role != "teacher" and material.status != "published"):
         return jsonify({"error": "material not found"}), 404
-    if not os.path.isfile(material.storage_path):
+    if material.asset_id:
+        asset = EducationAsset.query.filter_by(id=material.asset_id).first()
+        if not asset:
+            return jsonify({"error": "material file is unavailable"}), 404
+        try:
+            validate_asset_access(asset, user_id)
+        except AssetServiceError:
+            return jsonify({"error": "material not found"}), 404
+        return send_file(
+            BytesIO(asset.blob_bytes),
+            mimetype=asset.media_type,
+            as_attachment=True,
+            download_name=asset.original_filename,
+        )
+    if not material.storage_path or not os.path.isfile(material.storage_path):
         return jsonify({"error": "material file is unavailable"}), 404
     return send_file(
         material.storage_path,
@@ -708,6 +738,10 @@ def publish_lesson(lesson_id):
         row.status = "published"
     for material in uploaded_materials:
         material.status = "published"
+        if material.asset_id:
+            EducationAsset.query.filter_by(id=material.asset_id).update(
+                {"visibility_scope": "course_published"}
+            )
     _event(lesson.course_id, user_id, "LessonPublished", "lesson", lesson.id)
     db.session.commit()
     return jsonify(_publication_dict(publication, include_teacher=True)), 201
