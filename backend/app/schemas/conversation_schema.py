@@ -8,6 +8,7 @@ class CreateConversationSchema(Schema):
     participant_ids = fields.List(fields.String(), required=True)
     workspace_id = fields.String(required=False, allow_none=True)
     kb_domain = fields.String(required=False, allow_none=True, validate=validate.OneOf(['', 'all', 'rd', 'edu', 'office']))
+    agent_configs = fields.Raw(required=False, load_default=dict)
 
 
 class ConversationResponseSchema(Schema):

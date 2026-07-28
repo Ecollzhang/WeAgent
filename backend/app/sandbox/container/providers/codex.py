@@ -55,7 +55,6 @@ class CodexRunner(ProviderRunner):
                 "--json",
                 "--skip-git-repo-check",
                 "--dangerously-bypass-approvals-and-sandbox",
-                full_message,
             ]
         else:
             cmd = [
@@ -68,9 +67,31 @@ class CodexRunner(ProviderRunner):
                 "workspace-write",
                 "--skip-git-repo-check",
                 "--dangerously-bypass-approvals-and-sandbox",
-                full_message,
             ]
+        cmd.extend(self._compatibility_feature_args())
+        cmd.append(full_message)
         return cmd, use_resume
+
+    def _compatibility_feature_args(self) -> list[str]:
+        """Disable redundant Codex-native tools rejected by DeepSeek."""
+        base_url = self._codex_base_url()
+        if self._provider_name(base_url) != "deepseek":
+            return []
+        # WeAgent provides its own audited XML tool loop inside the sandbox.
+        features = (
+            "unified_exec",
+            "shell_tool",
+            "apps",
+            "browser_use",
+            "browser_use_external",
+            "computer_use",
+            "goals",
+            "image_generation",
+            "tool_suggest",
+            "multi_agent",
+            "workspace_dependencies",
+        )
+        return [item for feature in features for item in ("--disable", feature)]
 
     def environment(self) -> dict:
         runtime = self.runtime

@@ -74,6 +74,17 @@ def update_profile():
     return success_response(result, message='Profile updated')
 
 
+@auth_bp.route('/profiles', methods=['POST'])
+@jwt_required()
+def public_profiles():
+    """Resolve display names for a bounded set of account ids."""
+    data = request.json or {}
+    user_ids = data.get('user_ids')
+    if not isinstance(user_ids, list) or len(user_ids) > 200:
+        return error_response('user_ids must be a list with at most 200 items', code=400)
+    return success_response({'items': auth_service.get_public_profiles(user_ids)})
+
+
 @auth_bp.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():

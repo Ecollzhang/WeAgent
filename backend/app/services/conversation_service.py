@@ -147,7 +147,8 @@ class ConversationService:
         data['participants_info'] = _enrich_participants(conversation.participants)
         return data
 
-    def create_conversation(self, title, conv_type, owner_id, participant_ids, workspace_id=None, kb_domain=''):
+    def create_conversation(self, title, conv_type, owner_id, participant_ids,
+                            workspace_id=None, kb_domain='', agent_configs=None):
         """Create a new conversation with participants, optionally in a workspace."""
         conversation = conversation_repo.create(
             title=title,
@@ -200,7 +201,13 @@ class ConversationService:
             if p.participant_type == 'agent'
         ]
         if agent_participants:
-            error = self._create_agent_sandbox(conversation, agent_participants, owner_id, kb_domain=kb_domain)
+            error = self._create_agent_sandbox(
+                conversation,
+                agent_participants,
+                owner_id,
+                kb_domain=kb_domain,
+                agent_configs=agent_configs,
+            )
             if error:
                 conversation.delete()
                 return None, error
@@ -229,7 +236,8 @@ class ConversationService:
     def _create_single_agent_sandbox(self, conversation, participant, user_id, kb_domain=''):
         return self._create_agent_sandbox(conversation, [participant], user_id, kb_domain=kb_domain)
 
-    def _create_agent_sandbox(self, conversation, participants, user_id, kb_domain=''):
+    def _create_agent_sandbox(self, conversation, participants, user_id, kb_domain='',
+                              agent_configs=None):
         env_vars, error = settings_service.get_container_env_vars(user_id)
         if error:
             return error
@@ -268,6 +276,8 @@ class ConversationService:
             except Exception:
                 pass
 
+        allowed_adapters = {'claude', 'codex', 'opencode'}
+        config_map = agent_configs if isinstance(agent_configs, dict) else {}
         agents_config = []
         for participant in participants:
             agent = Agent.query.get(participant.participant_id)
@@ -305,12 +315,22 @@ class ConversationService:
 - 如写入了可预览 HTML，请明确提到入口文件 index.html。
 """)
 
+            override = config_map.get(str(agent.id))
+            override_adapter = (
+                str(override.get('adapter_name') or '').strip()
+                if isinstance(override, dict) else ''
+            )
+            adapter_name = (
+                override_adapter
+                if override_adapter in allowed_adapters
+                else (agent.adapter_name or 'claude')
+            )
             agents_config.append({
                 'agent_id': agent.id,
                 'role': agent.name,
                 'workspace_name': workspace_name,
                 'system_prompt': '\n'.join(part for part in system_prompt_parts if part),
-                'adapter_name': agent.adapter_name or 'claude',
+                'adapter_name': adapter_name,
             })
 
         try:

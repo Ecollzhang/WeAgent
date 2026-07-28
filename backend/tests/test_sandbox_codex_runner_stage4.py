@@ -34,6 +34,21 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn("--dangerously-bypass-approvals-and-sandbox", command)
         self.assertNotIn("--ephemeral", command)
 
+    def test_deepseek_command_disables_incompatible_native_codex_tools(self):
+        runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
+
+        with patch.dict("os.environ", {
+            "DEEPSEEK_BASE_URL": "https://api.deepseek.com/anthropic",
+        }, clear=True), patch("app.sandbox.container.providers.codex.os.path.exists", return_value=False):
+            command, _ = runtime.provider_runner.build_command("hello")
+
+        disabled = [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--disable"]
+        self.assertIn("shell_tool", disabled)
+        self.assertIn("unified_exec", disabled)
+        self.assertIn("apps", disabled)
+        self.assertIn("computer_use", disabled)
+        self.assertIn("multi_agent", disabled)
+
     def test_resume_command_uses_codex_exec_resume_last(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
 

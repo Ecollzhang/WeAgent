@@ -4,6 +4,8 @@ backend/.env
 frontend/.env
 frontend/.env.local
 frontend/.env.*.local
+backend/services/edu/data/uploads/
+backend/instance/
 
 # ===== Python 依赖 =====
 backend/venv/

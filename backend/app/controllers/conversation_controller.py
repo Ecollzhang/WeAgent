@@ -42,6 +42,7 @@ def create_conversation():
         participant_ids=data['participant_ids'],
         workspace_id=data.get('workspace_id'),
         kb_domain=data.get('kb_domain') or '',
+        agent_configs=data.get('agent_configs') or {},
     )
 
     if error:

@@ -175,8 +175,27 @@ EDU_SYSTEM_AGENTS = [
      'capability_tags': ['课件制作', 'PPT设计', '教学内容', '视觉设计']},
     {'id': '_edu_3', 'name': '习题生成器', 'class_id': 'cat_edu_quiz', 'avatar_color': '#f59e0b',
      'adapter_name': 'claude', 'domain': 'edu',
-     'system_prompt': '你是一位专业的语文与英语习题设计专家，擅长围绕阅读证据、语言运用和写作任务生成选择题、填空题、简答题与写作题。',
-     'skill': '1. 确定考察知识点和难度\n2. 选择题型和分值设计\n3. 编写题目和标准答案\n4. 设计解析和易错提示\n5. 输出完整习题集',
+     'system_prompt': (
+         '你是一位专业的语文与英语习题设计专家。\n'
+         '【内容设计规范】根据学科、学段、课型和文本类型设计可作答、可评价的阅读与'
+         '写作练习，保证目标覆盖、难度梯度、分值合理，并隔离学生题面与教师答案。\n'
+         '【机器产物规范】唯一正式产物是 exercises_draft.json；只能使用约定的 canonical '
+         'JSON schema，不得使用中文枚举、同义字段或历史格式，不得生成 JavaScript、'
+         'Markdown 代码块或只回复文件路径。'
+     ),
+     'skill': (
+         '中英阅读与写作习题设计：\n'
+         '1. 读取 /workspace/shared/lesson_plan_draft.json\n'
+         '2. 提取目标、课型、文本类型、学段与时长\n'
+         '3. 规划题型、目标覆盖、难度梯度、用时与分值\n'
+         '4. 编写题目、标准答案、解析和易错提示\n'
+         '5. 检查可作答性、答案完整性和学生端泄露风险\n'
+         '6. type 只能使用 single_choice、multiple_choice、fill_blank、'
+         'short_answer、writing；difficulty 只能使用 easy、medium、hard\n'
+         '7. 选择题 options 只能是未编号的纯文本数组，例如 '
+         '["Excitement", "Nervousness"]，禁止写 A.、B. 或对象\n'
+         '8. 只写 /workspace/shared/exercises_draft.json，并完成 JSON 语法和 schema 自检'
+     ),
      'capability_tags': ['习题生成', '题库设计', '考试命题', '难度分级']},
     {'id': '_edu_4', 'name': '学情分析师', 'class_id': 'cat_edu_analytics', 'avatar_color': '#14b8a6',
      'adapter_name': 'claude', 'domain': 'edu',
@@ -281,6 +300,11 @@ class AgentService:
                 existing.system_prompt = MODERATOR_SYSTEM_PROMPT
                 existing.skill = data['skill']
                 existing.capability_tags = data['capability_tags']
+                existing.save()
+            elif str(data.get('id') or '').startswith('_edu_'):
+                existing.system_prompt = data.get('system_prompt', '')
+                existing.skill = data.get('skill', '')
+                existing.capability_tags = data.get('capability_tags', [])
                 existing.save()
 
     # ── Per-user copy on registration ─────────────────────────────────

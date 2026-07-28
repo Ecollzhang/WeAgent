@@ -69,6 +69,26 @@ class AuthService:
             return None, 'User not found'
         return user.to_dict(), None
 
+    def get_public_profiles(self, user_ids):
+        """Return the small, non-sensitive account projection used by domains."""
+        from app.models.user import User
+
+        ids = list(dict.fromkeys(str(value) for value in user_ids if value))
+        if not ids:
+            return []
+        users = User.query.filter(User.id.in_(ids)).all()
+        by_id = {user.id: user for user in users}
+        return [
+            {
+                'id': user.id,
+                'username': user.username,
+                'avatar_url': user.avatar_url or '',
+            }
+            for user_id in ids
+            for user in [by_id.get(user_id)]
+            if user is not None
+        ]
+
     def update_profile(self, user_id, **kwargs):
         """Update user profile."""
         user = user_repo.get_by_id(user_id)
