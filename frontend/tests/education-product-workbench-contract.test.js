@@ -115,6 +115,18 @@ contains(
   '课程知识中心',
   'teaching space must link to the course Knowledge Center'
 )
+for (const fragment of [
+  'data-testid="agent-roster-import"',
+  "product_code: 'roster_import'",
+  'ProductAgentRunPanel',
+  'parseRoster',
+]) {
+  contains(
+    'src/views/education/CourseSpace.vue',
+    fragment,
+    'teacher roster management must expose the scoped Agent import flow'
+  )
+}
 contains(
   'src/store/modules/education.js',
   'activeCourse',

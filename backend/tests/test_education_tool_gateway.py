@@ -285,6 +285,63 @@ def test_idempotency_key_reuse_with_different_input_is_rejected(app):
     assert changed.get_json()["error_code"] == "idempotency_conflict"
 
 
+def test_roster_import_supports_partial_rows_and_atomic_rollback(app):
+    from services.edu.models import CourseMembership
+
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        ["edu.course.members.import"],
+    )
+    partial = invoke(
+        client,
+        grant["token"],
+        "edu.course.members.import",
+        {
+            "members": [
+                {"user_id": "new-student", "display_name": "新同学"},
+                {"user_id": "teacher", "display_name": "不能降级的教师"},
+            ],
+            "atomic": False,
+        },
+        "partial-roster",
+    )
+    atomic = invoke(
+        client,
+        grant["token"],
+        "edu.course.members.import",
+        {
+            "members": [
+                {"user_id": "atomic-student", "display_name": "原子同学"},
+                {"user_id": "teacher", "display_name": "不能降级的教师"},
+            ],
+            "atomic": True,
+        },
+        "atomic-roster",
+    )
+
+    assert partial.status_code == 200
+    partial_result = partial.get_json()["result"]
+    assert partial_result["imported_count"] == 1
+    assert partial_result["failed_count"] == 1
+    assert partial_result["failures"][0]["error_code"] == "member_role_conflict"
+    assert atomic.status_code == 409
+    assert atomic.get_json()["error_code"] == "member_role_conflict"
+    with app.app_context():
+        assert CourseMembership.query.filter_by(
+            course_id=course["id"],
+            user_id="new-student",
+            status="active",
+        ).count() == 1
+        assert CourseMembership.query.filter_by(
+            course_id=course["id"],
+            user_id="atomic-student",
+        ).count() == 0
+
+
 def test_student_grant_creates_real_private_mock_exam_and_weakness_snapshot(app):
     client = app.test_client()
     teacher, student, course = setup_course(client, app)

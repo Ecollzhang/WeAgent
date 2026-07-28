@@ -208,7 +208,8 @@ TOOL_CATALOG = {
                         "required": ["user_id"],
                         "additionalProperties": False,
                     },
-                }
+                },
+                "atomic": {"type": "boolean"},
             },
             ["members"],
         ),
@@ -737,40 +738,75 @@ def _import_members(grant, arguments):
             400,
             "invalid_member_list",
         )
+    atomic = arguments.get("atomic") is True
     seen = set()
-    rows = []
+    prepared = []
+    failures = []
+
+    def reject(index, user_id, message, error_code, status_code=400):
+        failure = {
+            "row_index": index,
+            "user_id": user_id or None,
+            "error": message,
+            "error_code": error_code,
+            "status_code": status_code,
+        }
+        failures.append(failure)
+        return failure
+
     for index, item in enumerate(members):
         if not isinstance(item, dict):
-            raise ToolGatewayError(
+            reject(
+                index,
+                None,
                 f"members[{index}] must be an object",
-                400,
                 "invalid_member_row",
             )
+            continue
         user_id = str(item.get("user_id") or "").strip()
         display_name = str(item.get("display_name") or "").strip()
         if not user_id or len(user_id) > 100 or user_id in seen:
-            raise ToolGatewayError(
+            reject(
+                index,
+                user_id,
                 f"members[{index}].user_id is invalid or duplicated",
-                400,
                 "invalid_member_row",
             )
+            continue
         if display_name and len(display_name) > 80:
-            raise ToolGatewayError(
+            reject(
+                index,
+                user_id,
                 f"members[{index}].display_name is too long",
-                400,
                 "invalid_member_row",
             )
+            continue
         seen.add(user_id)
         membership = CourseMembership.query.filter_by(
             course_id=grant.course_id,
             user_id=user_id,
         ).first()
         if membership and membership.role == TEACHER:
-            raise ToolGatewayError(
+            reject(
+                index,
+                user_id,
                 f"members[{index}] is already a teacher",
-                409,
                 "member_role_conflict",
+                409,
             )
+            continue
+        prepared.append((index, user_id, display_name, membership))
+
+    if atomic and failures:
+        first = failures[0]
+        raise ToolGatewayError(
+            first["error"],
+            first["status_code"],
+            first["error_code"],
+        )
+
+    rows = []
+    for _index, user_id, display_name, membership in prepared:
         if membership:
             membership.role = STUDENT
             membership.status = "active"
@@ -811,7 +847,13 @@ def _import_members(grant, arguments):
             }
         )
     db.session.flush()
-    return {"items": rows, "imported_count": len(rows)}
+    return {
+        "items": rows,
+        "failures": failures,
+        "imported_count": len(rows),
+        "failed_count": len(failures),
+        "atomic": atomic,
+    }
 
 
 def _lesson_dict(lesson):

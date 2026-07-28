@@ -10,6 +10,16 @@ import json
 
 
 PRODUCT_AGENT_WORKFLOWS = {
+    "roster_import": {
+        "name": "Agent 名单导入",
+        "role": "teacher",
+        "requires_lesson": False,
+        "agent_roles": ["course_designer", "teaching_reviewer"],
+        "tools": [
+            "edu.course.members.list",
+            "edu.course.members.import",
+        ],
+    },
     "courseware": {
         "name": "Agent 课件制作",
         "role": "teacher",
@@ -160,7 +170,19 @@ def build_product_prompt(product_code, course, options, lesson=None):
     prompt = _base_prompt(course, contract, options, lesson)
     options = _safe_options(options)
 
-    if product_code == "courseware":
+    if product_code == "roster_import":
+        members = options.get("members") or []
+        prompt += (
+            "\n【课程设计师】先读取 edu.course.members.list，检查待导入账号是否与"
+            "现有教师或学生重复。待导入结构化名单如下："
+            f"{json.dumps(members, ensure_ascii=False, separators=(',', ':'))}。"
+            "只按该名单调用 edu.course.members.import，参数 members 原样使用；"
+            "idempotency_key=product-roster-import-v1。不得创建登录账户、猜测账号"
+            "或改变已有教师身份。"
+            "\n【教学审校员】核对工具返回的逐行结果，报告成功数与失败行；"
+            "不得把账号标识误当作姓名，也不得重复调用产生冲突。"
+        )
+    elif product_code == "courseware":
         prompt += (
             "\n【课程设计师】先读取 edu.course.context.get，结合课时分类和教师要求"
             "形成课件 brief；不得改写课时教学目标的语义。"

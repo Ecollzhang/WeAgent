@@ -643,7 +643,7 @@ def start_workflow_run():
     return jsonify(refreshed.to_dict()), 202
 
 
-def _product_options(payload):
+def _product_options(payload, product_code=None):
     options = payload.get("options") or {}
     if not isinstance(options, dict):
         raise ValueError("options must be an object")
@@ -663,6 +663,28 @@ def _product_options(payload):
         if not 5 <= duration <= 180:
             raise ValueError("duration_minutes must be between 5 and 180")
         normalized["duration_minutes"] = duration
+    if product_code == "roster_import":
+        members = normalized.get("members")
+        if not isinstance(members, list) or not 1 <= len(members) <= 100:
+            raise ValueError("members must contain 1 to 100 rows")
+        normalized_members = []
+        seen = set()
+        for index, row in enumerate(members):
+            if not isinstance(row, dict):
+                raise ValueError(f"members[{index}] must be an object")
+            user_id = str(row.get("user_id") or "").strip()
+            display_name = str(row.get("display_name") or "").strip()
+            if not user_id or len(user_id) > 100 or user_id in seen:
+                raise ValueError(
+                    f"members[{index}].user_id is invalid or duplicated"
+                )
+            if len(display_name) > 80:
+                raise ValueError(f"members[{index}].display_name is too long")
+            seen.add(user_id)
+            normalized_members.append(
+                {"user_id": user_id, "display_name": display_name}
+            )
+        normalized["members"] = normalized_members
     return normalized
 
 
@@ -691,7 +713,7 @@ def start_product_agent_run():
         if not lesson:
             return jsonify({"error": "lesson not found"}), 404
     try:
-        options = _product_options(payload)
+        options = _product_options(payload, product_code)
     except (TypeError, ValueError) as error:
         return jsonify({"error": str(error)}), 400
 

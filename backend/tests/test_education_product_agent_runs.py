@@ -216,6 +216,82 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     assert "不得自动发布" in started["prompt"]
 
 
+def test_teacher_starts_agent_roster_import_with_structured_member_rows(
+    education_app,
+):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, _, teacher, student, _ = seed_course(education_app)
+    members = [
+        {"user_id": "student-three", "display_name": "林同学"},
+        {"user_id": "student-four", "display_name": "周同学"},
+    ]
+
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "product_code": "roster_import",
+            "options": {"members": members},
+        },
+    )
+    forbidden = client.post(
+        "/api/edu/product-agent-runs",
+        headers=student,
+        json={
+            "course_id": course["id"],
+            "product_code": "roster_import",
+            "options": {"members": members},
+        },
+    )
+    invalid = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "product_code": "roster_import",
+            "options": {"members": []},
+        },
+    )
+
+    assert created.status_code == 202
+    assert forbidden.status_code == 403
+    assert invalid.status_code == 400
+    run = created.get_json()
+    assert [node["agent_role"] for node in run["nodes"]] == [
+        "course_designer",
+        "teaching_reviewer",
+    ]
+    started = runtime.started[0]
+    assert "edu.course.members.list" in started["prompt"]
+    assert "edu.course.members.import" in started["prompt"]
+    assert "student-three" in started["prompt"]
+    assert "林同学" in started["prompt"]
+
+    imported = client.post(
+        "/api/edu/tools/edu.course.members.import/invoke",
+        headers={
+            "X-Education-Run-Grant": started["education_run_grant"],
+        },
+        json={
+            "agent_id": "_edu_1",
+            "idempotency_key": "product-roster-import-v1",
+            "arguments": {"members": members},
+        },
+    )
+    roster = client.get(
+        f"/api/edu/courses/{course['id']}/members",
+        headers=teacher,
+    ).get_json()["items"]
+
+    assert imported.status_code == 200
+    assert {"student-three", "student-four"} <= {
+        member["user_id"] for member in roster
+    }
+
+
 def test_product_run_is_private_to_requesting_member(education_app):
     runtime = FakeProductRuntime()
     education_app.extensions["education_runtime_client"] = runtime

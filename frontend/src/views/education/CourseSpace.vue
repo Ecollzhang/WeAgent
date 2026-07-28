@@ -33,6 +33,14 @@
 
     <el-skeleton v-if="!course" :rows="8" animated />
     <template v-else>
+      <ProductAgentRunPanel
+        v-if="isTeacher"
+        :run="productAgentRun"
+        @terminal="handleRosterAgentTerminal"
+        @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
+        @close="closeAgentRun"
+      />
+
       <nav class="course-tabs" aria-label="课程模块">
         <button
           v-for="tab in visibleTabs"
@@ -114,7 +122,15 @@
             <h2>课程成员</h2>
             <p>显示课程姓名；教师和学生都可用页面顶部“修改课程姓名”单独设置。</p>
           </div>
-          <el-button icon="el-icon-edit" @click="displayNameDialog = true">修改我的姓名</el-button>
+          <div class="member-actions">
+            <el-button
+              data-testid="agent-roster-import"
+              icon="el-icon-cpu"
+              :loading="rosterAgentRunning"
+              @click="rosterDialog = true"
+            >Agent 导入名单</el-button>
+            <el-button icon="el-icon-edit" @click="displayNameDialog = true">修改我的姓名</el-button>
+          </div>
         </div>
         <el-table :data="members" stripe data-testid="course-member-list">
           <el-table-column prop="display_name" label="姓名" min-width="150" />
@@ -223,21 +239,50 @@
         </el-button>
       </template>
     </el-dialog>
+    <el-dialog title="Agent 导入学生名单" :visible.sync="rosterDialog" width="620px">
+      <el-alert
+        title="每行填写一个现有 WeAgent 账号，可在逗号后附课程姓名。Agent 会核对现有成员后调用受控导入工具，不会创建登录账号。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+      <el-input
+        v-model="rosterText"
+        class="roster-editor"
+        type="textarea"
+        :rows="12"
+        maxlength="12000"
+        show-word-limit
+        placeholder="student_001,林同学&#10;student_002,周同学"
+      />
+      <template #footer>
+        <el-button @click="rosterDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="rosterAgentRunning"
+          :disabled="!rosterText.trim()"
+          @click="startRosterAgent"
+        >启动名单 Agent</el-button>
+      </template>
+    </el-dialog>
   </EducationShell>
 </template>
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
+import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 
 export default {
   name: 'EducationCourseSpace',
-  components: { EducationShell },
+  components: { EducationShell, ProductAgentRunPanel },
   data() {
     return {
       activeTab: 'lessons',
       assignmentDialog: false,
       invitationDialog: false,
       displayNameDialog: false,
+      rosterDialog: false,
+      rosterText: '',
       displayName: '',
       invitationToken: '',
       assignmentForm: {
@@ -263,6 +308,10 @@ export default {
     assignments() { return this.$store.getters['education/assignments'] || [] },
     members() { return this.$store.getters['education/members'] || [] },
     analytics() { return this.$store.getters['education/analytics'] || {} },
+    productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    rosterAgentRunning() {
+      return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
+    },
     visibleTabs() { return this.tabs.filter(tab => !tab.teacherOnly || this.isTeacher) },
     flatLessons() {
       return this.units.reduce((all, unit) => {
@@ -280,6 +329,12 @@ export default {
     try {
       await this.$store.dispatch('education/selectCourse', this.courseId)
       await this.$store.dispatch('education/fetchCourseOverview', this.courseId)
+      if (this.isTeacher) {
+        await this.$store.dispatch('education/restoreProductAgentRun', {
+          courseId: this.courseId,
+          productCode: 'roster_import',
+        })
+      }
     } catch (error) {
       this.$message.error('无法访问该课程，请确认你仍是课程成员')
       this.$router.replace('/education')
@@ -359,6 +414,59 @@ export default {
         this.$message.error('作业保存失败')
       }
     },
+    parseRoster() {
+      const rows = this.rosterText
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+      if (!rows.length || rows.length > 100) {
+        throw new Error('名单需包含 1 到 100 行')
+      }
+      const seen = new Set()
+      return rows.map((line, index) => {
+        const parts = line.split(/[\t,，]/)
+        const userId = String(parts.shift() || '').trim()
+        const displayName = parts.join(' ').trim()
+        if (!userId || userId.length > 100 || seen.has(userId)) {
+          throw new Error(`第 ${index + 1} 行账号为空、过长或重复`)
+        }
+        if (displayName.length > 80) {
+          throw new Error(`第 ${index + 1} 行课程姓名超过 80 个字符`)
+        }
+        seen.add(userId)
+        return { user_id: userId, display_name: displayName }
+      })
+    },
+    async startRosterAgent() {
+      let members
+      try {
+        members = this.parseRoster()
+      } catch (error) {
+        this.$message.error(error.message)
+        return
+      }
+      try {
+        await this.$store.dispatch('education/startProductAgentRun', {
+          course_id: this.courseId,
+          product_code: 'roster_import',
+          options: { members },
+        })
+        this.rosterDialog = false
+        this.$message.success('名单导入 Agent 已启动')
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '名单 Agent 启动失败')
+      }
+    },
+    async handleRosterAgentTerminal(run) {
+      if (run.status === 'completed') {
+        await this.$store.dispatch('education/fetchCourseOverview', this.courseId)
+        this.$message.success('Agent 名单导入已完成，成员列表已刷新')
+      }
+    },
+    closeAgentRun() {
+      this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
+    },
     dueLabel(value) {
       return value ? `截止 ${new Date(value).toLocaleString()}` : '长期有效'
     },
@@ -397,6 +505,8 @@ export default {
 .course-tabs button.active { background: #fff; color: #27887e; font-weight: 700; box-shadow: 0 2px 8px rgba(31,41,55,.07); }
 .panel { min-height: 350px; }
 .section-heading { display: flex; justify-content: space-between; margin: 4px 0 15px; }
+.member-actions { display: flex; gap: 8px; }
+.roster-editor { margin-top: 14px; }
 .section-heading h2 { margin: 0; color: #243143; font-size: 18px; }
 .section-heading p { margin: 5px 0 0; color: #768396; font-size: 12px; }
 .lesson-list { border: 1px solid #e4eaf0; border-radius: 11px; overflow: hidden; }

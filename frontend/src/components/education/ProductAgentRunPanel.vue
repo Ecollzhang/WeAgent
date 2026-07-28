@@ -100,6 +100,7 @@ export default {
       pollTimer: null,
       refreshing: false,
       emittedTerminalId: '',
+      observedActiveRunId: '',
     }
   },
   computed: {
@@ -157,13 +158,18 @@ export default {
         return
       }
       if (['pending', 'running'].includes(run.status)) {
+        this.observedActiveRunId = run.id
         if (!this.pollTimer) {
           this.pollTimer = window.setInterval(this.refresh, 2500)
         }
         return
       }
       this.stopPolling()
-      if (TERMINAL_STATUSES.includes(run.status) && this.emittedTerminalId !== run.id) {
+      if (
+        TERMINAL_STATUSES.includes(run.status)
+        && this.observedActiveRunId === run.id
+        && this.emittedTerminalId !== run.id
+      ) {
         this.emittedTerminalId = run.id
         this.$emit('terminal', run)
       }
