@@ -121,3 +121,46 @@ def test_anthropic_base_url_derives_codex_v1_endpoint(monkeypatch):
 
         db.session.remove()
         db.drop_all()
+
+
+def test_server_managed_model_fallback_requires_explicit_runtime_scope(monkeypatch):
+    app = create_app("testing")
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        user = _create_user()
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-server-managed")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
+        monkeypatch.setenv("TEXT2IFC_DEEPSEEK_MODEL", "deepseek-chat")
+
+        env_vars, error = settings_service.get_container_env_vars(user.id)
+
+        assert env_vars is None
+        assert "API Key" in error
+        db.session.remove()
+        db.drop_all()
+
+
+def test_server_managed_model_fallback_supports_scoped_education_runs(monkeypatch):
+    app = create_app("testing")
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        user = _create_user()
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-server-managed")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
+        monkeypatch.setenv("TEXT2IFC_DEEPSEEK_MODEL", "deepseek-chat")
+
+        env_vars, error = settings_service.get_container_env_vars(
+            user.id,
+            allow_server_fallback=True,
+        )
+
+        assert error is None
+        assert env_vars["CODEX_API_KEY"] == "sk-server-managed"
+        assert env_vars["CODEX_BASE_URL"] == "https://api.deepseek.com/v1"
+        assert env_vars["CODEX_MODEL"] == "deepseek-chat"
+        assert env_vars["CODEX_USE_RELAY"] == "1"
+        assert env_vars["ANTHROPIC_API_KEY"] == "sk-server-managed"
+        db.session.remove()
+        db.drop_all()

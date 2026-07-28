@@ -270,18 +270,23 @@ class ConversationService:
 
     def _create_agent_sandbox(self, conversation, participants, user_id, kb_domain='',
                               agent_configs=None):
-        env_vars, error = settings_service.get_container_env_vars(user_id)
+        try:
+            education_runtime_env = _trusted_education_runtime_env(
+                agent_configs,
+                kb_domain=kb_domain,
+            )
+        except ValueError as exc:
+            return str(exc)
+        env_vars, error = settings_service.get_container_env_vars(
+            user_id,
+            allow_server_fallback=bool(education_runtime_env),
+        )
         if error:
             return error
         env_vars = dict(env_vars or {})
         rag_scope = _trusted_rag_scope(conversation, user_id, kb_domain)
         env_vars.update(rag_scope)
-        try:
-            env_vars.update(
-                _trusted_education_runtime_env(agent_configs, kb_domain=kb_domain)
-            )
-        except ValueError as exc:
-            return str(exc)
+        env_vars.update(education_runtime_env)
 
         # Build KB context from workspace domain (or explicit kb_domain override)
         kb_context = ''

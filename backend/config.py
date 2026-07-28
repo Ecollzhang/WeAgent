@@ -2,7 +2,10 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+REPOSITORY_DIR = os.path.dirname(BACKEND_DIR)
+load_dotenv(os.path.join(BACKEND_DIR, '.env'), override=False)
+load_dotenv(os.path.join(REPOSITORY_DIR, '.env'), override=False)
 
 
 class Config:
