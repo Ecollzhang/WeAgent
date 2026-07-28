@@ -1,19 +1,34 @@
 import {
   acceptCourseInvitation,
+  composeCoursePaper,
+  createCourseMindMap,
+  createCourseQuestion,
+  createKnowledgeResource,
   createLessonContent,
   createLessonActivity,
   createAssignment,
   createCourse,
   createCourseInvitation,
+  createMockExam as createMockExamApi,
+  downloadCourseAsset,
   getAssignmentSubmissions,
   getAssignment,
   getContentVersions,
   getCourseAnalytics,
+  getCourseAssets,
   getCourseAssignments,
+  getCourseMindMaps,
   getCourseMembers,
+  getCoursePapers,
+  getCourseQuestions,
   getCourseWorkflowRuns,
   getCourses,
   getCourseUnits,
+  getKnowledgeCenter,
+  getKnowledgeResources,
+  getMockExams,
+  getStudentInsights,
+  getWeaknessAnalysis,
   getEducationWorkflowRun,
   getLessonPublication,
   getLessonRelease,
@@ -23,14 +38,23 @@ import {
   getMySubmission,
   getSubmissionFeedback,
   publishAssignment,
+  publishCoursePaper,
+  publishCourseQuestion,
   publishLesson,
   releaseFeedback,
+  refreshStudentInsights,
+  refreshWeaknessAnalysis,
   runEducationWorkflow,
   saveContentVersion,
   saveLessonVersion,
+  saveMindMapVersion,
+  saveMockExamAnswers,
   saveSubmissionDraft,
   searchEducationResources,
   submitAssignment,
+  submitMockExam,
+  updateCourseAsset,
+  uploadCourseAsset,
   uploadLessonMaterial,
   updateMyCourseProfile,
 } from '../../api/education'
@@ -64,6 +88,17 @@ export default {
     analytics: null,
     resourceResults: [],
     agentRun: null,
+    assets: [],
+    knowledgeSummary: null,
+    questions: [],
+    papers: [],
+    knowledgeResources: [],
+    mockExams: [],
+    activeMockExam: null,
+    weakness: null,
+    mindMaps: [],
+    activeMindMap: null,
+    studentInsights: [],
     loading: false,
     saving: false,
   },
@@ -84,6 +119,17 @@ export default {
     loading: state => state.loading,
     saving: state => state.saving,
     agentRun: state => state.agentRun,
+    assets: state => state.assets,
+    knowledgeSummary: state => state.knowledgeSummary,
+    questions: state => state.questions,
+    papers: state => state.papers,
+    knowledgeResources: state => state.knowledgeResources,
+    mockExams: state => state.mockExams,
+    activeMockExam: state => state.activeMockExam,
+    weakness: state => state.weakness,
+    mindMaps: state => state.mindMaps,
+    activeMindMap: state => state.activeMindMap,
+    studentInsights: state => state.studentInsights,
   },
 
   mutations: {
@@ -101,6 +147,17 @@ export default {
     SET_ANALYTICS(state, value) { state.analytics = value },
     SET_RESOURCE_RESULTS(state, value) { state.resourceResults = value },
     SET_AGENT_RUN(state, value) { state.agentRun = value },
+    SET_ASSETS(state, value) { state.assets = value },
+    SET_KNOWLEDGE_SUMMARY(state, value) { state.knowledgeSummary = value },
+    SET_QUESTIONS(state, value) { state.questions = value },
+    SET_PAPERS(state, value) { state.papers = value },
+    SET_KNOWLEDGE_RESOURCES(state, value) { state.knowledgeResources = value },
+    SET_MOCK_EXAMS(state, value) { state.mockExams = value },
+    SET_ACTIVE_MOCK_EXAM(state, value) { state.activeMockExam = value },
+    SET_WEAKNESS(state, value) { state.weakness = value },
+    SET_MIND_MAPS(state, value) { state.mindMaps = value },
+    SET_ACTIVE_MIND_MAP(state, value) { state.activeMindMap = value },
+    SET_STUDENT_INSIGHTS(state, value) { state.studentInsights = value },
     UPSERT_COURSE(state, course) {
       const index = state.courses.findIndex(item => item.id === course.id)
       if (index < 0) state.courses.push(course)
@@ -413,6 +470,162 @@ export default {
       const run = runs.find(item => item.lesson_id === lessonId) || null
       commit('SET_AGENT_RUN', run)
       return run
+    },
+
+    async ensureRoleCourse({ dispatch, state }, { courseId, role }) {
+      if (!state.courses.length) await dispatch('fetchCourses')
+      const candidate = state.courses.find(course => course.id === courseId)
+        || state.courses.find(course => course.membership_role === role)
+      if (!candidate || (role && candidate.membership_role !== role)) {
+        throw new Error(`No ${role || 'active'} course membership is available`)
+      }
+      if (!state.activeCourse || state.activeCourse.id !== candidate.id) {
+        await dispatch('selectCourse', candidate.id)
+      }
+      return candidate
+    },
+
+    async fetchAssets({ commit }, courseId) {
+      const value = items(await getCourseAssets(courseId))
+      commit('SET_ASSETS', value)
+      return value
+    },
+
+    async uploadAsset({ dispatch }, { courseId, file, title, purpose, visibilityScope }) {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('title', title || file.name)
+      form.append('purpose', purpose || 'courseware')
+      form.append('visibility_scope', visibilityScope || 'course_teacher')
+      const asset = payload(await uploadCourseAsset(courseId, form))
+      await dispatch('fetchAssets', courseId)
+      return asset
+    },
+
+    async publishAsset({ dispatch }, { courseId, assetId }) {
+      const asset = payload(await updateCourseAsset(assetId, {
+        visibility_scope: 'course_published',
+      }))
+      await dispatch('fetchAssets', courseId)
+      return asset
+    },
+
+    async downloadAsset(context, asset) {
+      return downloadCourseAsset(asset.id)
+    },
+
+    async fetchKnowledgeCenter({ commit }, courseId) {
+      const [summary, questionResponse, paperResponse, resourceResponse] = await Promise.all([
+        getKnowledgeCenter(courseId),
+        getCourseQuestions(courseId),
+        getCoursePapers(courseId),
+        getKnowledgeResources(courseId),
+      ])
+      commit('SET_KNOWLEDGE_SUMMARY', payload(summary))
+      commit('SET_QUESTIONS', items(questionResponse))
+      commit('SET_PAPERS', items(paperResponse))
+      commit('SET_KNOWLEDGE_RESOURCES', items(resourceResponse))
+      return payload(summary)
+    },
+
+    async createQuestion({ dispatch }, { courseId, question }) {
+      const created = payload(await createCourseQuestion(courseId, question))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return created
+    },
+
+    async publishQuestion({ dispatch }, { courseId, questionId }) {
+      const published = payload(await publishCourseQuestion(questionId))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return published
+    },
+
+    async composePaper({ dispatch }, { courseId, paper }) {
+      const created = payload(await composeCoursePaper(courseId, paper))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return created
+    },
+
+    async publishPaper({ dispatch }, { courseId, paperId }) {
+      const published = payload(await publishCoursePaper(paperId))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return published
+    },
+
+    async addKnowledgeResource({ dispatch }, { courseId, resource }) {
+      const created = payload(await createKnowledgeResource(courseId, resource))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return created
+    },
+
+    async fetchMockExams({ commit }, courseId) {
+      const value = items(await getMockExams(courseId))
+      commit('SET_MOCK_EXAMS', value)
+      return value
+    },
+
+    async createMockExam({ commit, dispatch }, { courseId, blueprint }) {
+      const attempt = payload(await createMockExamApi(courseId, blueprint))
+      commit('SET_ACTIVE_MOCK_EXAM', attempt)
+      await dispatch('fetchMockExams', courseId)
+      return attempt
+    },
+
+    async saveMockExamAnswers({ commit }, { attemptId, answers }) {
+      const attempt = payload(await saveMockExamAnswers(attemptId, answers))
+      commit('SET_ACTIVE_MOCK_EXAM', attempt)
+      return attempt
+    },
+
+    async submitMockExam({ commit, dispatch }, { courseId, attemptId }) {
+      const attempt = payload(await submitMockExam(attemptId))
+      commit('SET_ACTIVE_MOCK_EXAM', attempt)
+      await dispatch('fetchMockExams', courseId)
+      return attempt
+    },
+
+    async fetchWeakness({ commit }, courseId) {
+      const value = payload(await getWeaknessAnalysis(courseId))
+      commit('SET_WEAKNESS', value)
+      return value
+    },
+
+    async refreshWeakness({ commit }, courseId) {
+      const value = payload(await refreshWeaknessAnalysis(courseId))
+      commit('SET_WEAKNESS', value)
+      return value
+    },
+
+    async fetchMindMaps({ commit }, courseId) {
+      const value = items(await getCourseMindMaps(courseId))
+      commit('SET_MIND_MAPS', value)
+      return value
+    },
+
+    async createMindMap({ commit, dispatch }, { courseId, data }) {
+      const value = payload(await createCourseMindMap(courseId, data))
+      commit('SET_ACTIVE_MIND_MAP', value)
+      await dispatch('fetchMindMaps', courseId)
+      return value
+    },
+
+    async saveMindMapVersion({ commit, dispatch }, { courseId, mindMapId, data }) {
+      const value = payload(await saveMindMapVersion(mindMapId, data))
+      commit('SET_ACTIVE_MIND_MAP', value)
+      await dispatch('fetchMindMaps', courseId)
+      return value
+    },
+
+    async fetchStudentInsights({ commit }, courseId) {
+      const value = items(await getStudentInsights(courseId))
+      commit('SET_STUDENT_INSIGHTS', value)
+      return value
+    },
+
+    async refreshStudentInsights({ commit }, courseId) {
+      const value = items(await refreshStudentInsights(courseId))
+      commit('SET_STUDENT_INSIGHTS', value)
+      return value
     },
   },
 }

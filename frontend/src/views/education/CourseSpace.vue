@@ -19,6 +19,11 @@
       >邀请学生</el-button>
       <el-button
         v-if="isTeacher"
+        icon="el-icon-collection"
+        @click="$router.push(`/education/courses/${course.id}/knowledge`)"
+      >课程知识中心</el-button>
+      <el-button
+        v-if="isTeacher"
         data-testid="create-assignment-open"
         type="primary"
         icon="el-icon-edit-outline"

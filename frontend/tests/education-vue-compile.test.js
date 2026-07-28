@@ -7,6 +7,8 @@ const parser = require('@babel/parser')
 const root = path.resolve(__dirname, '..')
 const files = [
   'src/components/education/EducationShell.vue',
+  'src/components/education/EducationModuleRail.vue',
+  'src/components/education/MindMapTree.vue',
   'src/components/education/CourseCard.vue',
   'src/components/education/SafeHtmlPreview.vue',
   'src/components/education/LessonPlanEditor.vue',
@@ -14,6 +16,12 @@ const files = [
   'src/views/education/CourseSpace.vue',
   'src/views/education/LessonWorkbench.vue',
   'src/views/education/AssignmentWorkspace.vue',
+  'src/views/education/CoursewareLibrary.vue',
+  'src/views/education/StudentInsights.vue',
+  'src/views/education/KnowledgeCenter.vue',
+  'src/views/education/MockExamCenter.vue',
+  'src/views/education/WeaknessCenter.vue',
+  'src/views/education/MindMapCenter.vue',
 ]
 
 for (const relPath of files) {

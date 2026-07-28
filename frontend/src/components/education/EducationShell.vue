@@ -1,6 +1,7 @@
 <template>
   <div class="education-page">
     <AppSidebar />
+    <EducationModuleRail />
     <main class="education-main">
       <header class="education-header">
         <div>
@@ -30,10 +31,11 @@
 
 <script>
 import AppSidebar from '../Sidebar/index.vue'
+import EducationModuleRail from './EducationModuleRail.vue'
 
 export default {
   name: 'EducationShell',
-  components: { AppSidebar },
+  components: { AppSidebar, EducationModuleRail },
   props: {
     title: { type: String, required: true },
     subtitle: { type: String, default: '' },

@@ -193,3 +193,121 @@ export function getEducationWorkflowRun(runId) {
 export function getCourseWorkflowRuns(courseId) {
   return service.get(url(`/courses/${courseId}/workflow-runs`))
 }
+
+// Durable course assets -----------------------------------------------------
+
+export function getCourseAssets(courseId) {
+  return service.get(url(`/courses/${courseId}/assets`))
+}
+
+export function uploadCourseAsset(courseId, formData) {
+  return service.post(url(`/courses/${courseId}/assets`), formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export function updateCourseAsset(assetId, data) {
+  return service.patch(url(`/assets/${assetId}`), data)
+}
+
+export function downloadCourseAsset(assetId) {
+  return service.get(url(`/assets/${assetId}/download`), {
+    responseType: 'blob',
+  })
+}
+
+// Course Knowledge Center --------------------------------------------------
+
+export function getKnowledgeCenter(courseId) {
+  return service.get(url(`/courses/${courseId}/knowledge-center`))
+}
+
+export function getCourseQuestions(courseId) {
+  return service.get(url(`/courses/${courseId}/questions`))
+}
+
+export function createCourseQuestion(courseId, data) {
+  return service.post(url(`/courses/${courseId}/questions`), data)
+}
+
+export function createQuestionVersion(questionId, data) {
+  return service.post(url(`/questions/${questionId}/versions`), data)
+}
+
+export function publishCourseQuestion(questionId) {
+  return service.post(url(`/questions/${questionId}/publish`))
+}
+
+export function getCoursePapers(courseId) {
+  return service.get(url(`/courses/${courseId}/papers`))
+}
+
+export function composeCoursePaper(courseId, data) {
+  return service.post(url(`/courses/${courseId}/papers/compose`), data)
+}
+
+export function publishCoursePaper(paperId) {
+  return service.post(url(`/papers/${paperId}/publish`))
+}
+
+export function getKnowledgeResources(courseId) {
+  return service.get(url(`/courses/${courseId}/knowledge-resources`))
+}
+
+export function createKnowledgeResource(courseId, data) {
+  return service.post(url(`/courses/${courseId}/knowledge-resources`), data)
+}
+
+// Student products and evidence -------------------------------------------
+
+export function getMockExams(courseId) {
+  return service.get(url(`/courses/${courseId}/mock-exams`))
+}
+
+export function createMockExam(courseId, data) {
+  return service.post(url(`/courses/${courseId}/mock-exams`), data)
+}
+
+export function getMockExam(attemptId) {
+  return service.get(url(`/mock-exams/${attemptId}`))
+}
+
+export function saveMockExamAnswers(attemptId, answers) {
+  return service.put(url(`/mock-exams/${attemptId}/answers`), { answers })
+}
+
+export function submitMockExam(attemptId) {
+  return service.post(url(`/mock-exams/${attemptId}/submit`))
+}
+
+export function getWeaknessAnalysis(courseId) {
+  return service.get(url(`/courses/${courseId}/weakness-analysis`))
+}
+
+export function refreshWeaknessAnalysis(courseId) {
+  return service.post(url(`/courses/${courseId}/weakness-analysis`))
+}
+
+export function getCourseMindMaps(courseId) {
+  return service.get(url(`/courses/${courseId}/mind-maps`))
+}
+
+export function createCourseMindMap(courseId, data) {
+  return service.post(url(`/courses/${courseId}/mind-maps`), data)
+}
+
+export function getCourseMindMap(mindMapId) {
+  return service.get(url(`/mind-maps/${mindMapId}`))
+}
+
+export function saveMindMapVersion(mindMapId, data) {
+  return service.post(url(`/mind-maps/${mindMapId}/versions`), data)
+}
+
+export function getStudentInsights(courseId) {
+  return service.get(url(`/courses/${courseId}/student-insights`))
+}
+
+export function refreshStudentInsights(courseId) {
+  return service.post(url(`/courses/${courseId}/student-insights/refresh`))
+}
