@@ -264,6 +264,16 @@ assertContains(
   'collapsed Agent nodes must still summarize their outputs'
 )
 assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'data-testid="agent-business-tool-calls"',
+  'Agent nodes must show audited Education business-tool calls'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  '已写入业务系统',
+  'the UI must distinguish durable business adoption from sandbox files'
+)
+assertContains(
   'src/components/education/AgentArtifactPreview.vue',
   'output.questions',
   'exercise Agent artifacts must render their canonical questions array'

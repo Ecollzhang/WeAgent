@@ -12,6 +12,38 @@ from app.services.message_service import _message_dict
 MODERATOR_AGENT_ID = 'moderator'
 
 
+def _trusted_education_runtime_env(agent_configs, kb_domain=''):
+    """Extract one opaque Education grant without exposing it to Agent prompts."""
+    if kb_domain != 'edu' or not isinstance(agent_configs, dict):
+        return {}
+    grants = set()
+    for config in agent_configs.values():
+        if not isinstance(config, dict):
+            continue
+        context = config.get('education_tool_context')
+        if not isinstance(context, dict):
+            continue
+        token = str(context.get('run_grant') or '').strip()
+        if token:
+            grants.add(token)
+    if not grants:
+        return {}
+    if len(grants) != 1:
+        raise ValueError('conflicting Education run grants')
+    token = grants.pop()
+    import re
+    if not re.fullmatch(r'[A-Za-z0-9._~-]{20,256}', token):
+        raise ValueError('invalid Education run grant')
+    import os
+    return {
+        'EDUCATION_RUN_GRANT': token,
+        'EDUCATION_SERVICE_URL': os.getenv(
+            'EDUCATION_SERVICE_URL',
+            'http://host.docker.internal:5102',
+        ).rstrip('/'),
+    }
+
+
 def _trusted_rag_scope(conversation, user_id, kb_domain=''):
     """Build a server-issued RAG scope; model/tool arguments cannot widen it."""
     allowed_domains = {'rd', 'edu', 'office'}
@@ -244,6 +276,12 @@ class ConversationService:
         env_vars = dict(env_vars or {})
         rag_scope = _trusted_rag_scope(conversation, user_id, kb_domain)
         env_vars.update(rag_scope)
+        try:
+            env_vars.update(
+                _trusted_education_runtime_env(agent_configs, kb_domain=kb_domain)
+            )
+        except ValueError as exc:
+            return str(exc)
 
         # Build KB context from workspace domain (or explicit kb_domain override)
         kb_context = ''

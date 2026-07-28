@@ -13,6 +13,8 @@ from .routes import teacher_course_or_none
 from .subject_packs import AGENT_ROLES, SUBJECT_PACKS, WORKFLOW_TEMPLATES
 from .content_models import Lesson
 from .runtime_client import CoreRuntimeError
+from .tool_gateway import ToolGatewayError, issue_tool_grant
+from .tool_models import EducationToolCall, EducationToolGrant
 from .workflow_models import EducationAgentRun, EducationWorkflow
 
 
@@ -36,6 +38,53 @@ ROLE_ARTIFACTS = {
     "exercise_generator": "/workspace/shared/exercises_draft.json",
     "teaching_reviewer": "/workspace/shared/review_conclusion.json",
 }
+TEACHER_WORKFLOW_TOOLS = [
+    "edu.course.list",
+    "edu.course.members.list",
+    "edu.course.context.get",
+    "edu.question_bank.search",
+    "edu.knowledge.search",
+    "edu.courseware.create",
+    "edu.asset.attach",
+    "edu.question_bank.upsert",
+    "edu.paper.compose",
+    "edu.student_insight.refresh",
+]
+
+
+def _tool_calls_by_agent(run):
+    if not run.tool_grant_id:
+        return {}
+    rows = (
+        EducationToolCall.query.filter_by(grant_id=run.tool_grant_id)
+        .order_by(EducationToolCall.created_at.asc())
+        .all()
+    )
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row.agent_id or "unknown", []).append(row.to_dict())
+    return grouped
+
+
+def _attach_tool_calls(run):
+    grouped = _tool_calls_by_agent(run)
+    nodes = []
+    for stored in run.nodes or []:
+        node = dict(stored)
+        if node.get("type") == "agent_task":
+            node["tool_calls"] = grouped.get(node.get("agent_id"), [])
+        nodes.append(node)
+    run.nodes = nodes
+    return run
+
+
+def _revoke_tool_grant(run):
+    if not run.tool_grant_id:
+        return
+    grant = EducationToolGrant.query.filter_by(id=run.tool_grant_id).first()
+    if grant and grant.status == "active":
+        grant.status = "revoked"
+        grant.revoked_at = datetime.utcnow()
 
 
 def _template(code):
@@ -54,6 +103,7 @@ def _expire_stale_pending_run(run):
         run.status = "failed"
         run.error_summary = "Agent 启动过程被中断，请重新运行"
         run.finished_at = datetime.utcnow()
+        _revoke_tool_grant(run)
         return True
     return False
 
@@ -198,6 +248,8 @@ def _sync_run(run, authorization):
             + (f"：{detail[:500]}" if detail else "")
         )
         run.finished_at = datetime.utcnow()
+        _revoke_tool_grant(run)
+        _attach_tool_calls(run)
         db.session.commit()
         return run
 
@@ -259,10 +311,12 @@ def _sync_run(run, authorization):
             if node.get("type") == "approval":
                 node["status"] = "awaiting_approval"
         run.finished_at = datetime.utcnow()
+        _revoke_tool_grant(run)
     else:
         run.status = "running"
     run.nodes = nodes
     run.output = outputs
+    _attach_tool_calls(run)
     db.session.commit()
     if repairs:
         app = current_app._get_current_object()
@@ -288,7 +342,16 @@ def _sync_run(run, authorization):
     return run
 
 
-def _start_core_run(app, run_id, authorization, title, prompt, agent_ids, workflow):
+def _start_core_run(
+    app,
+    run_id,
+    authorization,
+    title,
+    prompt,
+    agent_ids,
+    workflow,
+    education_run_grant,
+):
     """Create the slow core Conversation/sandbox outside the HTTP request."""
     with app.app_context():
         run = EducationAgentRun.query.filter_by(id=run_id).first()
@@ -301,15 +364,22 @@ def _start_core_run(app, run_id, authorization, title, prompt, agent_ids, workfl
                 prompt=prompt,
                 agent_ids=agent_ids,
                 workflow=workflow,
+                education_run_grant=education_run_grant,
             )
             run.status = "running"
             run.conversation_id = started["conversation_id"]
             run.sandbox_session_id = started.get("sandbox_session_id")
             run.core_message_id = started.get("message_id")
+            grant = EducationToolGrant.query.filter_by(
+                id=run.tool_grant_id
+            ).first()
+            if grant:
+                grant.conversation_id = run.conversation_id
         except CoreRuntimeError as exc:
             run.status = "failed"
             run.error_summary = str(exc)
             run.finished_at = datetime.utcnow()
+            _revoke_tool_grant(run)
         finally:
             db.session.commit()
             db.session.remove()
@@ -488,6 +558,27 @@ def start_workflow_run():
         "学生端答案泄露，写入 /workspace/shared/review_conclusion.json。\n"
         "所有内容仅保存为教师草稿，不得自动发布。"
     )
+    prompt += (
+        "\n【业务工具采纳协议——与文件产物协议严格分离】\n"
+        "1. /workspace/shared/*.json 是 Agent 间协作与前端预览产物；"
+        "它们不是持久化业务数据，也不能用 .js 或仅返回文件路径代替。\n"
+        "2. `education_action` 是把已完成自检的结果写入 Education 数据库的"
+        "唯一协议。工具会自动绑定当前用户、教师角色和课程；arguments 中"
+        "严禁传 course_id、actor_user_id、user_id、role 或任何 token。\n"
+        "3. 课程设计师完成 lesson_plan_draft.json 后，再调用 "
+        "`education_action`：action=`edu.courseware.create`，kind=`lesson_plan`，"
+        "source_json 使用完整教案对象，publish 不存在且不得自行发布；"
+        "idempotency_key=`course-designer-lesson-plan-v1`。\n"
+        "4. 习题生成器完成 exercises_draft.json 并通过 JSON/schema 自检后，"
+        "把 questions 转换成题库协议再调用 `education_action`："
+        "action=`edu.question_bank.upsert`；将文件字段 answer 映射为 "
+        "correct_answer，保留 explanation、knowledge_points、difficulty、score，"
+        "选择题 options 仍为无 A/B 编号的纯文本；publish=false；"
+        "idempotency_key=`exercise-generator-question-batch-v1`。\n"
+        "5. 教学审校员使用 `edu.course.context.get`、"
+        "`edu.question_bank.search` 检查已采纳草稿；不得发布课程、题目或试卷。"
+        "任何工具校验失败时先按 error_code 修正结构，再以新的幂等键重试。"
+    )
     workflow = _workflow_payload(template, nodes)
     run = EducationAgentRun(
         course_id=course_id,
@@ -501,6 +592,21 @@ def start_workflow_run():
         started_at=datetime.utcnow(),
     )
     db.session.add(run)
+    db.session.flush()
+    try:
+        tool_grant, raw_tool_grant = issue_tool_grant(
+            actor_user_id=user_id,
+            course_id=course_id,
+            allowed_tools=TEACHER_WORKFLOW_TOOLS,
+            capability_ids=["builtin:education_actions"],
+            agent_run_id=run.id,
+        )
+    except ToolGatewayError as error:
+        db.session.rollback()
+        return jsonify(
+            {"error": error.message, "error_code": error.error_code}
+        ), error.status_code
+    run.tool_grant_id = tool_grant.id
     db.session.commit()
 
     app = current_app._get_current_object()
@@ -512,6 +618,7 @@ def start_workflow_run():
         prompt,
         agent_ids,
         workflow,
+        raw_tool_grant,
     )
     if app.config.get("TESTING"):
         _start_core_run(*launch_args)
@@ -524,6 +631,7 @@ def start_workflow_run():
         ).start()
     db.session.expire_all()
     refreshed = EducationAgentRun.query.filter_by(id=run.id).first()
+    _attach_tool_calls(refreshed)
     return jsonify(refreshed.to_dict()), 202
 
 
@@ -542,6 +650,7 @@ def get_workflow_run(run_id):
         except CoreRuntimeError as exc:
             run.error_summary = str(exc)
             db.session.commit()
+    _attach_tool_calls(run)
     return jsonify(run.to_dict())
 
 
@@ -556,4 +665,6 @@ def list_workflow_runs(course_id):
     ).all()
     if any(_expire_stale_pending_run(run) for run in runs):
         db.session.commit()
+    for run in runs:
+        _attach_tool_calls(run)
     return jsonify({"items": [run.to_dict() for run in runs]})

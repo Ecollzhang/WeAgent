@@ -107,7 +107,24 @@ class CoreRuntimeClient:
             raise CoreRuntimeError(f"core runtime is unavailable: {exc}") from exc
         return self._payload(response)
 
-    def start_workflow(self, *, authorization, title, prompt, agent_ids, workflow):
+    def start_workflow(
+        self,
+        *,
+        authorization,
+        title,
+        prompt,
+        agent_ids,
+        workflow,
+        education_run_grant=None,
+    ):
+        agent_configs = {}
+        for agent_id in [*agent_ids, "moderator"]:
+            config = {"adapter_name": self.agent_adapter}
+            if education_run_grant:
+                config["education_tool_context"] = {
+                    "run_grant": education_run_grant
+                }
+            agent_configs[agent_id] = config
         conversation = self._request(
             "POST",
             "/api/conversations",
@@ -117,10 +134,7 @@ class CoreRuntimeClient:
                 "type": "group",
                 "participant_ids": [f"agent_{agent_id}" for agent_id in agent_ids],
                 "kb_domain": "edu",
-                "agent_configs": {
-                    agent_id: {"adapter_name": self.agent_adapter}
-                    for agent_id in [*agent_ids, "moderator"]
-                },
+                "agent_configs": agent_configs,
             },
         )
         message = self._request(

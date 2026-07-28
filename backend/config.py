@@ -42,6 +42,12 @@ class Config:
     # SocketIO
     SOCKETIO_CORS_ALLOWED_ORIGINS = os.getenv('SOCKETIO_CORS_ALLOWED_ORIGINS', '*').split(',')
 
+    # Independent Education service as seen from sandbox containers.
+    EDUCATION_SERVICE_URL = os.getenv(
+        'EDUCATION_SERVICE_URL',
+        'http://host.docker.internal:5102',
+    )
+
 
 class DevelopmentConfig(Config):
     """Development configuration."""

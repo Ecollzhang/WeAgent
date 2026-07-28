@@ -47,14 +47,31 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
         prompt="Build lesson",
         agent_ids=["_edu_1", "_edu_3"],
         workflow={"id": "reading_lesson"},
+        education_run_grant="opaque-run-grant-1234567890",
     )
 
     conversation_payload = requests[0][2]["json"]
     assert conversation_payload["agent_configs"] == {
-        "_edu_1": {"adapter_name": "codex"},
-        "_edu_3": {"adapter_name": "codex"},
-        "moderator": {"adapter_name": "codex"},
+        "_edu_1": {
+            "adapter_name": "codex",
+            "education_tool_context": {
+                "run_grant": "opaque-run-grant-1234567890"
+            },
+        },
+        "_edu_3": {
+            "adapter_name": "codex",
+            "education_tool_context": {
+                "run_grant": "opaque-run-grant-1234567890"
+            },
+        },
+        "moderator": {
+            "adapter_name": "codex",
+            "education_tool_context": {
+                "run_grant": "opaque-run-grant-1234567890"
+            },
+        },
     }
+    assert "opaque-run-grant" not in requests[1][2]["json"]["content"]
 
 
 def test_education_runtime_reads_structured_json_from_shared_sandbox(monkeypatch):

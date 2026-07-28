@@ -700,7 +700,9 @@ class CapabilityService:
                 existing.name = tool["name"]
                 existing.description = tool.get("description") or ""
                 existing.source = source
-                existing.domain = existing.domain or 'rd'
+                existing.domain = (
+                    "edu" if source_ref == "education_actions" else "rd"
+                )
                 latest = (
                     CapabilityVersion.query.get(existing.latest_version_id)
                     if existing.latest_version_id else None
@@ -733,7 +735,7 @@ class CapabilityService:
                 source=source,
                 source_ref=source_ref,
                 is_builtin=True,
-                domain="rd",
+                domain="edu" if source_ref == "education_actions" else "rd",
             )
             db.session.add(capability)
             db.session.flush()
@@ -747,6 +749,51 @@ class CapabilityService:
             )
             capability.latest_version_id = version.id
         self._seed_builtin_mcp_capabilities()
+        db.session.commit()
+
+    def seed_education_agent_tool_bindings(self):
+        """Bind the guarded Education API adapter to built-in Education Agents."""
+        capability = Capability.query.filter_by(
+            type="tool",
+            source_ref="education_actions",
+            is_builtin=True,
+        ).first()
+        if not capability or not capability.latest_version_id:
+            return
+        version = CapabilityVersion.query.get(capability.latest_version_id)
+        if not version:
+            return
+        declared = _normalize_permissions(version.permissions)
+        granted = list(declared["required"])
+        for agent_id in [f"_edu_{index}" for index in range(1, 10)]:
+            agent = Agent.query.get(agent_id)
+            if not agent:
+                continue
+            binding = AgentCapabilityBinding.query.filter_by(
+                agent_id=agent.id,
+                capability_id=capability.id,
+            ).first()
+            if not binding:
+                binding = AgentCapabilityBinding(
+                    agent_id=agent.id,
+                    capability_id=capability.id,
+                )
+                db.session.add(binding)
+            binding.capability_version_id = version.id
+            binding.enabled = True
+            binding.version_policy = "follow_latest"
+            binding.granted_permissions = granted
+            binding.authorization_snapshot = {
+                "capability_id": capability.id,
+                "capability_version_id": version.id,
+                "capability_type": capability.type,
+                "source": capability.source,
+                "source_ref": capability.source_ref,
+                "declared_permissions": declared,
+                "granted_permissions": granted,
+                "scope": "server_issued_education_run_grant",
+                "authorized_at": datetime.utcnow().isoformat(),
+            }
         db.session.commit()
 
     def _seed_builtin_mcp_capabilities(self):

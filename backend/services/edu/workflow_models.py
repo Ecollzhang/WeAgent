@@ -68,6 +68,7 @@ class EducationAgentRun(db.Model):
     conversation_id = db.Column(db.String(36), nullable=True, index=True)
     sandbox_session_id = db.Column(db.String(100), nullable=True, index=True)
     core_message_id = db.Column(db.String(36), nullable=True)
+    tool_grant_id = db.Column(db.String(36), nullable=True, index=True)
     nodes = db.Column(db.JSON, nullable=False, default=list)
     input_payload = db.Column(db.JSON, nullable=False, default=dict)
     output = db.Column(db.JSON, nullable=False, default=dict)

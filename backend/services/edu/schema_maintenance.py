@@ -81,4 +81,32 @@ def migrate_existing_education_schema():
                 with db.engine.begin() as connection:
                     connection.execute(text(statement))
                 changes.append(index_name)
+
+    if "edu_agent_runs" in tables:
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns("edu_agent_runs")
+        }
+        if "tool_grant_id" not in columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_agent_runs "
+                        "ADD COLUMN tool_grant_id VARCHAR(36) DEFAULT NULL"
+                    )
+                )
+            changes.append("edu_agent_runs.tool_grant_id")
+        indexes = {
+            index["name"]
+            for index in inspect(db.engine).get_indexes("edu_agent_runs")
+        }
+        if "ix_edu_agent_runs_tool_grant_id" not in indexes:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE INDEX ix_edu_agent_runs_tool_grant_id "
+                        "ON edu_agent_runs (tool_grant_id)"
+                    )
+                )
+            changes.append("edu_agent_runs.tool_grant_id_index")
     return changes

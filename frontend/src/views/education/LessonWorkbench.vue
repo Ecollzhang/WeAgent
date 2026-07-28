@@ -201,6 +201,29 @@
                 <small v-if="hasArtifact(node)" class="artifact-summary">
                   {{ artifactSummary(node) }}
                 </small>
+                <div
+                  v-if="node.tool_calls && node.tool_calls.length"
+                  class="agent-tool-calls"
+                  data-testid="agent-business-tool-calls"
+                >
+                  <div
+                    v-for="call in node.tool_calls"
+                    :key="call.id"
+                    class="agent-tool-call"
+                  >
+                    <i class="el-icon-connection"></i>
+                    <span>
+                      <b>{{ toolActionLabel(call.tool_name) }}</b>
+                      <small>{{ toolCallSummary(call) }}</small>
+                    </span>
+                    <el-tag
+                      size="mini"
+                      :type="call.status === 'completed' ? 'success' : 'danger'"
+                    >
+                      {{ call.status === 'completed' ? '已写入业务系统' : '调用失败' }}
+                    </el-tag>
+                  </div>
+                </div>
                 <el-button
                   v-if="hasArtifact(node)"
                   class="artifact-toggle"
@@ -525,6 +548,38 @@ export default {
     ).then(() => next()).catch(() => next(false))
   },
   methods: {
+    toolActionLabel(toolName) {
+      const labels = {
+        'edu.course.list': '读取课程列表',
+        'edu.course.members.list': '读取课程成员',
+        'edu.course.context.get': '读取课程上下文',
+        'edu.question_bank.search': '检索课程题库',
+        'edu.knowledge.search': '检索课程知识库',
+        'edu.course.create': '创建课程',
+        'edu.course.members.import': '导入学生名单',
+        'edu.lesson.create': '创建课时',
+        'edu.courseware.create': '采纳教案或课件草稿',
+        'edu.asset.attach': '保存持久化文件',
+        'edu.question_bank.upsert': '采纳习题到题库',
+        'edu.paper.compose': '组建试卷',
+        'edu.student_insight.refresh': '刷新学生画像',
+        'edu.mock_exam.create': '生成模拟考试',
+        'edu.weakness.analyze': '分析作业弱点',
+        'edu.mind_map.create': '生成课程思维导图',
+      }
+      return labels[toolName] || toolName
+    },
+    toolCallSummary(call) {
+      if (call.status !== 'completed') {
+        return call.error_message || call.error_code || '业务工具调用失败'
+      }
+      const summary = call.result_summary || {}
+      if (Number.isFinite(summary.item_count)) {
+        return `${summary.item_count} 项 · ${call.idempotency_key ? '幂等写入' : '只读查询'}`
+      }
+      if (summary.data_state === 'insufficient') return '数据不足，未生成推测性结论'
+      return call.idempotency_key ? '已校验并持久化，可追踪重放' : '已按课程权限返回'
+    },
     artifactFor(node) {
       const outputs = (this.agentRun && this.agentRun.output) || {}
       return outputs[node.agent_role] || node.output || {}
@@ -915,6 +970,11 @@ export default {
 .agent-node small { margin-top: 4px; color: #8190a2; }
 .agent-node p { margin: 7px 0 0; color: #c45656; font-size: 12px; }
 .agent-node .artifact-summary { margin-top: 8px; color: #3d8279; }
+.agent-tool-calls { display: grid; gap: 7px; margin-top: 10px; }
+.agent-tool-call { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid #d9e9e6; border-radius: 8px; background: #f7fbfa; }
+.agent-tool-call > i { color: #3d8279; }
+.agent-tool-call b { color: #244740; font-size: 12px; }
+.agent-tool-call small { margin-top: 2px; color: #758981; }
 .agent-state { width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; background: #cbd5df; }
 .agent-state.running { background: #e6a23c; box-shadow: 0 0 0 4px #fdf3df; }
 .agent-state.done { background: #36a77b; }

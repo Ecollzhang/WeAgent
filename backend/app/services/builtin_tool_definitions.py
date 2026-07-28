@@ -477,6 +477,91 @@ BUILTIN_TOOL_DEFINITIONS = [
         ),
     ),
     _definition(
+        value="education_actions",
+        name="Education 业务操作",
+        category="tool_data",
+        icon="el-icon-school",
+        color="#0f766e",
+        description=(
+            "在服务端签发的课程与角色范围内读取或写入 Education 业务对象；"
+            "所有写操作都要求幂等键并保留双侧审计"
+        ),
+        handler="education.actions",
+        tool_names=["education_action"],
+        permissions={"required": ["network"], "optional": []},
+        status="implemented",
+        input_schema=_schema(
+            {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "edu.course.list",
+                        "edu.course.members.list",
+                        "edu.course.context.get",
+                        "edu.question_bank.search",
+                        "edu.knowledge.search",
+                        "edu.course.create",
+                        "edu.course.members.import",
+                        "edu.lesson.create",
+                        "edu.courseware.create",
+                        "edu.asset.attach",
+                        "edu.question_bank.upsert",
+                        "edu.paper.compose",
+                        "edu.student_insight.refresh",
+                        "edu.mock_exam.create",
+                        "edu.weakness.analyze",
+                        "edu.mind_map.create",
+                    ],
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": (
+                        "Action-specific arguments. Never include actor_user_id, "
+                        "course_id, role, token, or authorization."
+                    ),
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "description": (
+                        "Required for every write action; reuse only when replaying "
+                        "the exact same arguments."
+                    ),
+                },
+            },
+            ["action", "arguments"],
+        ),
+        output_schema=_schema(
+            {
+                "call_id": {"type": "string"},
+                "tool_name": {"type": "string"},
+                "replayed": {"type": "boolean"},
+                "result": {"type": "object"},
+            }
+        ),
+        markdown=_markdown(
+            "Education 业务操作",
+            (
+                "当 Education Agent 需要读取课程上下文，或把已校验的教案、"
+                "课件、习题、名单和学习分析写入产品数据库时使用。"
+            ),
+            (
+                "调用 `education_action`，传入固定 action、该 action 的业务"
+                " arguments；写操作同时传入稳定且唯一的 idempotency_key。"
+                "课程、用户、教师/学生角色由运行授权自动注入。"
+            ),
+            (
+                "不得传 course_id、actor_user_id、user_id、role 或任何令牌；"
+                "不得把沙箱路径当作持久化结果。工具只能执行本次运行授权列出的"
+                "动作，授权过期、成员身份变化或越权动作都会被拒绝并审计。"
+            ),
+            (
+                '{"name":"education_action","args":{"action":'
+                '"edu.question_bank.upsert","arguments":{"questions":[],"publish":false},'
+                '"idempotency_key":"run-node-question-batch-1"}}'
+            ),
+        ),
+    ),
+    _definition(
         value="rag_search",
         name="知识库检索",
         category="tool_web",

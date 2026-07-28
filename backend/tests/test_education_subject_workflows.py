@@ -211,13 +211,23 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
                 ],
             }
 
-        def start_workflow(self, *, authorization, title, prompt, agent_ids, workflow):
+        def start_workflow(
+            self,
+            *,
+            authorization,
+            title,
+            prompt,
+            agent_ids,
+            workflow,
+            education_run_grant=None,
+        ):
             self.started = {
                 "authorization": authorization,
                 "title": title,
                 "prompt": prompt,
                 "agent_ids": agent_ids,
                 "workflow": workflow,
+                "education_run_grant": education_run_grant,
             }
             return {
                 "conversation_id": "core-conversation-1",
@@ -288,6 +298,10 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
     ]
     assert created["nodes"][0]["workspace_path"] == "/workspace/agents/课程设计师"
     assert runtime.started["agent_ids"] == ["_edu_1", "_edu_3", "_edu_9"]
+    assert len(runtime.started["education_run_grant"]) >= 40
+    assert runtime.started["education_run_grant"] not in runtime.started["prompt"]
+    assert "education_action" in runtime.started["prompt"]
+    assert "edu.question_bank.upsert" in runtime.started["prompt"]
     assert "/workspace/shared/exercises_draft.json" in runtime.started["prompt"]
     assert "questions" in runtime.started["prompt"]
     assert "【内容设计规范】" in runtime.started["prompt"]
@@ -305,6 +319,27 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
     snapshot = refreshed.get_json()
     assert snapshot["nodes"][0]["status"] == "done"
     assert snapshot["nodes"][1]["status"] == "running"
+    tool_call = client.post(
+        "/api/edu/tools/edu.course.context.get/invoke",
+        headers={
+            "X-Education-Run-Grant": runtime.started["education_run_grant"]
+        },
+        json={"arguments": {}, "agent_id": "_edu_1"},
+    )
+    assert tool_call.status_code == 200
+    audited = client.get(
+        f"/api/edu/workflow-runs/{created['id']}",
+        headers=teacher,
+    ).get_json()
+    course_designer = next(
+        node
+        for node in audited["nodes"]
+        if node.get("agent_id") == "_edu_1"
+    )
+    assert course_designer["tool_calls"][0]["tool_name"] == (
+        "edu.course.context.get"
+    )
+    assert "education_run_grant" not in str(audited)
     assert snapshot["nodes"][0]["output"]["objectives"] == ["理解叙事顺序"]
 
     runtime.snapshot = {

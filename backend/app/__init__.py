@@ -557,6 +557,7 @@ def create_app(config_name=None):
         try:
             from app.services.capability_service import capability_service
             capability_service.seed_builtin_tool_capabilities()
+            capability_service.seed_education_agent_tool_bindings()
         except Exception as e:
             print(f'[WeAgent] Capability seed note: {e}')
 

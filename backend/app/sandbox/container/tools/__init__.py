@@ -120,6 +120,8 @@ class ToolRegistry:
             execute_args = dict(args or {})
             if tool_capability and tool_capability.get("provider_config"):
                 execute_args["_weagent_provider_config"] = tool_capability.get("provider_config")
+            if tool_name == "education_action":
+                execute_args["_weagent_agent_id"] = agent_id
             result = self.execute(tool_name, **execute_args)
             _record("completed", result=result)
             return json.dumps({"status": "ok", "result": result}, ensure_ascii=False)
@@ -537,6 +539,95 @@ def _api_request(url: str, method: str = "GET", headers: dict = None,
         }
 
 
+_EDUCATION_ACTIONS = {
+    "edu.course.list",
+    "edu.course.members.list",
+    "edu.course.context.get",
+    "edu.question_bank.search",
+    "edu.knowledge.search",
+    "edu.course.create",
+    "edu.course.members.import",
+    "edu.lesson.create",
+    "edu.courseware.create",
+    "edu.asset.attach",
+    "edu.question_bank.upsert",
+    "edu.paper.compose",
+    "edu.student_insight.refresh",
+    "edu.mock_exam.create",
+    "edu.weakness.analyze",
+    "edu.mind_map.create",
+}
+
+
+def _education_action(
+    action: str,
+    arguments: dict = None,
+    idempotency_key: str = "",
+    _weagent_agent_id: str = "",
+) -> dict:
+    """Call the independently deployed Education API with server-issued scope."""
+    action = str(action or "").strip()
+    if action not in _EDUCATION_ACTIONS:
+        raise ValueError("Unsupported Education action")
+    if not isinstance(arguments or {}, dict):
+        raise ValueError("Education action arguments must be an object")
+    grant = os.environ.get("EDUCATION_RUN_GRANT", "").strip()
+    if not grant:
+        raise RuntimeError("Education action requires a server-issued run grant")
+    base_url = os.environ.get(
+        "EDUCATION_SERVICE_URL",
+        "http://host.docker.internal:5102",
+    ).strip().rstrip("/")
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Education service URL is invalid")
+    payload = json.dumps(
+        {
+            "arguments": arguments or {},
+            "idempotency_key": str(idempotency_key or "")[:120],
+            "agent_id": str(_weagent_agent_id or "")[:100],
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}/api/edu/tools/{action}/invoke",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "WeAgent-Education-Tool/1.0",
+            "X-Education-Run-Grant": grant,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read(200_000)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read(20_000)
+        try:
+            error_payload = json.loads(raw.decode("utf-8", errors="replace"))
+        except (TypeError, ValueError):
+            error_payload = {}
+        message = str(
+            error_payload.get("error")
+            or error_payload.get("message")
+            or f"Education action failed with HTTP {exc.code}"
+        )[:500]
+        code = str(error_payload.get("error_code") or "education_action_failed")
+        raise RuntimeError(f"{code}: {message}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Education service is unavailable: {exc.reason}"
+        ) from exc
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError("Education service returned invalid JSON") from exc
+    if not isinstance(result, dict) or "result" not in result:
+        raise RuntimeError("Education service returned an invalid tool response")
+    return result
+
+
 def _require_provider_config(provider_config: dict | None) -> dict:
     provider_config = provider_config or {}
     if provider_config.get("status") != "valid":
@@ -744,3 +835,8 @@ def register_builtin_tools(registry: ToolRegistry):
     registry.register("git_diff", _git_diff, "Read git diff")
     registry.register("git_log", _git_log, "Read git log")
     registry.register("rag_search", _rag_search, "Search the RAG knowledge base for relevant document chunks")
+    registry.register(
+        "education_action",
+        _education_action,
+        "Read or write Education business objects within a server-issued run scope",
+    )

@@ -251,6 +251,7 @@ class DockerContainerManager:
             "AGENT_EXEC_TIMEOUT_SECONDS",
             "RAG_INTERNAL_API_KEY", "RAG_SERVICE_URL",
             "RAG_SCOPE_USER_ID", "RAG_SCOPE_DOMAIN", "RAG_SCOPE_WORKSPACE_ID",
+            "EDUCATION_RUN_GRANT", "EDUCATION_SERVICE_URL",
             "HTTP_PROXY", "HTTPS_PROXY",
         ]
         if env_vars:
@@ -264,6 +265,7 @@ class DockerContainerManager:
                         "OPENAI_API_KEY", "OPENAI_MODEL",
                         "CODEX_API_KEY", "CODEX_MODEL",
                         "OPENCODE_API_KEY", "OPENCODE_MODEL",
+                        "EDUCATION_RUN_GRANT",
                     }:
                         container_env[key] = _clean_config_value(env_vars[key])
                     else:
