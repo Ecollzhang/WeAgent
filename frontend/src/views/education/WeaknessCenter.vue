@@ -5,12 +5,18 @@
   >
     <template #actions>
       <el-button
-        type="primary"
         icon="el-icon-refresh"
         :loading="refreshing"
         :disabled="!course"
         @click="refresh"
-      >重新分析</el-button>
+      >仅刷新证据</el-button>
+      <el-button
+        type="primary"
+        icon="el-icon-cpu"
+        :loading="agentRunning"
+        :disabled="!course"
+        @click="analyzeWithAgent"
+      >Agent 分析弱点</el-button>
     </template>
 
     <el-alert
@@ -22,6 +28,13 @@
     />
 
     <template v-else-if="course">
+      <ProductAgentRunPanel
+        :run="productAgentRun"
+        @terminal="handleAgentTerminal"
+        @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
+        @close="closeAgentRun"
+      />
+
       <section class="weakness-header">
         <div class="header-copy">
           <span>TRACEABLE LEARNING DIAGNOSIS</span>
@@ -125,10 +138,11 @@
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
+import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 
 export default {
   name: 'WeaknessCenter',
-  components: { EducationShell },
+  components: { EducationShell, ProductAgentRunPanel },
   data() {
     return {
       roleError: false,
@@ -142,6 +156,10 @@ export default {
     evidence() { return this.weakness.evidence || [] },
     weaknesses() { return this.weakness.weaknesses || [] },
     recommendations() { return this.weakness.recommendations || [] },
+    productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    agentRunning() {
+      return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
+    },
   },
   watch: {
     'course.id'(next, previous) {
@@ -166,6 +184,10 @@ export default {
     async load(courseId) {
       try {
         await this.$store.dispatch('education/fetchWeakness', courseId)
+        await this.$store.dispatch('education/restoreProductAgentRun', {
+          courseId,
+          productCode: 'weakness_analysis',
+        })
       } catch (error) {
         this.$message.error('弱点分析加载失败')
       }
@@ -180,6 +202,28 @@ export default {
       } finally {
         this.refreshing = false
       }
+    },
+    async analyzeWithAgent() {
+      try {
+        await this.$store.dispatch('education/startProductAgentRun', {
+          course_id: this.course.id,
+          product_code: 'weakness_analysis',
+          options: {},
+        })
+        this.$message.success('练习教练与学习规划 Agent 已启动')
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '弱点分析 Agent 启动失败')
+      }
+    },
+    async handleAgentTerminal(run) {
+      if (run.status === 'completed') {
+        await this.$store.dispatch('education/fetchWeakness', this.course.id)
+        this.$message.success('Agent 已按最新证据完成弱点分析')
+      }
+    },
+    closeAgentRun() {
+      this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
     },
     evidenceCount(item) {
       // The API exposes immutable references as evidence_item_version_ids.
@@ -214,4 +258,3 @@ export default {
 @media (max-width: 940px) { .weakness-layout { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .evidence-ledger > article { grid-template-columns: 30px 1fr auto; }.evidence-ledger > article > span:nth-of-type(n+2) { display: none; } }
 </style>
-

@@ -194,6 +194,18 @@ export function getCourseWorkflowRuns(courseId) {
   return service.get(url(`/courses/${courseId}/workflow-runs`))
 }
 
+export function startEducationProductAgentRun(data) {
+  return service.post(url('/product-agent-runs'), data)
+}
+
+export function getEducationProductAgentRun(runId) {
+  return service.get(url(`/product-agent-runs/${runId}`))
+}
+
+export function getCourseProductAgentRuns(courseId, params = {}) {
+  return service.get(url(`/courses/${courseId}/product-agent-runs`), { params })
+}
+
 // Durable course assets -----------------------------------------------------
 
 export function getCourseAssets(courseId) {

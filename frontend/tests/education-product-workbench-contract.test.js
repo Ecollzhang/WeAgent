@@ -58,6 +58,7 @@ const apiContracts = [
   '/weakness-analysis',
   '/mind-maps',
   '/student-insights',
+  '/product-agent-runs',
 ]
 for (const endpoint of apiContracts) {
   contains('src/api/education.js', endpoint, `frontend API must call ${endpoint}`)
@@ -67,10 +68,14 @@ const pages = {
   'src/views/education/CoursewareLibrary.vue': [
     'data-testid="courseware-upload"',
     'downloadCourseAsset',
+    'product_code: \'courseware\'',
+    'ProductAgentRunPanel',
   ],
   'src/views/education/StudentInsights.vue': [
     'data-testid="student-insight-list"',
     '数据不足',
+    'product_code: \'student_insight\'',
+    'ProductAgentRunPanel',
   ],
   'src/views/education/KnowledgeCenter.vue': [
     'data-testid="question-bank"',
@@ -80,14 +85,20 @@ const pages = {
   'src/views/education/MockExamCenter.vue': [
     'data-testid="mock-exam-generator"',
     'saveMockExamAnswers',
+    'product_code: \'mock_exam\'',
+    'ProductAgentRunPanel',
   ],
   'src/views/education/WeaknessCenter.vue': [
     'data-testid="weakness-evidence"',
     'evidence_item_version_ids',
+    'product_code: \'weakness_analysis\'',
+    'ProductAgentRunPanel',
   ],
   'src/views/education/MindMapCenter.vue': [
     'data-testid="course-mind-map"',
     'saveMindMapVersion',
+    'product_code: \'course_mind_map\'',
+    'ProductAgentRunPanel',
   ],
 }
 for (const [file, fragments] of Object.entries(pages)) {
@@ -106,6 +117,28 @@ contains(
   'activeCourse',
   'role workbenches must share server-owned active-course context'
 )
+contains(
+  'src/store/modules/education.js',
+  'restoreProductAgentRun',
+  'product pages must restore persisted Agent progress after refresh'
+)
+for (const fragment of [
+  'data-testid="product-agent-run"',
+  'data-testid="product-agent-node"',
+  'tool_calls',
+  '已写入 Education',
+]) {
+  contains(
+    'src/components/education/ProductAgentRunPanel.vue',
+    fragment,
+    'product Agent collaboration must be visible and auditable'
+  )
+}
+for (const forbidden of ['Conversation：', 'Sandbox：', 'tool_grant']) {
+  assert.ok(
+    !read('src/components/education/ProductAgentRunPanel.vue').includes(forbidden),
+    `product Agent panel must not expose ${forbidden}`
+  )
+}
 
 console.log('education product workbench contract ok')
-

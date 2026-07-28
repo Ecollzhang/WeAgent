@@ -20,6 +20,7 @@ import {
   getCourseMindMaps,
   getCourseMembers,
   getCoursePapers,
+  getCourseProductAgentRuns,
   getCourseQuestions,
   getCourseWorkflowRuns,
   getCourses,
@@ -30,6 +31,7 @@ import {
   getStudentInsights,
   getWeaknessAnalysis,
   getEducationWorkflowRun,
+  getEducationProductAgentRun,
   getLessonPublication,
   getLessonRelease,
   getLesson,
@@ -45,6 +47,7 @@ import {
   refreshStudentInsights,
   refreshWeaknessAnalysis,
   runEducationWorkflow,
+  startEducationProductAgentRun,
   saveContentVersion,
   saveLessonVersion,
   saveMindMapVersion,
@@ -88,6 +91,7 @@ export default {
     analytics: null,
     resourceResults: [],
     agentRun: null,
+    productAgentRun: null,
     assets: [],
     knowledgeSummary: null,
     questions: [],
@@ -119,6 +123,7 @@ export default {
     loading: state => state.loading,
     saving: state => state.saving,
     agentRun: state => state.agentRun,
+    productAgentRun: state => state.productAgentRun,
     assets: state => state.assets,
     knowledgeSummary: state => state.knowledgeSummary,
     questions: state => state.questions,
@@ -147,6 +152,7 @@ export default {
     SET_ANALYTICS(state, value) { state.analytics = value },
     SET_RESOURCE_RESULTS(state, value) { state.resourceResults = value },
     SET_AGENT_RUN(state, value) { state.agentRun = value },
+    SET_PRODUCT_AGENT_RUN(state, value) { state.productAgentRun = value },
     SET_ASSETS(state, value) { state.assets = value },
     SET_KNOWLEDGE_SUMMARY(state, value) { state.knowledgeSummary = value },
     SET_QUESTIONS(state, value) { state.questions = value },
@@ -469,6 +475,27 @@ export default {
       const runs = items(await getCourseWorkflowRuns(courseId))
       const run = runs.find(item => item.lesson_id === lessonId) || null
       commit('SET_AGENT_RUN', run)
+      return run
+    },
+
+    async startProductAgentRun({ commit }, input) {
+      const run = payload(await startEducationProductAgentRun(input))
+      commit('SET_PRODUCT_AGENT_RUN', run)
+      return run
+    },
+
+    async refreshProductAgentRun({ commit }, runId) {
+      const run = payload(await getEducationProductAgentRun(runId))
+      commit('SET_PRODUCT_AGENT_RUN', run)
+      return run
+    },
+
+    async restoreProductAgentRun({ commit }, { courseId, productCode }) {
+      const runs = items(await getCourseProductAgentRuns(courseId, {
+        product_code: productCode,
+      }))
+      const run = runs[0] || null
+      commit('SET_PRODUCT_AGENT_RUN', run)
       return run
     },
 

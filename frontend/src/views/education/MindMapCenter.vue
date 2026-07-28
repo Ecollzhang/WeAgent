@@ -10,12 +10,18 @@
         @click="openEditor"
       >编辑结构</el-button>
       <el-button
-        type="primary"
         icon="el-icon-magic-stick"
         :loading="generating"
         :disabled="!course"
         @click="generate"
-      >生成新导图</el-button>
+      >规则快速生成</el-button>
+      <el-button
+        type="primary"
+        icon="el-icon-cpu"
+        :loading="agentRunning"
+        :disabled="!course"
+        @click="generateWithAgent"
+      >Agent 生成导图</el-button>
     </template>
 
     <el-alert
@@ -27,6 +33,13 @@
     />
 
     <template v-else-if="course">
+      <ProductAgentRunPanel
+        :run="productAgentRun"
+        @terminal="handleAgentTerminal"
+        @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
+        @close="closeAgentRun"
+      />
+
       <section class="map-shell">
         <aside class="map-list">
           <header>
@@ -119,10 +132,11 @@
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
 import MindMapTree from '../../components/education/MindMapTree.vue'
+import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 
 export default {
   name: 'MindMapCenter',
-  components: { EducationShell, MindMapTree },
+  components: { EducationShell, MindMapTree, ProductAgentRunPanel },
   data() {
     return {
       roleError: false,
@@ -137,6 +151,10 @@ export default {
     course() { return this.$store.getters['education/activeCourse'] },
     mindMaps() { return this.$store.getters['education/mindMaps'] || [] },
     activeMap() { return this.$store.getters['education/activeMindMap'] },
+    productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    agentRunning() {
+      return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
+    },
   },
   watch: {
     'course.id'(next, previous) {
@@ -162,6 +180,10 @@ export default {
       try {
         const maps = await this.$store.dispatch('education/fetchMindMaps', courseId)
         this.$store.commit('education/SET_ACTIVE_MIND_MAP', maps[0] || null)
+        await this.$store.dispatch('education/restoreProductAgentRun', {
+          courseId,
+          productCode: 'course_mind_map',
+        })
       } catch (error) {
         this.$message.error('课程导图加载失败')
       }
@@ -179,6 +201,34 @@ export default {
       } finally {
         this.generating = false
       }
+    },
+    async generateWithAgent() {
+      try {
+        await this.$store.dispatch('education/startProductAgentRun', {
+          course_id: this.course.id,
+          product_code: 'course_mind_map',
+          options: { title: `${this.course.title} · 我的导图` },
+        })
+        this.$message.success('笔记整理与学习规划 Agent 已启动')
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '思维导图 Agent 启动失败')
+      }
+    },
+    async handleAgentTerminal(run) {
+      if (run.status !== 'completed') return
+      const previousIds = new Set(this.mindMaps.map(item => item.id))
+      const maps = await this.$store.dispatch('education/fetchMindMaps', this.course.id)
+      const created = maps.find(item => !previousIds.has(item.id)) || maps[0]
+      if (created) {
+        this.$store.commit('education/SET_ACTIVE_MIND_MAP', created)
+        this.$message.success('Agent 已创建可编辑课程导图')
+      } else {
+        this.$message.warning('Agent 已结束，但未创建导图；可查看协作记录或使用规则生成')
+      }
+    },
+    closeAgentRun() {
+      this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
     },
     selectMap(mindMap) {
       this.$store.commit('education/SET_ACTIVE_MIND_MAP', mindMap)
@@ -254,4 +304,3 @@ export default {
 @media (max-width: 900px) { .map-shell { grid-template-columns: 190px 1fr; }.tree-viewport { padding: 28px; } }
 @media (max-width: 700px) { .map-shell { grid-template-columns: 1fr; }.map-list { display: none; }.canvas-header dl { display: none; } }
 </style>
-

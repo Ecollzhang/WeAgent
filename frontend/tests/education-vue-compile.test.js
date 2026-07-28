@@ -12,6 +12,7 @@ const files = [
   'src/components/education/CourseCard.vue',
   'src/components/education/SafeHtmlPreview.vue',
   'src/components/education/LessonPlanEditor.vue',
+  'src/components/education/ProductAgentRunPanel.vue',
   'src/views/education/EducationHome.vue',
   'src/views/education/CourseSpace.vue',
   'src/views/education/LessonWorkbench.vue',

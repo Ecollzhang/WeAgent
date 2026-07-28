@@ -29,6 +29,13 @@
     />
 
     <template v-else-if="course">
+      <ProductAgentRunPanel
+        :run="productAgentRun"
+        @terminal="handleAgentTerminal"
+        @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
+        @close="closeAgentRun"
+      />
+
       <section class="exam-layout">
         <aside class="exam-sidebar">
           <div class="generator-card" data-testid="mock-exam-generator">
@@ -50,9 +57,14 @@
               <el-button
                 type="primary"
                 class="generate-button"
+                :loading="agentRunning"
+                @click="generateWithAgent"
+              ><i class="el-icon-cpu"></i> Agent 协作生成</el-button>
+              <el-button
+                class="fallback-button"
                 :loading="generating"
                 @click="generateExam"
-              ><i class="el-icon-magic-stick"></i> 生成模拟考试</el-button>
+              >规则快速生成</el-button>
             </el-form>
           </div>
 
@@ -166,10 +178,11 @@
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
+import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 
 export default {
   name: 'MockExamCenter',
-  components: { EducationShell },
+  components: { EducationShell, ProductAgentRunPanel },
   data() {
     return {
       roleError: false,
@@ -189,6 +202,10 @@ export default {
     course() { return this.$store.getters['education/activeCourse'] },
     attempts() { return this.$store.getters['education/mockExams'] || [] },
     activeAttempt() { return this.$store.getters['education/activeMockExam'] },
+    productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    agentRunning() {
+      return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
+    },
     answeredCount() {
       return Object.values(this.answers).filter(value => value !== '' && value != null).length
     },
@@ -225,6 +242,10 @@ export default {
         const attempts = await this.$store.dispatch('education/fetchMockExams', courseId)
         const current = attempts.find(item => item.status === 'in_progress') || attempts[0] || null
         this.$store.commit('education/SET_ACTIVE_MOCK_EXAM', current)
+        await this.$store.dispatch('education/restoreProductAgentRun', {
+          courseId,
+          productCode: 'mock_exam',
+        })
       } catch (error) {
         this.$message.error('考试记录加载失败')
       }
@@ -247,6 +268,34 @@ export default {
       } finally {
         this.generating = false
       }
+    },
+    async generateWithAgent() {
+      try {
+        await this.$store.dispatch('education/startProductAgentRun', {
+          course_id: this.course.id,
+          product_code: 'mock_exam',
+          options: { ...this.blueprint },
+        })
+        this.$message.success('学习规划与练习教练 Agent 已启动')
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '模拟考试 Agent 启动失败')
+      }
+    },
+    async handleAgentTerminal(run) {
+      if (run.status !== 'completed') return
+      const previousIds = new Set(this.attempts.map(item => item.id))
+      const attempts = await this.$store.dispatch('education/fetchMockExams', this.course.id)
+      const created = attempts.find(item => !previousIds.has(item.id)) || attempts[0]
+      if (created) {
+        this.$store.commit('education/SET_ACTIVE_MOCK_EXAM', created)
+        this.$message.success('Agent 已创建模拟考试，可以开始答题')
+      } else {
+        this.$message.warning('Agent 已结束，但未创建试卷；可查看协作记录或使用规则生成')
+      }
+    },
+    closeAgentRun() {
+      this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
     },
     selectAttempt(attempt) {
       if (this.dirty) {
@@ -334,6 +383,7 @@ export default {
 .generator-card > p { margin: 0 0 16px; color: #7e8d89; font-size: 10px; line-height: 1.6; }
 .generator-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }.generator-row :deep(.el-input-number) { width: 100%; }
 .generate-button { width: 100%; margin-top: 2px; }
+.fallback-button { width: 100%; margin: 8px 0 0; }
 .attempt-history { flex: 1; padding: 14px; border: 1px solid #e1e8e6; border-radius: 13px; background: #fff; }
 .attempt-history > header { display: flex; justify-content: space-between; padding: 2px 3px 10px; color: #526762; font-size: 11px; }.attempt-history > header span { color: #329083; }
 .attempt-history button { width: 100%; display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 8px; padding: 10px 7px; border: 0; border-radius: 9px; background: transparent; cursor: pointer; text-align: left; }
@@ -355,4 +405,3 @@ export default {
 @media (max-width: 1050px) { .exam-layout { grid-template-columns: 235px 1fr; } }
 @media (max-width: 760px) { .exam-layout { grid-template-columns: 1fr; }.attempt-history { display: none; }.question-paper :deep(.el-radio-group) { grid-template-columns: 1fr; } }
 </style>
-

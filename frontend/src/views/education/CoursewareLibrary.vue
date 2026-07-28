@@ -19,7 +19,8 @@
         type="primary"
         icon="el-icon-magic-stick"
         :disabled="!lessons.length"
-        @click="openFirstLesson"
+        :loading="agentRunning"
+        @click="openAgentDialog"
       >用 Agent 制作</el-button>
     </template>
 
@@ -33,6 +34,13 @@
     />
 
     <template v-else-if="course">
+      <ProductAgentRunPanel
+        :run="productAgentRun"
+        @terminal="handleAgentTerminal"
+        @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
+        @close="closeAgentRun"
+      />
+
       <section class="courseware-hero">
         <div>
           <span class="hero-kicker">COURSEWARE STUDIO</span>
@@ -113,21 +121,67 @@
         </div>
       </section>
     </template>
+
+    <el-dialog title="用 Agent 制作课件" :visible.sync="agentDialog" width="620px">
+      <el-alert
+        title="课程设计、课件制作和教学审校 Agent 会协作生成可编辑课件草稿；不会自动发布给学生。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+      <el-form label-position="top" class="agent-form">
+        <el-form-item label="基于课时">
+          <el-select v-model="agentForm.lesson_id" style="width:100%" placeholder="选择课时">
+            <el-option
+              v-for="lesson in lessons"
+              :key="lesson.id"
+              :label="lesson.title"
+              :value="lesson.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="课件侧重点">
+          <el-input
+            v-model.trim="agentForm.requirements"
+            type="textarea"
+            :rows="5"
+            maxlength="2000"
+            show-word-limit
+            placeholder="例如：突出故事弧、证据提取和读后续写，控制在 12 页以内"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="agentDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="agentRunning"
+          :disabled="!agentForm.lesson_id"
+          @click="startCoursewareAgent"
+        >启动 Agent 团队</el-button>
+      </template>
+    </el-dialog>
   </EducationShell>
 </template>
 
 <script>
 import { downloadCourseAsset } from '../../api/education'
 import EducationShell from '../../components/education/EducationShell.vue'
+import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 
 export default {
   name: 'CoursewareLibrary',
-  components: { EducationShell },
+  components: { EducationShell, ProductAgentRunPanel },
   data() {
     return {
       roleError: false,
       uploading: false,
       loadingAssets: false,
+      agentDialog: false,
+      agentForm: {
+        lesson_id: '',
+        requirements: '',
+      },
     }
   },
   computed: {
@@ -142,6 +196,10 @@ export default {
     },
     publishedAssets() {
       return this.assets.filter(asset => asset.visibility_scope === 'course_published').length
+    },
+    productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    agentRunning() {
+      return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
     },
   },
   watch: {
@@ -176,6 +234,13 @@ export default {
           this.$store.dispatch('education/fetchCourseOverview', courseId),
           this.$store.dispatch('education/fetchAssets', courseId),
         ])
+        await this.$store.dispatch('education/restoreProductAgentRun', {
+          courseId,
+          productCode: 'courseware',
+        })
+        if (!this.agentForm.lesson_id && this.lessons[0]) {
+          this.agentForm.lesson_id = this.lessons[0].id
+        }
       } catch (error) {
         this.$message.error('课件资料加载失败')
       } finally {
@@ -231,8 +296,40 @@ export default {
         }
       }
     },
-    openFirstLesson() {
-      if (this.lessons[0]) this.openLesson(this.lessons[0])
+    openAgentDialog() {
+      if (!this.agentForm.lesson_id && this.lessons[0]) {
+        this.agentForm.lesson_id = this.lessons[0].id
+      }
+      this.agentDialog = true
+    },
+    async startCoursewareAgent() {
+      try {
+        await this.$store.dispatch('education/startProductAgentRun', {
+          course_id: this.course.id,
+          lesson_id: this.agentForm.lesson_id,
+          product_code: 'courseware',
+          options: {
+            requirements: this.agentForm.requirements,
+          },
+        })
+        this.agentDialog = false
+        this.$message.success('课件 Agent 团队已启动')
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '课件 Agent 启动失败')
+      }
+    },
+    async handleAgentTerminal(run) {
+      if (run.status === 'completed') {
+        await Promise.all([
+          this.$store.dispatch('education/fetchAssets', this.course.id),
+          this.$store.dispatch('education/fetchCourseOverview', this.course.id),
+        ])
+        this.$message.success('Agent 课件草稿已写入课时，可继续编辑后发布')
+      }
+    },
+    closeAgentRun() {
+      this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
     },
     openLesson(lesson) {
       this.$router.push(`/education/courses/${this.course.id}/lessons/${lesson.id}`)
@@ -267,6 +364,7 @@ export default {
 
 <style scoped>
 .visually-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.agent-form { margin-top: 16px; }
 .courseware-hero {
   min-height: 160px;
   display: grid;
@@ -352,4 +450,3 @@ export default {
   .asset-list article .el-tag { display: none; }
 }
 </style>
-

@@ -5,12 +5,18 @@
   >
     <template #actions>
       <el-button
-        type="primary"
         icon="el-icon-refresh"
         :loading="refreshing"
         :disabled="!course"
         @click="refresh"
-      >刷新画像</el-button>
+      >仅刷新证据</el-button>
+      <el-button
+        type="primary"
+        icon="el-icon-cpu"
+        :loading="agentRunning"
+        :disabled="!course"
+        @click="startInsightAgent"
+      >Agent 分析画像</el-button>
     </template>
 
     <el-alert
@@ -21,6 +27,13 @@
       show-icon
     />
     <template v-else-if="course">
+      <ProductAgentRunPanel
+        :run="productAgentRun"
+        @terminal="handleAgentTerminal"
+        @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
+        @close="closeAgentRun"
+      />
+
       <section class="evidence-banner">
         <div class="banner-seal"><i class="el-icon-data-board"></i></div>
         <div>
@@ -130,10 +143,11 @@
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
+import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 
 export default {
   name: 'StudentInsights',
-  components: { EducationShell },
+  components: { EducationShell, ProductAgentRunPanel },
   data() {
     return {
       roleError: false,
@@ -157,6 +171,10 @@ export default {
     },
     readyCount() {
       return this.studentRows.filter(row => row.insight && row.insight.data_state === 'ready').length
+    },
+    productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    agentRunning() {
+      return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
     },
   },
   watch: {
@@ -187,6 +205,10 @@ export default {
           this.$store.dispatch('education/fetchCourseOverview', courseId),
           this.$store.dispatch('education/fetchStudentInsights', courseId),
         ])
+        await this.$store.dispatch('education/restoreProductAgentRun', {
+          courseId,
+          productCode: 'student_insight',
+        })
       } catch (error) {
         this.$message.error('学生画像加载失败')
       } finally {
@@ -203,6 +225,28 @@ export default {
       } finally {
         this.refreshing = false
       }
+    },
+    async startInsightAgent() {
+      try {
+        await this.$store.dispatch('education/startProductAgentRun', {
+          course_id: this.course.id,
+          product_code: 'student_insight',
+          options: {},
+        })
+        this.$message.success('学情分析 Agent 团队已启动')
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '学情 Agent 启动失败')
+      }
+    },
+    async handleAgentTerminal(run) {
+      if (run.status === 'completed') {
+        await this.$store.dispatch('education/fetchStudentInsights', this.course.id)
+        this.$message.success('Agent 已按真实学习证据刷新画像')
+      }
+    },
+    closeAgentRun() {
+      this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
     },
     openEvidence(row) {
       this.selectedRow = row
@@ -280,4 +324,3 @@ export default {
   .evidence-banner dl { display: none; }
 }
 </style>
-

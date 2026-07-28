@@ -9,9 +9,15 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from .extensions import db
+from .access import active_membership
 from .routes import teacher_course_or_none
 from .subject_packs import AGENT_ROLES, SUBJECT_PACKS, WORKFLOW_TEMPLATES
 from .content_models import Lesson
+from .product_agent_runs import (
+    build_product_prompt,
+    product_template,
+    product_workflow,
+)
 from .runtime_client import CoreRuntimeError
 from .tool_gateway import ToolGatewayError, issue_tool_grant
 from .tool_models import EducationToolCall, EducationToolGrant
@@ -306,10 +312,12 @@ def _sync_run(run, authorization):
     if failed_count:
         run.status = "partial" if done_count else "failed"
     elif agent_count and done_count == agent_count:
-        run.status = "awaiting_approval"
-        for node in nodes:
-            if node.get("type") == "approval":
-                node["status"] = "awaiting_approval"
+        has_approval = any(node.get("type") == "approval" for node in nodes)
+        run.status = "awaiting_approval" if has_approval else "completed"
+        if has_approval:
+            for node in nodes:
+                if node.get("type") == "approval":
+                    node["status"] = "awaiting_approval"
         run.finished_at = datetime.utcnow()
         _revoke_tool_grant(run)
     else:
@@ -633,6 +641,184 @@ def start_workflow_run():
     refreshed = EducationAgentRun.query.filter_by(id=run.id).first()
     _attach_tool_calls(refreshed)
     return jsonify(refreshed.to_dict()), 202
+
+
+def _product_options(payload):
+    options = payload.get("options") or {}
+    if not isinstance(options, dict):
+        raise ValueError("options must be an object")
+    if len(json.dumps(options, ensure_ascii=False)) > 20_000:
+        raise ValueError("options are too large")
+    normalized = dict(options)
+    for field, maximum in (("title", 200), ("requirements", 2000)):
+        if field in normalized:
+            normalized[field] = str(normalized[field] or "").strip()[:maximum]
+    if "question_count" in normalized:
+        count = int(normalized["question_count"])
+        if not 1 <= count <= 30:
+            raise ValueError("question_count must be between 1 and 30")
+        normalized["question_count"] = count
+    if "duration_minutes" in normalized:
+        duration = int(normalized["duration_minutes"])
+        if not 5 <= duration <= 180:
+            raise ValueError("duration_minutes must be between 5 and 180")
+        normalized["duration_minutes"] = duration
+    return normalized
+
+
+@education_workflow_api.post("/product-agent-runs")
+@jwt_required()
+def start_product_agent_run():
+    user_id = get_jwt_identity()
+    payload = request.get_json(silent=True) or {}
+    course_id = str(payload.get("course_id") or "").strip()
+    product_code = str(payload.get("product_code") or "").strip()
+    contract = product_workflow(product_code)
+    if not contract:
+        return jsonify({"error": "product Agent workflow not found"}), 404
+    membership = active_membership(course_id, user_id)
+    if not membership:
+        return jsonify({"error": "course not found"}), 404
+    if membership.role != contract["role"]:
+        return jsonify({"error": "product Agent workflow is not available"}), 403
+
+    lesson_id = str(payload.get("lesson_id") or "").strip() or None
+    if contract["requires_lesson"] and not lesson_id:
+        return jsonify({"error": "lesson_id is required"}), 400
+    lesson = None
+    if lesson_id:
+        lesson = Lesson.query.filter_by(id=lesson_id, course_id=course_id).first()
+        if not lesson:
+            return jsonify({"error": "lesson not found"}), 404
+    try:
+        options = _product_options(payload)
+    except (TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
+
+    template = product_template(product_code)
+    nodes = _run_nodes(template)
+    agent_ids = [
+        node["agent_id"] for node in nodes if node.get("type") == "agent_task"
+    ]
+    prompt = build_product_prompt(
+        product_code,
+        membership.course,
+        options,
+        lesson=lesson,
+    )
+    workflow = _workflow_payload(template, nodes)
+    run = EducationAgentRun(
+        course_id=course_id,
+        lesson_id=lesson_id,
+        requested_by=user_id,
+        workflow_code=template["code"],
+        workflow_name=template["name"],
+        status="pending",
+        nodes=nodes,
+        input_payload={
+            "product_code": product_code,
+            "options": options,
+        },
+        started_at=datetime.utcnow(),
+    )
+    db.session.add(run)
+    db.session.flush()
+    try:
+        tool_grant, raw_tool_grant = issue_tool_grant(
+            actor_user_id=user_id,
+            course_id=course_id,
+            allowed_tools=contract["tools"],
+            capability_ids=["builtin:education_actions"],
+            agent_run_id=run.id,
+        )
+    except ToolGatewayError as error:
+        db.session.rollback()
+        return jsonify(
+            {"error": error.message, "error_code": error.error_code}
+        ), error.status_code
+    run.tool_grant_id = tool_grant.id
+    db.session.commit()
+
+    title_target = lesson.title if lesson else membership.course.title
+    app = current_app._get_current_object()
+    launch_args = (
+        app,
+        run.id,
+        request.headers.get("Authorization", ""),
+        f"{title_target} · {template['name']}",
+        prompt,
+        agent_ids,
+        workflow,
+        raw_tool_grant,
+    )
+    if app.config.get("TESTING"):
+        _start_core_run(*launch_args)
+    else:
+        threading.Thread(
+            target=_start_core_run,
+            args=launch_args,
+            daemon=True,
+            name=f"education-product-run-{run.id[:8]}",
+        ).start()
+    db.session.expire_all()
+    refreshed = EducationAgentRun.query.filter_by(id=run.id).first()
+    _attach_tool_calls(refreshed)
+    return jsonify(refreshed.to_dict()), 202
+
+
+def _member_owned_product_run(run_id, user_id):
+    run = EducationAgentRun.query.filter_by(id=run_id).first()
+    if (
+        not run
+        or not str(run.workflow_code or "").startswith("product.")
+        or run.requested_by != user_id
+        or not active_membership(run.course_id, user_id)
+    ):
+        return None
+    return run
+
+
+@education_workflow_api.get("/product-agent-runs/<run_id>")
+@jwt_required()
+def get_product_agent_run(run_id):
+    user_id = get_jwt_identity()
+    run = _member_owned_product_run(run_id, user_id)
+    if not run:
+        return jsonify({"error": "product Agent run not found"}), 404
+    if _expire_stale_pending_run(run):
+        db.session.commit()
+    if run.status in {"running", "pending"} and run.conversation_id:
+        try:
+            _sync_run(run, request.headers.get("Authorization", ""))
+        except CoreRuntimeError as exc:
+            run.error_summary = str(exc)
+            db.session.commit()
+    _attach_tool_calls(run)
+    return jsonify(run.to_dict())
+
+
+@education_workflow_api.get("/courses/<course_id>/product-agent-runs")
+@jwt_required()
+def list_product_agent_runs(course_id):
+    user_id = get_jwt_identity()
+    if not active_membership(course_id, user_id):
+        return jsonify({"error": "course not found"}), 404
+    query = EducationAgentRun.query.filter(
+        EducationAgentRun.course_id == course_id,
+        EducationAgentRun.requested_by == user_id,
+        EducationAgentRun.workflow_code.like("product.%"),
+    )
+    product_code = str(request.args.get("product_code") or "").strip()
+    if product_code:
+        query = query.filter(
+            EducationAgentRun.workflow_code == f"product.{product_code}"
+        )
+    runs = query.order_by(EducationAgentRun.created_at.desc()).limit(50).all()
+    if any(_expire_stale_pending_run(run) for run in runs):
+        db.session.commit()
+    for run in runs:
+        _attach_tool_calls(run)
+    return jsonify({"items": [run.to_dict() for run in runs]})
 
 
 @education_workflow_api.get("/workflow-runs/<run_id>")
