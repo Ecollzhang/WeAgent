@@ -63,6 +63,19 @@ def test_education_entrypoint_resolves_its_own_config_when_run_as_a_file():
     assert result.stdout.strip() == "weagent-edu"
 
 
+def test_education_runtime_debug_is_disabled_unless_explicitly_enabled(monkeypatch):
+    from services.edu.app import _runtime_debug_enabled
+
+    monkeypatch.delenv("EDU_DEBUG", raising=False)
+    assert _runtime_debug_enabled() is False
+
+    monkeypatch.setenv("EDU_DEBUG", "true")
+    assert _runtime_debug_enabled() is True
+
+    monkeypatch.setenv("EDU_DEBUG", "0")
+    assert _runtime_debug_enabled() is False
+
+
 def test_education_service_rejects_business_routes_when_feature_is_disabled():
     from services.edu.app import create_edu_app
 

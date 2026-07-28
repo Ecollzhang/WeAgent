@@ -13,6 +13,16 @@ if BACKEND_ROOT not in sys.path:
 from app.services.domain_base import DomainServiceBase
 from services.edu.runtime_client import CoreRuntimeClient
 
+
+def _runtime_debug_enabled():
+    return os.getenv("EDU_DEBUG", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 try:
     from .config import Config
     from .extensions import db
@@ -88,4 +98,4 @@ if __name__ == "__main__":
         migrate_existing_education_schema()
     service = app.extensions["domain_service"]
     print(f"[WeAgent] Education service listening on http://127.0.0.1:{service.port}")
-    service.run(debug=True)
+    service.run(debug=_runtime_debug_enabled())
