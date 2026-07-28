@@ -20,6 +20,12 @@ export function getCourseMembers(courseId) {
   return service.get(url(`/courses/${courseId}/members`))
 }
 
+export function updateMyCourseProfile(courseId, displayName) {
+  return service.put(url(`/courses/${courseId}/me/profile`), {
+    display_name: displayName,
+  })
+}
+
 export function createCourseInvitation(courseId, data = {}) {
   return service.post(url(`/courses/${courseId}/invitations`), data)
 }
@@ -76,8 +82,32 @@ export function saveLessonVersion(lessonId, data) {
   })
 }
 
+export function createLessonContent(lessonId, data) {
+  return service.post(url(`/lessons/${lessonId}/contents`), data)
+}
+
 export function saveContentVersion(contentId, data) {
   return service.post(url(`/contents/${contentId}/versions`), data)
+}
+
+export function getLessonMaterials(lessonId) {
+  return service.get(url(`/lessons/${lessonId}/materials`))
+}
+
+export function uploadLessonMaterial(lessonId, formData) {
+  return service.post(url(`/lessons/${lessonId}/materials`), formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export function createLessonActivity(lessonId, data) {
+  return service.post(url(`/lessons/${lessonId}/activities`), data)
+}
+
+export function downloadLessonMaterial(materialId) {
+  return service.get(url(`/materials/${materialId}/download`), {
+    responseType: 'blob',
+  })
 }
 
 export function publishLesson(lessonId) {
@@ -154,4 +184,12 @@ export function saveEducationWorkflow(data) {
 
 export function runEducationWorkflow(data) {
   return service.post(url('/workflow-runs'), data)
+}
+
+export function getEducationWorkflowRun(runId) {
+  return service.get(url(`/workflow-runs/${runId}`))
+}
+
+export function getCourseWorkflowRuns(courseId) {
+  return service.get(url(`/courses/${courseId}/workflow-runs`))
 }

@@ -1,6 +1,6 @@
 <template>
   <EducationShell
-    :title="course ? course.title : '课程空间'"
+    :title="course ? course.title : '教学空间'"
     :subtitle="courseSubtitle"
     back-to="/education"
   >
@@ -10,6 +10,7 @@
         data-testid="course-membership-role"
         :type="isTeacher ? 'success' : 'info'"
       >{{ isTeacher ? '教师空间' : '学生空间' }}</el-tag>
+      <el-button icon="el-icon-edit" @click="displayNameDialog = true">修改课程姓名</el-button>
       <el-button
         v-if="isTeacher"
         data-testid="create-invitation-open"
@@ -103,11 +104,22 @@
       </section>
 
       <section v-if="activeTab === 'people' && isTeacher" class="panel">
-        <div class="section-heading"><div><h2>课程成员</h2><p>身份来自服务端课程成员关系。</p></div></div>
+        <div class="section-heading">
+          <div>
+            <h2>课程成员</h2>
+            <p>显示课程姓名；教师和学生都可用页面顶部“修改课程姓名”单独设置。</p>
+          </div>
+          <el-button icon="el-icon-edit" @click="displayNameDialog = true">修改我的姓名</el-button>
+        </div>
         <el-table :data="members" stripe data-testid="course-member-list">
-          <el-table-column prop="user_id" label="用户" min-width="180" />
+          <el-table-column prop="display_name" label="姓名" min-width="150" />
           <el-table-column label="身份" width="110">
             <template #default="{ row }">{{ row.role === 'teacher' ? '教师' : '学生' }}</template>
+          </el-table-column>
+          <el-table-column label="账户标识" min-width="180">
+            <template #default="{ row }">
+              <span class="account-key">{{ row.user_id }}</span>
+            </template>
           </el-table-column>
           <el-table-column prop="joined_at" label="加入时间" min-width="180" />
           <el-table-column prop="status" label="状态" width="100" />
@@ -167,6 +179,45 @@
         >保存作业</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      title="邀请学生"
+      :visible.sync="invitationDialog"
+      width="560px"
+      @closed="invitationToken = ''"
+    >
+      <p class="dialog-help">将下面的邀请码发送给学生。学生登录自己的账户后，在“教学空间”中使用邀请码加入。</p>
+      <el-input
+        v-model="invitationToken"
+        data-testid="invitation-token"
+        readonly
+      >
+        <el-button
+          slot="append"
+          data-testid="copy-invitation-token"
+          icon="el-icon-document-copy"
+          @click="copyInvitation"
+        >一键复制</el-button>
+      </el-input>
+      <template #footer>
+        <el-button type="primary" @click="invitationDialog = false">完成</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog title="修改课程姓名" :visible.sync="displayNameDialog" width="420px">
+      <p class="name-help">该姓名只用于本课程成员列表，不会改变登录用户名。</p>
+      <el-input
+        v-model.trim="displayName"
+        maxlength="80"
+        show-word-limit
+        placeholder="例如：王老师、林同学"
+      />
+      <template #footer>
+        <el-button @click="displayNameDialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!displayName" @click="saveDisplayName">
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
   </EducationShell>
 </template>
 
@@ -180,6 +231,10 @@ export default {
     return {
       activeTab: 'lessons',
       assignmentDialog: false,
+      invitationDialog: false,
+      displayNameDialog: false,
+      displayName: '',
+      invitationToken: '',
       assignmentForm: {
         title: '',
         instructions: '',
@@ -226,6 +281,18 @@ export default {
     }
   },
   methods: {
+    async saveDisplayName() {
+      try {
+        await this.$store.dispatch('education/updateMyDisplayName', {
+          courseId: this.courseId,
+          displayName: this.displayName,
+        })
+        this.displayNameDialog = false
+        this.$message.success('课程姓名已更新')
+      } catch (error) {
+        this.$message.error('课程姓名更新失败')
+      }
+    },
     openLesson(lesson) {
       this.$router.push(`/education/courses/${this.courseId}/lessons/${lesson.id}`)
     },
@@ -238,12 +305,32 @@ export default {
           courseId: this.courseId,
           limits: { max_uses: 30, expires_in_hours: 168 },
         })
-        await this.$alert(invitation.token, '学生邀请码（仅显示一次）', {
-          confirmButtonText: '我已复制',
-          dangerouslyUseHTMLString: false,
-        })
+        this.invitationToken = invitation.token
+        this.invitationDialog = true
       } catch (error) {
         this.$message.error('邀请码创建失败')
+      }
+    },
+    async copyInvitation() {
+      if (!this.invitationToken) return
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(this.invitationToken)
+        } else {
+          const textarea = document.createElement('textarea')
+          textarea.value = this.invitationToken
+          textarea.setAttribute('readonly', '')
+          textarea.style.position = 'fixed'
+          textarea.style.opacity = '0'
+          document.body.appendChild(textarea)
+          textarea.select()
+          const copied = document.execCommand('copy')
+          document.body.removeChild(textarea)
+          if (!copied) throw new Error('copy command was rejected')
+        }
+        this.$message.success('邀请码已复制')
+      } catch (error) {
+        this.$message.warning('自动复制失败，请手动选择邀请码复制')
       }
     },
     async handleCreateAssignment() {

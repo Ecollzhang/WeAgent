@@ -117,11 +117,31 @@ assertContains(
   'selectCourse',
   'course selection must refresh server-owned membership context'
 )
+assertContains(
+  'src/store/modules/education.js',
+  'lesson.current_published_version_id',
+  'draft lessons must not request a publication that cannot exist yet'
+)
+assertContains(
+  'src/store/modules/education.js',
+  'saveContentVersion',
+  'subsequent lesson saves must append a version instead of creating duplicate content'
+)
 
 assertContains(
   'src/views/education/EducationHome.vue',
   'data-testid="education-course-list"',
   'course list needs a stable UAT locator'
+)
+assertContains(
+  'src/views/education/EducationHome.vue',
+  'title="教学空间"',
+  'Education navigation and page naming must be consistent'
+)
+assertContains(
+  'src/views/education/EducationHome.vue',
+  '创建课程后是教师；通过邀请码加入后是学生',
+  'the UI must explain that role comes from course membership rather than a toggle'
 )
 assertContains(
   'src/views/education/EducationHome.vue',
@@ -144,9 +164,154 @@ assertContains(
   'UAT must be able to observe the server-authoritative role'
 )
 assertContains(
+  'src/views/education/CourseSpace.vue',
+  'data-testid="copy-invitation-token"',
+  'teacher invitations need a one-click copy action'
+)
+assertContains(
+  'src/views/education/CourseSpace.vue',
+  'navigator.clipboard.writeText',
+  'the invitation copy action must use the clipboard API when available'
+)
+assertContains(
   'src/views/education/LessonWorkbench.vue',
   'data-testid="lesson-plan-editor"',
   'lesson plans need an editable structured workspace'
+)
+assertContains(
+  'src/api/education.js',
+  'getEducationWorkflowRun',
+  'the Education UI must poll the persisted workflow run instead of inventing local progress'
+)
+assertContains(
+  'src/store/modules/education.js',
+  'restoreLessonAgentRun',
+  'refreshing the lesson page must restore the latest persisted Agent run for that lesson'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  "'education/restoreLessonAgentRun'",
+  'the workbench must show a completed Agent run after a browser refresh'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'data-testid="start-agent-workflow"',
+  'teachers need a visible action that starts the real Agent workflow'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'data-testid="agent-run-node-list"',
+  'the lesson workbench must expose persisted Agent node states'
+)
+assertNotContains(
+  'src/views/education/LessonWorkbench.vue',
+  '/workspace/agents/',
+  'internal Agent workspace paths must not be exposed in the teacher interface'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'applyAgentDraft',
+  'Agent output must be adoptable into the editable lesson plan instead of remaining decorative'
+)
+assertContains(
+  'src/components/education/LessonPlanEditor.vue',
+  "import EditableLessonSection from './EditableLessonSection.vue'",
+  'lesson fields must use a precompiled Vue component in the runtime-only build'
+)
+assertNotContains(
+  'src/components/education/LessonPlanEditor.vue',
+  'template: `',
+  'runtime templates make lesson fields disappear in the production Vue build'
+)
+assertContains(
+  'src/components/education/LessonPlanEditor.vue',
+  "updateField('objectives', $event)",
+  'lesson fields must emit atomic object updates so save baselines stay stable'
+)
+assertContains(
+  'src/components/education/LessonPlanEditor.vue',
+  '叙事类课文',
+  'primary Chinese lesson plans must retain text-type-specific choices'
+)
+assertContains(
+  'src/components/education/LessonPlanEditor.vue',
+  '读后续写',
+  'high-school English lesson plans must retain reading/writing-specific choices'
+)
+assertContains(
+  'src/components/education/EditableLessonSection.vue',
+  'class="field-heading"',
+  'lesson field titles and expand actions must share one horizontal heading'
+)
+assertContains(
+  'src/components/education/EditableLessonSection.vue',
+  'StructuredTextEditor',
+  'expanded lesson fields must use the courseware-inspired structured editor'
+)
+assertContains(
+  'src/components/education/RichMaterialEditor.vue',
+  '@wangeditor/editor-for-vue',
+  'courseware editing must use the approved Vue 2 rich-text editor adapter'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'AgentArtifactPreview',
+  'every Agent artifact needs a rendered preview surface'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'artifactSummary',
+  'collapsed Agent nodes must still summarize their outputs'
+)
+assertContains(
+  'src/components/education/AgentArtifactPreview.vue',
+  'output.questions',
+  'exercise Agent artifacts must render their canonical questions array'
+)
+assertContains(
+  'src/components/education/AgentArtifactPreview.vue',
+  '添加到学习活动',
+  'a valid exercise artifact must be convertible into a learning activity'
+)
+assertContains(
+  'src/api/education.js',
+  'createLessonActivity',
+  'teachers need an API for persisted learning activity cards'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'createLearningActivity',
+  'teachers need an activity creation workflow in the lesson workbench'
+)
+assertNotContains(
+  'src/views/education/LessonWorkbench.vue',
+  '<h2>课内活动</h2>',
+  'the learning activity page must not be named classroom activity'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  '自定义组合 · 下一阶段',
+  'the fixed MVP workflow must expose the boundary for later custom Agent teams'
+)
+assertNotContains(
+  'src/views/education/LessonWorkbench.vue',
+  'Conversation：',
+  'internal conversation ids must not be exposed in the teacher interface'
+)
+assertNotContains(
+  'src/views/education/LessonWorkbench.vue',
+  'Sandbox：',
+  'internal sandbox ids must not be exposed in the teacher interface'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  "event.key.toLowerCase() === 's'",
+  'Ctrl/Cmd+S must save the current lesson version'
+)
+assertContains(
+  'src/views/education/LessonWorkbench.vue',
+  'hasUnsavedChanges',
+  'publishing and navigation must observe unsaved lesson changes'
 )
 assertContains(
   'src/views/education/AssignmentWorkspace.vue',

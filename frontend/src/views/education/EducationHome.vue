@@ -1,6 +1,6 @@
 <template>
   <EducationShell
-    title="课程空间"
+    title="教学空间"
     subtitle="教师备课、发布与学情回流，学生学习、提交与反馈在同一课程内完成"
   >
     <template #actions>
@@ -30,7 +30,7 @@
         <b>{{ studentCount }}</b>
         <span>正在学习</span>
       </div>
-      <p>身份由课程成员关系决定，与工作空间展示角色无关。</p>
+      <p>身份按课程自动确定：创建课程后是教师；通过邀请码加入后是学生，不提供会绕过权限的角色开关。</p>
     </div>
 
     <section

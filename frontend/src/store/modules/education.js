@@ -1,5 +1,7 @@
 import {
   acceptCourseInvitation,
+  createLessonContent,
+  createLessonActivity,
   createAssignment,
   createCourse,
   createCourseInvitation,
@@ -9,21 +11,28 @@ import {
   getCourseAnalytics,
   getCourseAssignments,
   getCourseMembers,
+  getCourseWorkflowRuns,
   getCourses,
   getCourseUnits,
+  getEducationWorkflowRun,
   getLessonPublication,
   getLessonRelease,
   getLesson,
   getLessonContents,
+  getLessonMaterials,
   getMySubmission,
   getSubmissionFeedback,
   publishAssignment,
   publishLesson,
   releaseFeedback,
+  runEducationWorkflow,
+  saveContentVersion,
   saveLessonVersion,
   saveSubmissionDraft,
   searchEducationResources,
   submitAssignment,
+  uploadLessonMaterial,
+  updateMyCourseProfile,
 } from '../../api/education'
 
 function payload(response) {
@@ -54,6 +63,7 @@ export default {
     members: [],
     analytics: null,
     resourceResults: [],
+    agentRun: null,
     loading: false,
     saving: false,
   },
@@ -73,6 +83,7 @@ export default {
     analytics: state => state.analytics,
     loading: state => state.loading,
     saving: state => state.saving,
+    agentRun: state => state.agentRun,
   },
 
   mutations: {
@@ -89,6 +100,7 @@ export default {
     SET_MEMBERS(state, value) { state.members = value },
     SET_ANALYTICS(state, value) { state.analytics = value },
     SET_RESOURCE_RESULTS(state, value) { state.resourceResults = value },
+    SET_AGENT_RUN(state, value) { state.agentRun = value },
     UPSERT_COURSE(state, course) {
       const index = state.courses.findIndex(item => item.id === course.id)
       if (index < 0) state.courses.push(course)
@@ -179,31 +191,55 @@ export default {
       return payload(await createCourseInvitation(courseId, limits))
     },
 
+    async updateMyDisplayName({ dispatch }, { courseId, displayName }) {
+      const result = payload(await updateMyCourseProfile(courseId, displayName))
+      await dispatch('fetchCourseOverview', courseId)
+      return result
+    },
+
     async fetchLesson({ commit, state }, lessonId) {
       const lesson = payload(await getLesson(lessonId))
       let publication = {}
-      try {
+      if (lesson.status === 'published' || lesson.current_published_version_id) {
         publication = payload(
           await (state.activeCourse.membership_role === 'teacher'
             ? getLessonPublication(lessonId)
             : getLessonRelease(lessonId))
         )
-      } catch (error) {
-        if (lesson.status === 'published') throw error
       }
       let currentVersion = null
+      let lessonPlanContent = null
+      let materialVersion = null
+      let materialContent = null
       if (state.activeCourse.membership_role === 'teacher') {
         const contents = items(await getLessonContents(lessonId))
-        const plan = contents.find(item => item.kind === 'lesson_plan')
-        if (plan) {
-          const versions = items(await getContentVersions(plan.id))
+        lessonPlanContent = contents.find(item => item.kind === 'lesson_plan') || null
+        materialContent = contents.find(item => item.kind === 'rich_document') || null
+        if (lessonPlanContent) {
+          const versions = items(await getContentVersions(lessonPlanContent.id))
           currentVersion = versions[versions.length - 1] || null
         }
+        if (materialContent) {
+          const versions = items(await getContentVersions(materialContent.id))
+          materialVersion = versions[versions.length - 1] || null
+        }
+      } else {
+        const releaseMaterials = (
+          publication.student_release_manifest
+          && publication.student_release_manifest.materials
+        ) || []
+        const htmlMaterial = releaseMaterials.find(item => item.kind === 'rich_document')
+        if (htmlMaterial) materialVersion = htmlMaterial
       }
+      const materials = items(await getLessonMaterials(lessonId))
       const value = {
         ...lesson,
         publication,
         current_version: currentVersion,
+        lesson_plan_content: lessonPlanContent,
+        material_version: materialVersion,
+        material_content: materialContent,
+        materials,
       }
       commit('SET_ACTIVE_LESSON', value)
       return value
@@ -230,11 +266,57 @@ export default {
             assessment: plan.assessment || '',
           }],
         }
-        return payload(await saveLessonVersion(lessonId, {
+        if (!source.objectives.length) {
+          throw new Error('请至少填写一条教学目标')
+        }
+        const versionPayload = {
           source_json: source,
-          rendered_html: version.rendered_html || '',
+          rendered_html: version.rendered_html
+            || (version.content && version.content.html)
+            || '',
           change_summary: version.change_summary || '网页端编辑',
-        }))
+          schema_name: 'weagent.education.lesson-plan',
+          schema_version: '1.0',
+        }
+        const response = lesson.lesson_plan_content
+          ? await saveContentVersion(lesson.lesson_plan_content.id, versionPayload)
+          : await saveLessonVersion(lessonId, versionPayload)
+        const result = payload(response)
+        const materialHtml = (version.content && version.content.html) || ''
+        let materialResult = null
+        if (materialHtml.trim()) {
+          const materialPayload = {
+            schema_name: 'weagent.education.rich-document',
+            schema_version: '1.0',
+            source_json: {
+              title: lesson.title || '学习材料',
+              format: 'html',
+            },
+            rendered_html: materialHtml,
+            change_summary: version.change_summary || '可视化课件编辑',
+          }
+          materialResult = payload(
+            lesson.material_content
+              ? await saveContentVersion(lesson.material_content.id, materialPayload)
+              : await createLessonContent(lessonId, {
+                ...materialPayload,
+                kind: 'rich_document',
+                visibility_scope: 'course_students',
+              })
+          )
+        }
+        commit('SET_ACTIVE_LESSON', {
+          ...lesson,
+          current_version: result.version || null,
+          lesson_plan_content: result.content || lesson.lesson_plan_content || null,
+          material_version: materialResult
+            ? materialResult.version
+            : lesson.material_version || null,
+          material_content: materialResult
+            ? materialResult.content
+            : lesson.material_content || null,
+        })
+        return { ...result, material: materialResult }
       } finally {
         commit('SET_SAVING', false)
       }
@@ -242,6 +324,25 @@ export default {
 
     async publishLesson(context, { lessonId, versionId }) {
       return payload(await publishLesson(lessonId, versionId))
+    },
+
+    async uploadMaterial({ commit, state }, { lessonId, file, title }) {
+      const data = new FormData()
+      data.append('file', file)
+      data.append('title', title || file.name)
+      const material = payload(await uploadLessonMaterial(lessonId, data))
+      const lesson = state.activeLesson || {}
+      commit('SET_ACTIVE_LESSON', {
+        ...lesson,
+        materials: [...(lesson.materials || []), material],
+      })
+      return material
+    },
+
+    async createLearningActivity({ dispatch }, { lessonId, activity }) {
+      const created = payload(await createLessonActivity(lessonId, activity))
+      await dispatch('fetchLesson', lessonId)
+      return created
     },
 
     async fetchAssignment({ commit }, input) {
@@ -293,6 +394,25 @@ export default {
       const value = items(await searchEducationResources(criteria))
       commit('SET_RESOURCE_RESULTS', value)
       return value
+    },
+
+    async startLessonAgentRun({ commit }, input) {
+      const run = payload(await runEducationWorkflow(input))
+      commit('SET_AGENT_RUN', run)
+      return run
+    },
+
+    async refreshAgentRun({ commit }, runId) {
+      const run = payload(await getEducationWorkflowRun(runId))
+      commit('SET_AGENT_RUN', run)
+      return run
+    },
+
+    async restoreLessonAgentRun({ commit }, { courseId, lessonId }) {
+      const runs = items(await getCourseWorkflowRuns(courseId))
+      const run = runs.find(item => item.lesson_id === lessonId) || null
+      commit('SET_AGENT_RUN', run)
+      return run
     },
   },
 }
