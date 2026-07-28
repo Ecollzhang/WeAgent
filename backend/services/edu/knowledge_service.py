@@ -460,6 +460,8 @@ def paper_to_dict(paper):
         "course_id": paper.course_id,
         "title": paper.title,
         "purpose": paper.purpose,
+        "generated_for_user_id": paper.generated_for_user_id,
+        "visibility_scope": paper.visibility_scope,
         "status": paper.status,
         "current_version_id": paper.current_version_id,
         "current_version": (
@@ -547,4 +549,3 @@ def knowledge_resource_to_dict(resource):
         "created_at": resource.created_at.isoformat() if resource.created_at else None,
         "updated_at": resource.updated_at.isoformat() if resource.updated_at else None,
     }
-

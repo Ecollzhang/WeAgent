@@ -131,7 +131,13 @@ def list_papers(course_id):
         return jsonify({"error": "course not found"}), 404
     query = AssessmentPaper.query.filter_by(course_id=course_id)
     if membership.role != "teacher":
-        query = query.filter_by(status="published")
+        query = query.filter(
+            AssessmentPaper.status == "published",
+            db.or_(
+                AssessmentPaper.generated_for_user_id.is_(None),
+                AssessmentPaper.generated_for_user_id == actor,
+            ),
+        )
     else:
         query = query.filter(AssessmentPaper.status != "archived")
     rows = query.order_by(AssessmentPaper.created_at.desc()).all()
@@ -208,4 +214,3 @@ def knowledge_center_summary(course_id):
             },
         }
     )
-

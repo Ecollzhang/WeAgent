@@ -93,6 +93,13 @@ class AssessmentPaper(TimestampMixin, db.Model):
     title = db.Column(db.String(200), nullable=False)
     purpose = db.Column(db.String(30), nullable=False, default="practice")
     owner_user_id = db.Column(db.String(100), nullable=False, index=True)
+    generated_for_user_id = db.Column(db.String(100), nullable=True, index=True)
+    visibility_scope = db.Column(
+        db.String(30),
+        nullable=False,
+        default="course_published",
+        index=True,
+    )
     current_version_id = db.Column(db.String(36), nullable=True)
     status = db.Column(db.String(20), nullable=False, default="draft", index=True)
     published_by = db.Column(db.String(100), nullable=True)
@@ -162,4 +169,3 @@ class KnowledgeResource(TimestampMixin, db.Model):
     metadata_json = db.Column(db.JSON, nullable=False, default=dict)
     owner_user_id = db.Column(db.String(100), nullable=False, index=True)
     status = db.Column(db.String(20), nullable=False, default="active", index=True)
-
