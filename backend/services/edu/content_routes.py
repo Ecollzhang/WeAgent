@@ -30,6 +30,7 @@ from .content_models import (
     Submission,
     SubmissionVersion,
 )
+from .content_exporters import ContentExportError, export_content_bytes
 from .extensions import db
 from .models import Course, CourseMembership
 
@@ -547,12 +548,7 @@ def list_content_versions(content_id):
 @education_content_api.get("/contents/<content_id>/export")
 @jwt_required()
 def export_content(content_id):
-    """Export the current editable source or rendered HTML.
-
-    PPTX stays behind an adapter boundary. When no adapter is installed the
-    API explicitly advertises lossless HTML/JSON fallbacks instead of
-    returning a corrupt or fake presentation.
-    """
+    """Export the current durable source as JSON, HTML, Office, or PDF."""
     user_id = get_jwt_identity()
     content = EducationContent.query.filter_by(id=content_id).first()
     if not content or not _membership(content.course_id, user_id, "teacher"):
@@ -600,18 +596,37 @@ def export_content(content_id):
                 "Content-Disposition": f'attachment; filename="{filename_base}.html"'
             },
         )
-    if export_format == "pptx":
-        return jsonify(
-            {
-                "error": "PPTX adapter is not installed",
-                "adapter_status": "unavailable",
-                "fallback_formats": ["html", "json"],
-            }
-        ), 424
+    if export_format in {"pptx", "docx", "pdf"}:
+        lesson = (
+            Lesson.query.filter_by(id=content.lesson_id).first()
+            if content.lesson_id
+            else None
+        )
+        try:
+            body, mimetype = export_content_bytes(
+                export_format,
+                version.source_json or {},
+                lesson.title if lesson else filename_base,
+            )
+        except ContentExportError as error:
+            return jsonify(
+                {
+                    "error": str(error),
+                    "adapter_status": "unavailable",
+                    "fallback_formats": ["html", "json"],
+                }
+            ), 424
+        return send_file(
+            BytesIO(body),
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=f"{filename_base}.{export_format}",
+            max_age=0,
+        )
     return jsonify(
         {
             "error": "unsupported export format",
-            "supported_formats": ["json", "html", "pptx"],
+            "supported_formats": ["json", "html", "pptx", "docx", "pdf"],
         }
     ), 400
 

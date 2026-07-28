@@ -68,6 +68,9 @@ const pages = {
   'src/views/education/CoursewareLibrary.vue': [
     'data-testid="courseware-upload"',
     'downloadCourseAsset',
+    'exportEducationContent',
+    'Agent 生成版本',
+    "['pptx', 'docx', 'pdf', 'html', 'json']",
     'product_code: \'courseware\'',
     'ProductAgentRunPanel',
   ],

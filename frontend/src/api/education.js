@@ -66,6 +66,13 @@ export function getContentVersions(contentId) {
   return service.get(url(`/contents/${contentId}/versions`))
 }
 
+export function exportEducationContent(contentId, format) {
+  return service.get(url(`/contents/${contentId}/export`), {
+    params: { format },
+    responseType: 'blob',
+  })
+}
+
 export function getLessonPublication(lessonId) {
   return service.get(url(`/lessons/${lessonId}/publication`))
 }

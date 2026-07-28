@@ -492,7 +492,7 @@ def test_lesson_detail_and_content_history_are_membership_scoped(app):
     ).status_code == 404
 
 
-def test_teacher_exports_editable_json_and_html_with_pptx_fallback(app):
+def test_teacher_exports_editable_json_html_and_real_office_files(app):
     client = app.test_client()
     teacher = headers(app, "export-teacher")
     outsider = headers(app, "export-outsider")
@@ -537,12 +537,26 @@ def test_teacher_exports_editable_json_and_html_with_pptx_fallback(app):
     assert html.mimetype == "text/html"
     assert b"Narrative lesson" in html.data
 
-    unavailable_pptx = client.get(
-        f"/api/edu/contents/{content['id']}/export?format=pptx",
-        headers=teacher,
-    )
-    assert unavailable_pptx.status_code == 424
-    assert unavailable_pptx.get_json()["fallback_formats"] == ["html", "json"]
+    expected_exports = {
+        "pptx": (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            b"PK",
+        ),
+        "docx": (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            b"PK",
+        ),
+        "pdf": ("application/pdf", b"%PDF"),
+    }
+    for export_format, (mimetype, signature) in expected_exports.items():
+        exported = client.get(
+            f"/api/edu/contents/{content['id']}/export?format={export_format}",
+            headers=teacher,
+        )
+        assert exported.status_code == 200
+        assert exported.mimetype == mimetype
+        assert exported.data.startswith(signature)
+        assert f".{export_format}" in exported.headers["Content-Disposition"]
     assert client.get(
         f"/api/edu/contents/{content['id']}/export?format=json",
         headers=outsider,

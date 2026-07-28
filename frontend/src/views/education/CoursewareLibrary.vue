@@ -119,6 +119,46 @@
             </div>
           </div>
         </div>
+
+        <div class="studio-panel generated-panel">
+          <header>
+            <div>
+              <span class="panel-index">03</span>
+              <h3>Agent 生成版本</h3>
+            </div>
+            <small>结构化源是可编辑主版本；PPTX、DOCX、PDF、HTML 与 JSON 均从当前版本即时导出。</small>
+          </header>
+          <div v-loading="loadingGenerated" class="generated-list">
+            <article v-for="entry in generatedContents" :key="entry.content.id">
+              <div class="generated-symbol">
+                <i :class="entry.content.kind === 'slide_document' ? 'el-icon-data-board' : 'el-icon-document'"></i>
+              </div>
+              <div class="generated-main">
+                <b>{{ entry.lesson.title }}</b>
+                <span>
+                  {{ contentKindLabel(entry.content.kind) }} ·
+                  v{{ entry.version.version_number }} ·
+                  {{ dateLabel(entry.version.created_at) }}
+                </span>
+                <small>{{ entry.version.change_summary || 'Agent 生成的可编辑草稿' }}</small>
+              </div>
+              <div class="format-actions">
+                <el-button
+                  v-for="format in exportFormats"
+                  :key="format"
+                  size="mini"
+                  :loading="exportingKey === `${entry.content.id}:${format}`"
+                  @click="downloadGenerated(entry, format)"
+                >{{ format.toUpperCase() }}</el-button>
+              </div>
+              <el-button size="mini" type="text" @click="openLesson(entry.lesson)">打开编辑</el-button>
+            </article>
+            <div v-if="!loadingGenerated && !generatedContents.length" class="empty-paper compact">
+              <i class="el-icon-cpu"></i>
+              <p>还没有 Agent 课件版本。选择课时启动课程设计、课件制作和教学审校团队。</p>
+            </div>
+          </div>
+        </div>
       </section>
     </template>
 
@@ -165,7 +205,12 @@
 </template>
 
 <script>
-import { downloadCourseAsset } from '../../api/education'
+import {
+  downloadCourseAsset,
+  exportEducationContent,
+  getContentVersions,
+  getLessonContents,
+} from '../../api/education'
 import EducationShell from '../../components/education/EducationShell.vue'
 import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 
@@ -178,6 +223,10 @@ export default {
       uploading: false,
       loadingAssets: false,
       agentDialog: false,
+      loadingGenerated: false,
+      exportingKey: '',
+      generatedContents: [],
+      exportFormats: ['pptx', 'docx', 'pdf', 'html', 'json'],
       agentForm: {
         lesson_id: '',
         requirements: '',
@@ -238,6 +287,7 @@ export default {
           courseId,
           productCode: 'courseware',
         })
+        await this.loadGeneratedContents()
         if (!this.agentForm.lesson_id && this.lessons[0]) {
           this.agentForm.lesson_id = this.lessons[0].id
         }
@@ -325,11 +375,64 @@ export default {
           this.$store.dispatch('education/fetchAssets', this.course.id),
           this.$store.dispatch('education/fetchCourseOverview', this.course.id),
         ])
+        await this.loadGeneratedContents()
         this.$message.success('Agent 课件草稿已写入课时，可继续编辑后发布')
       }
     },
     closeAgentRun() {
       this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
+    },
+    async loadGeneratedContents() {
+      this.loadingGenerated = true
+      try {
+        const rows = []
+        await Promise.all(this.lessons.map(async lesson => {
+          const response = await getLessonContents(lesson.id)
+          const payload = response && response.data !== undefined && response.code !== undefined
+            ? response.data
+            : response
+          const contents = Array.isArray(payload) ? payload : (payload && payload.items) || []
+          await Promise.all(contents
+            .filter(content => ['slide_document', 'rich_document'].includes(content.kind))
+            .map(async content => {
+              const versionResponse = await getContentVersions(content.id)
+              const versionPayload = versionResponse
+                && versionResponse.data !== undefined
+                && versionResponse.code !== undefined
+                ? versionResponse.data
+                : versionResponse
+              const versions = Array.isArray(versionPayload)
+                ? versionPayload
+                : (versionPayload && versionPayload.items) || []
+              const version = versions[versions.length - 1]
+              if (version) rows.push({ lesson, content, version })
+            }))
+        }))
+        this.generatedContents = rows.sort((left, right) => {
+          return new Date(right.version.created_at || 0) - new Date(left.version.created_at || 0)
+        })
+      } catch (error) {
+        this.generatedContents = []
+        this.$message.warning('Agent 课件版本暂时无法加载')
+      } finally {
+        this.loadingGenerated = false
+      }
+    },
+    async downloadGenerated(entry, format) {
+      this.exportingKey = `${entry.content.id}:${format}`
+      try {
+        const blob = await exportEducationContent(entry.content.id, format)
+        const objectUrl = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = objectUrl
+        link.download = `${entry.lesson.title}-v${entry.version.version_number}.${format}`
+        link.click()
+        URL.revokeObjectURL(objectUrl)
+      } catch (error) {
+        this.$message.error(`${format.toUpperCase()} 导出失败，请尝试 JSON 或 HTML`)
+      } finally {
+        this.exportingKey = ''
+      }
     },
     openLesson(lesson) {
       this.$router.push(`/education/courses/${this.course.id}/lessons/${lesson.id}`)
@@ -345,6 +448,9 @@ export default {
         integrated: '综合',
       }
       return labels[lesson.lesson_type_code] || '阅读与写作'
+    },
+    contentKindLabel(kind) {
+      return kind === 'slide_document' ? '可编辑幻灯片' : '可视化学习材料'
     },
     extension(name) {
       const value = String(name || '').split('.').pop()
@@ -409,6 +515,23 @@ export default {
   min-height: 360px; padding: 20px; border: 1px solid #e1e9e7;
   border-radius: 14px; background: #fff;
 }
+.generated-panel { grid-column: 1 / -1; min-height: 280px; }
+.generated-list { display: grid; gap: 9px; }
+.generated-list article {
+  display: grid; grid-template-columns: 42px minmax(180px, 1fr) auto auto;
+  align-items: center; gap: 11px; padding: 12px;
+  border: 1px solid #e2ebe8; border-radius: 10px; background: #fbfdfc;
+}
+.generated-symbol {
+  width: 40px; height: 40px; display: grid; place-items: center;
+  border-radius: 10px; background: #e5f2ee; color: #2f7e73; font-size: 17px;
+}
+.generated-main b, .generated-main span, .generated-main small { display: block; }
+.generated-main b { color: #304540; font-size: 12px; }
+.generated-main span { margin-top: 3px; color: #7e8e89; font-size: 9px; }
+.generated-main small { margin-top: 4px; color: #9aa5a2; font-size: 8px; }
+.format-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.format-actions .el-button { margin: 0; min-width: 48px; }
 .studio-panel > header { margin-bottom: 16px; border-bottom: 1px solid #edf1f0; padding-bottom: 14px; }
 .studio-panel > header > div { display: flex; align-items: center; gap: 8px; }
 .studio-panel h3 { margin: 0; color: #2c3d3a; font-size: 16px; }
@@ -448,5 +571,7 @@ export default {
   .hero-stats { display: none; }
   .asset-list article { grid-template-columns: 40px 1fr auto; }
   .asset-list article .el-tag { display: none; }
+  .generated-list article { grid-template-columns: 38px 1fr auto; }
+  .format-actions { grid-column: 2 / -1; justify-content: flex-start; }
 }
 </style>
