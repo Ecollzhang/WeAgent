@@ -1,5 +1,8 @@
 const assert = require('assert')
-const { renderSlideDocumentHtml } = require('../src/utils/slideDocument')
+const {
+  PRESENTATION_THEMES,
+  renderSlideDocumentHtml,
+} = require('../src/utils/slideDocument')
 
 const html = renderSlideDocumentHtml({
   title: 'Safe <Courseware>',
@@ -21,3 +24,23 @@ assert.ok(!html.includes('<script>alert(1)</script>'))
 assert.ok(html.includes('<table>'))
 assert.ok(html.includes('45 minutes'))
 console.log('slide document rendering ok')
+
+assert.deepStrictEqual(
+  Object.values(PRESENTATION_THEMES).map(theme => theme.label),
+  ['清朗课堂', '纸张批注', '童趣绘本', '深色聚焦'],
+)
+
+for (const style of Object.keys(PRESENTATION_THEMES)) {
+  const themed = renderSlideDocumentHtml({
+    title: style,
+    theme: { style },
+    slides: [{
+      id: 'theme-check',
+      title: 'Theme check',
+      layout: 'content',
+      blocks: [{ type: 'text', content: 'Readable content' }],
+    }],
+  })
+  assert.ok(themed.includes(`data-theme="${style}"`))
+  assert.ok(themed.includes(PRESENTATION_THEMES[style].background))
+}

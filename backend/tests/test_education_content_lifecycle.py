@@ -657,3 +657,63 @@ def test_teacher_exports_editable_json_html_and_real_office_files(app):
         f"/api/edu/contents/{content['id']}/export?format=json",
         headers=outsider,
     ).status_code == 404
+
+
+def test_teacher_runs_current_version_visual_qa_for_slide_document(app):
+    client = app.test_client()
+    teacher = headers(app, "visual-teacher")
+    outsider = headers(app, "visual-outsider")
+    created_course = course(client, teacher)
+    lesson = client.post(
+        f"/api/edu/courses/{created_course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Evidence workshop",
+            "learning_domain": "integrated",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    created = client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "slide_document",
+            "schema_name": "weagent.education.slide-document",
+            "source_json": {
+                "title": "Evidence workshop",
+                "theme": {"style": "storybook"},
+                "slides": [{
+                    "id": "evidence-slide",
+                    "title": "Find the turning point",
+                    "layout": "content",
+                    "blocks": [{
+                        "type": "list",
+                        "content": [
+                            "Circle one action.",
+                            "Explain the emotion change.",
+                        ],
+                    }],
+                    "speaker_notes": "Pair discussion.",
+                }],
+            },
+            "rendered_html": "<!doctype html><html><body>Evidence</body></html>",
+        },
+    ).get_json()["content"]
+
+    report = client.get(
+        f"/api/edu/contents/{created['id']}/visual-qa",
+        headers=teacher,
+    )
+
+    assert report.status_code == 200
+    assert report.get_json()["status"] == "passed"
+    assert report.get_json()["theme_label"] == "童趣绘本"
+    assert report.get_json()["slide_count"] == 1
+    assert report.get_json()["rendered_pptx"]["editable_text_shape_count"] >= 4
+    assert client.get(
+        f"/api/edu/contents/{created['id']}/visual-qa",
+        headers=outsider,
+    ).status_code == 404

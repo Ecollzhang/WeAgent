@@ -30,10 +30,11 @@ from .content_models import (
     Submission,
     SubmissionVersion,
 )
-from .content_exporters import ContentExportError, export_content_bytes
+from .content_exporters import ContentExportError, export_content_bytes, export_pptx
 from .course_context_service import build_courseware_context
 from .extensions import db
 from .models import Course, CourseMembership
+from .presentation_quality import inspect_pptx_bytes, inspect_slide_document
 
 
 education_content_api = Blueprint("education_content_api", __name__)
@@ -602,6 +603,68 @@ def list_content_versions(content_id):
         content_id=content.id
     ).order_by(EducationContentVersion.version_number.asc()).all()
     return jsonify({"items": [_version_dict(row) for row in versions]})
+
+
+@education_content_api.get("/contents/<content_id>/visual-qa")
+@jwt_required()
+def inspect_content_visual_quality(content_id):
+    """Inspect both the durable SlideDocument and its current PPTX rendering."""
+    user_id = get_jwt_identity()
+    content = EducationContent.query.filter_by(id=content_id).first()
+    if not content or not _membership(content.course_id, user_id, "teacher"):
+        return jsonify({"error": "content not found"}), 404
+    if content.kind != "slide_document":
+        return jsonify({"error": "visual QA is only available for slide documents"}), 400
+    version = EducationContentVersion.query.filter_by(
+        id=content.current_version_id,
+        content_id=content.id,
+    ).first()
+    if not version:
+        return jsonify({"error": "content version not found"}), 404
+    lesson = (
+        Lesson.query.filter_by(id=content.lesson_id).first()
+        if content.lesson_id
+        else None
+    )
+    source_report = inspect_slide_document(version.source_json or {})
+    try:
+        rendered_report = inspect_pptx_bytes(
+            export_pptx(
+                version.source_json or {},
+                lesson.title if lesson else f"education-content-{content.id}",
+            )
+        )
+    except ContentExportError as error:
+        return jsonify(
+            {
+                "error": str(error),
+                "adapter_status": "unavailable",
+                "source": source_report,
+            }
+        ), 424
+    status = (
+        "failed"
+        if "failed" in {source_report["status"], rendered_report["status"]}
+        else (
+            "warning"
+            if "warning" in {source_report["status"], rendered_report["status"]}
+            else "passed"
+        )
+    )
+    return jsonify(
+        {
+            "status": status,
+            "content_id": content.id,
+            "version_id": version.id,
+            "version_number": version.version_number,
+            "theme_style": source_report["theme_style"],
+            "theme_label": source_report["theme_label"],
+            "slide_count": source_report["slide_count"],
+            "slides": source_report["slides"],
+            "findings": source_report["findings"],
+            "rendered_pptx": rendered_report,
+        }
+    )
 
 
 @education_content_api.get("/contents/<content_id>/export")

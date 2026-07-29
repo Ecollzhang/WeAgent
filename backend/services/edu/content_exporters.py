@@ -9,6 +9,8 @@ from io import BytesIO
 from html import escape
 import re
 
+from .presentation_themes import presentation_theme
+
 
 class ContentExportError(RuntimeError):
     pass
@@ -96,6 +98,7 @@ def _slide_records(source, fallback_title):
                     "title": slide_title[:200],
                     "lines": lines[:40] or ["（本页暂无正文）"],
                     "notes": _plain_text(item.get("speaker_notes")),
+                    "layout": str(item.get("layout") or "content")[:80],
                 }
             )
         return title, slides
@@ -152,94 +155,274 @@ def _slide_records(source, fallback_title):
 
 
 def export_pptx(source, fallback_title):
+    """Export a native, editable 16:9 deck from canonical SlideDocument JSON."""
     try:
         from pptx import Presentation
         from pptx.dml.color import RGBColor
-        from pptx.enum.text import PP_ALIGN
+        from pptx.enum.shapes import MSO_SHAPE
+        from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
         from pptx.util import Inches, Pt
     except ImportError as exc:
         raise ContentExportError("python-pptx adapter is unavailable") from exc
 
     title, slides = _slide_records(source, fallback_title)
+    style, theme = presentation_theme(source if isinstance(source, dict) else {})
+
+    def rgb(value):
+        return RGBColor.from_string(str(value or "#000000").lstrip("#").upper())
+
+    def add_shape(slide, shape_type, left, top, width, height, color):
+        shape = slide.shapes.add_shape(
+            shape_type,
+            Inches(left),
+            Inches(top),
+            Inches(width),
+            Inches(height),
+        )
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = rgb(color)
+        shape.line.fill.background()
+        return shape
+
+    def add_text(
+        slide,
+        text,
+        left,
+        top,
+        width,
+        height,
+        *,
+        size,
+        color,
+        bold=False,
+        align=PP_ALIGN.LEFT,
+        valign=MSO_ANCHOR.TOP,
+    ):
+        box = slide.shapes.add_textbox(
+            Inches(left), Inches(top), Inches(width), Inches(height)
+        )
+        frame = box.text_frame
+        frame.clear()
+        frame.word_wrap = True
+        frame.margin_left = Inches(0.02)
+        frame.margin_right = Inches(0.02)
+        frame.margin_top = Inches(0.02)
+        frame.margin_bottom = Inches(0.02)
+        frame.vertical_anchor = valign
+        paragraph = frame.paragraphs[0]
+        paragraph.alignment = align
+        run = paragraph.add_run()
+        run.text = str(text)
+        run.font.name = theme["font"]
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        run.font.color.rgb = rgb(color)
+        return box
+
+    def decorate(slide, *, cover=False):
+        if style == "clear_classroom":
+            add_shape(
+                slide, MSO_SHAPE.RECTANGLE, 0, 0, 13.333, 0.13, theme["primary"]
+            )
+            add_shape(
+                slide,
+                MSO_SHAPE.OVAL,
+                12.25,
+                5.85 if cover else 0.5,
+                0.34,
+                0.34,
+                theme["accent"],
+            )
+        elif style == "paper_annotation":
+            add_shape(
+                slide, MSO_SHAPE.RECTANGLE, 0.62, 0, 0.035, 7.5, theme["accent"]
+            )
+            add_shape(
+                slide, MSO_SHAPE.RECTANGLE, 0.4, 0.3, 1.25, 0.17, "#DCCFB8"
+            )
+        elif style == "storybook":
+            add_shape(
+                slide,
+                MSO_SHAPE.OVAL,
+                11.7,
+                0,
+                1.6,
+                1.6,
+                theme["accent"],
+            )
+            add_shape(
+                slide,
+                MSO_SHAPE.OVAL,
+                0,
+                6.35,
+                1.15,
+                1.15,
+                theme["secondary"],
+            )
+        else:
+            add_shape(
+                slide, MSO_SHAPE.RECTANGLE, 0.58, 0.55, 0.08, 6.35, theme["primary"]
+            )
+            add_shape(
+                slide, MSO_SHAPE.RECTANGLE, 11.65, 0, 1.68, 0.09, theme["accent"]
+            )
+
+    def add_body(slide, lines, record_layout):
+        lines = [str(line).strip() for line in lines if str(line).strip()]
+        lines = lines or ["（本页暂无正文）"]
+        use_columns = record_layout == "two_column" or len(lines) > 6
+        columns = [lines]
+        if use_columns:
+            split = (len(lines) + 1) // 2
+            columns = [lines[:split], lines[split:]]
+        lefts = [0.94] if len(columns) == 1 else [0.94, 6.82]
+        widths = [11.45] if len(columns) == 1 else [5.48, 5.48]
+        font_size = 27 if len(lines) <= 2 else (20 if len(lines) <= 8 else 17)
+        for column_index, column in enumerate(columns):
+            if style in {"storybook", "dark_focus"}:
+                add_shape(
+                    slide,
+                    MSO_SHAPE.ROUNDED_RECTANGLE,
+                    lefts[column_index] - 0.12,
+                    1.76,
+                    widths[column_index] + 0.24,
+                    4.83,
+                    theme["surface"],
+                )
+            box = slide.shapes.add_textbox(
+                Inches(lefts[column_index]),
+                Inches(1.94),
+                Inches(widths[column_index]),
+                Inches(4.42),
+            )
+            frame = box.text_frame
+            frame.clear()
+            frame.word_wrap = True
+            frame.margin_left = Inches(0.1)
+            frame.margin_right = Inches(0.1)
+            frame.margin_top = Inches(0.08)
+            frame.margin_bottom = Inches(0.08)
+            frame.vertical_anchor = (
+                MSO_ANCHOR.MIDDLE if len(lines) <= 2 else MSO_ANCHOR.TOP
+            )
+            for line_index, line in enumerate(column):
+                paragraph = (
+                    frame.paragraphs[0]
+                    if line_index == 0
+                    else frame.add_paragraph()
+                )
+                paragraph.text = line[:1200]
+                paragraph.level = 0
+                paragraph.space_after = Pt(11 if font_size >= 20 else 7)
+                paragraph.line_spacing = 1.12
+                paragraph.font.name = theme["font"]
+                paragraph.font.size = Pt(font_size)
+                paragraph.font.color.rgb = rgb(theme["text"])
+                if len(lines) > 2:
+                    paragraph.text = f"•  {paragraph.text}"
+
     presentation = Presentation()
     presentation.slide_width = Inches(13.333)
     presentation.slide_height = Inches(7.5)
+    presentation.core_properties.title = title
+    presentation.core_properties.subject = style
+    presentation.core_properties.keywords = (
+        f"WeAgent Education, editable PPTX, {theme['label']}"
+    )
     blank_layout = presentation.slide_layouts[6]
 
     cover = presentation.slides.add_slide(blank_layout)
     cover.background.fill.solid()
-    cover.background.fill.fore_color.rgb = RGBColor(22, 48, 45)
-    accent = cover.shapes.add_shape(
-        1, Inches(0.75), Inches(1.05), Inches(0.14), Inches(4.8)
+    cover.background.fill.fore_color.rgb = rgb(theme["background"])
+    decorate(cover, cover=True)
+    if style in {"clear_classroom", "paper_annotation"}:
+        add_shape(
+            cover, MSO_SHAPE.RECTANGLE, 0.86, 1.03, 0.12, 4.75, theme["accent"]
+        )
+    add_text(
+        cover,
+        theme["label"].upper(),
+        1.22,
+        0.85,
+        8.8,
+        0.45,
+        size=14,
+        color=theme["primary"],
+        bold=True,
     )
-    accent.fill.solid()
-    accent.fill.fore_color.rgb = RGBColor(52, 174, 153)
-    accent.line.fill.background()
-    title_box = cover.shapes.add_textbox(
-        Inches(1.2), Inches(1.35), Inches(10.9), Inches(2.1)
+    add_text(
+        cover,
+        title,
+        1.2,
+        1.43,
+        10.85,
+        2.45,
+        size=52,
+        color=theme["text"],
+        bold=True,
+        valign=MSO_ANCHOR.MIDDLE,
     )
-    title_frame = title_box.text_frame
-    title_frame.clear()
-    title_run = title_frame.paragraphs[0].add_run()
-    title_run.text = title
-    title_run.font.name = "Microsoft YaHei"
-    title_run.font.size = Pt(30)
-    title_run.font.bold = True
-    title_run.font.color.rgb = RGBColor(244, 250, 248)
-    subtitle = cover.shapes.add_textbox(
-        Inches(1.22), Inches(4.35), Inches(9), Inches(0.7)
+    add_text(
+        cover,
+        "WeAgent Education · 可编辑课件",
+        1.23,
+        4.62,
+        8.7,
+        0.62,
+        size=19,
+        color=theme["muted"],
     )
-    subtitle_frame = subtitle.text_frame
-    subtitle_frame.text = "WeAgent Education · 可编辑课件"
-    subtitle_frame.paragraphs[0].runs[0].font.name = "Microsoft YaHei"
-    subtitle_frame.paragraphs[0].runs[0].font.size = Pt(14)
-    subtitle_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(151, 207, 197)
+    add_text(
+        cover,
+        f"{len(slides):02d}  SLIDES",
+        10.42,
+        6.58,
+        1.75,
+        0.35,
+        size=11,
+        color=theme["muted"],
+        bold=True,
+        align=PP_ALIGN.RIGHT,
+    )
 
     for index, record in enumerate(slides, 1):
         slide = presentation.slides.add_slide(blank_layout)
         slide.background.fill.solid()
-        slide.background.fill.fore_color.rgb = RGBColor(248, 251, 250)
-        header = slide.shapes.add_textbox(
-            Inches(0.8), Inches(0.58), Inches(11.7), Inches(0.8)
+        slide.background.fill.fore_color.rgb = rgb(theme["background"])
+        decorate(slide)
+        add_text(
+            slide,
+            record["title"],
+            0.9,
+            0.5,
+            10.85,
+            0.88,
+            size=36,
+            color=theme["primary"],
+            bold=True,
+            valign=MSO_ANCHOR.MIDDLE,
         )
-        header_frame = header.text_frame
-        header_frame.clear()
-        header_run = header_frame.paragraphs[0].add_run()
-        header_run.text = record["title"]
-        header_run.font.name = "Microsoft YaHei"
-        header_run.font.size = Pt(24)
-        header_run.font.bold = True
-        header_run.font.color.rgb = RGBColor(35, 70, 64)
-        rule = slide.shapes.add_shape(
-            1, Inches(0.82), Inches(1.48), Inches(1.15), Inches(0.06)
+        if style != "storybook":
+            add_shape(
+                slide, MSO_SHAPE.RECTANGLE, 0.92, 1.47, 1.12, 0.06, theme["accent"]
+            )
+        add_body(
+            slide,
+            record.get("lines") or ["（本页暂无正文）"],
+            record.get("layout") or "content",
         )
-        rule.fill.solid()
-        rule.fill.fore_color.rgb = RGBColor(45, 145, 130)
-        rule.line.fill.background()
-
-        body = slide.shapes.add_textbox(
-            Inches(0.92), Inches(1.72), Inches(11.45), Inches(4.85)
+        add_text(
+            slide,
+            f"{index:02d}",
+            11.72,
+            6.87,
+            0.62,
+            0.28,
+            size=10,
+            color=theme["muted"],
+            bold=True,
+            align=PP_ALIGN.RIGHT,
         )
-        frame = body.text_frame
-        frame.word_wrap = True
-        frame.clear()
-        for line_index, line in enumerate(record.get("lines") or ["（暂无正文）"]):
-            paragraph = frame.paragraphs[0] if line_index == 0 else frame.add_paragraph()
-            paragraph.text = str(line)[:1200]
-            paragraph.level = 0
-            paragraph.space_after = Pt(8)
-            paragraph.font.name = "Microsoft YaHei"
-            paragraph.font.size = Pt(17 if len(record.get("lines") or []) <= 8 else 14)
-            paragraph.font.color.rgb = RGBColor(61, 78, 74)
-
-        page = slide.shapes.add_textbox(
-            Inches(11.7), Inches(6.88), Inches(0.7), Inches(0.3)
-        )
-        page_frame = page.text_frame
-        page_frame.text = f"{index:02d}"
-        page_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
-        page_frame.paragraphs[0].runs[0].font.size = Pt(9)
-        page_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(108, 145, 138)
 
     stream = BytesIO()
     presentation.save(stream)

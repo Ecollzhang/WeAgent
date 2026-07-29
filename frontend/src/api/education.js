@@ -70,6 +70,10 @@ export function getContentVersions(contentId) {
   return service.get(url(`/contents/${contentId}/versions`))
 }
 
+export function getContentVisualQa(contentId) {
+  return service.get(url(`/contents/${contentId}/visual-qa`))
+}
+
 export function exportEducationContent(contentId, format) {
   return service.get(url(`/contents/${contentId}/export`), {
     params: { format },

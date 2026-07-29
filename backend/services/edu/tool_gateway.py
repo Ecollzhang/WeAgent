@@ -1032,6 +1032,10 @@ def _courseware_create(grant, arguments):
             )
     elif kind == "slide_document":
         from .runtime_client import CoreRuntimeError, validate_education_artifact
+        from .presentation_quality import (
+            PRESENTATION_THEMES,
+            inspect_slide_document,
+        )
 
         try:
             validate_education_artifact("courseware_maker", source)
@@ -1051,6 +1055,40 @@ def _courseware_create(grant, arguments):
                 "slide_document requires a complete rendered_html preview",
                 400,
                 "invalid_slide_preview",
+            )
+        source = json.loads(json.dumps(source, ensure_ascii=False))
+        raw_theme = source.get("theme")
+        if not isinstance(raw_theme, dict):
+            raw_theme = {}
+            source["theme"] = raw_theme
+        requested_style = str(raw_theme.get("style") or "clear_classroom").strip()
+        if requested_style not in PRESENTATION_THEMES:
+            raise ToolGatewayError(
+                "slide_document theme.style must be one of: "
+                + ", ".join(PRESENTATION_THEMES),
+                400,
+                "invalid_presentation_theme",
+            )
+        raw_theme["style"] = requested_style
+        visual_quality = inspect_slide_document(source)
+        if visual_quality["status"] == "failed":
+            blocking = [
+                {
+                    "slide": slide["number"],
+                    "codes": [
+                        finding["code"]
+                        for finding in slide["findings"]
+                        if finding["severity"] == "error"
+                    ],
+                }
+                for slide in visual_quality["slides"]
+                if slide["status"] == "failed"
+            ]
+            raise ToolGatewayError(
+                "slide_document visual QA failed; repair the listed pages and "
+                f"call the tool again: {json.dumps(blocking, ensure_ascii=False)}",
+                400,
+                "courseware_visual_quality_failed",
             )
     content = EducationContent(
         course_id=grant.course_id,
@@ -1077,7 +1115,7 @@ def _courseware_create(grant, arguments):
     db.session.add(version)
     db.session.flush()
     content.current_version_id = version.id
-    return {
+    result = {
         "content": {
             "id": content.id,
             "course_id": content.course_id,
@@ -1094,6 +1132,9 @@ def _courseware_create(grant, arguments):
             "checksum": version.checksum,
         },
     }
+    if kind == "slide_document":
+        result["visual_qa"] = visual_quality
+    return result
 
 
 def _attach_asset(grant, arguments):

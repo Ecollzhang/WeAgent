@@ -54,7 +54,8 @@ def education_action_protocol(*, courseware_kind=None, lesson_scoped=False):
                 '<tool_call>{"name":"education_action","args":{"action":'
                 '"edu.courseware.create","arguments":{"kind":"slide_document",'
                 '"schema_name":"weagent.education.slide-document",'
-                '"source_json":{"title":"...","theme":{},"slides":[]},'
+                '"source_json":{"title":"...","theme":{"style":"clear_classroom"},'
+                '"slides":[]},'
                 '"rendered_html":"<!doctype html>..."},"idempotency_key":'
                 '"product-courseware-slide-v1"}}</tool_call>',
             ]
@@ -249,6 +250,15 @@ def build_product_prompt(product_code, course, options, lesson=None):
             "不得把账号标识误当作姓名，也不得重复调用产生冲突。"
         )
     elif product_code == "courseware":
+        theme_style = str(options.get("theme_style") or "clear_classroom").strip()
+        allowed_themes = {
+            "clear_classroom",
+            "paper_annotation",
+            "storybook",
+            "dark_focus",
+        }
+        if theme_style not in allowed_themes:
+            theme_style = "clear_classroom"
         prompt += (
             "\n【课程设计师】先读取 edu.course.context.get，结合课时分类和教师要求"
             "形成课件 brief；不得改写课时教学目标的语义。"
@@ -259,6 +269,13 @@ def build_product_prompt(product_code, course, options, lesson=None):
             "weagent.education.slide-document；课时作用域由服务端注入，"
             "source_json 使用完整 slide_document，rendered_html 使用预览 HTML，"
             "idempotency_key=product-courseware-slide-v1。不得自动发布。"
+            f"\n本次指定风格为 {theme_style}；source_json.theme 必须严格写成"
+            f'{{"style":"{theme_style}"}}。只允许 clear_classroom、'
+            "paper_annotation、storybook、dark_focus 四种风格，不得输出任意 CSS "
+            "或自定义色值。每页正文不超过 560 字、列表不超过 10 项、内容块不超过 "
+            "8 个；视觉校验失败时根据工具返回的问题页修复，并以同一 "
+            "任务前缀加递增 repair 序号的新 idempotency_key 再次调用 "
+            "edu.courseware.create；不得用不同参数复用已失败的 key。"
             "\n【教学审校员】检查目标—活动—评价一致性、年级适配、答案泄露和"
             "页面可读性；发现问题时要求课件制作师修复后再写入，不能另建冲突版本。"
         )

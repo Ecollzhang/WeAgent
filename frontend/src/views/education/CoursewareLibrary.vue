@@ -202,6 +202,13 @@
                   @click="downloadGenerated(entry, format)"
                 >{{ format.toUpperCase() }}</el-button>
               </div>
+              <el-button
+                v-if="entry.content.kind === 'slide_document'"
+                size="mini"
+                type="text"
+                icon="el-icon-view"
+                @click="inspectGenerated(entry)"
+              >逐页视觉检查</el-button>
               <el-button size="mini" type="text" @click="openGeneratedEditor(entry)">打开编辑</el-button>
             </article>
             <div v-if="!loadingGenerated && !generatedContents.length" class="empty-paper compact">
@@ -230,6 +237,21 @@
               :value="lesson.id"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item label="课件风格">
+          <div class="courseware-theme-grid" data-testid="courseware-theme-selector">
+            <button
+              v-for="theme in coursewareThemes"
+              :key="theme.code"
+              type="button"
+              :class="{ active: agentForm.theme_style === theme.code }"
+              @click="agentForm.theme_style = theme.code"
+            >
+              <span :style="{ background: theme.accent }"></span>
+              <b>{{ theme.label }}</b>
+              <small>{{ theme.description }}</small>
+            </button>
+          </div>
         </el-form-item>
         <el-form-item label="课件侧重点">
           <el-input
@@ -275,6 +297,47 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      title="逐页视觉检查"
+      :visible.sync="visualQaDialog"
+      width="760px"
+      data-testid="visual-qa-dialog"
+    >
+      <div v-loading="visualQaLoading" class="visual-qa-report">
+        <template v-if="visualQaReport">
+          <div class="visual-qa-summary">
+            <div><span>检查结果</span><b>{{ qaStatusLabel(visualQaReport.status) }}</b></div>
+            <div><span>课件风格</span><b>{{ visualQaReport.theme_label }}</b></div>
+            <div><span>页面数量</span><b>{{ visualQaReport.slide_count }}</b></div>
+            <div>
+              <span>可编辑文字框</span>
+              <b>{{ (visualQaReport.rendered_pptx || {}).editable_text_shape_count || 0 }}</b>
+            </div>
+          </div>
+          <article
+            v-for="slide in visualQaReport.slides"
+            :key="slide.id"
+            class="visual-qa-slide"
+          >
+            <div>
+              <span>{{ String(slide.number).padStart(2, '0') }}</span>
+              <b>{{ slide.title }}</b>
+            </div>
+            <el-tag
+              size="mini"
+              :type="slide.status === 'passed' ? 'success' : (slide.status === 'warning' ? 'warning' : 'danger')"
+            >{{ qaStatusLabel(slide.status) }}</el-tag>
+            <ul v-if="slide.findings.length">
+              <li v-for="finding in slide.findings" :key="finding.code">
+                {{ finding.message }}
+              </li>
+            </ul>
+            <small v-else>正文密度、内容块数量与导出边界均通过。</small>
+          </article>
+        </template>
+      </div>
+    </el-dialog>
   </EducationShell>
 </template>
 
@@ -284,6 +347,7 @@ import {
   downloadCourseAsset,
   exportEducationContent,
   getContentVersions,
+  getContentVisualQa,
   getLessonContents,
   saveContentVersion,
 } from '../../api/education'
@@ -291,7 +355,17 @@ import EducationShell from '../../components/education/EducationShell.vue'
 import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
 import SlideDocumentEditor from '../../components/education/SlideDocumentEditor.vue'
 const { formatVersionTime } = require('../../utils/educationContent')
-const { renderSlideDocumentHtml } = require('../../utils/slideDocument')
+const {
+  PRESENTATION_THEMES,
+  renderSlideDocumentHtml,
+} = require('../../utils/slideDocument')
+
+const COURSEWARE_THEME_ORDER = [
+  'clear_classroom',
+  'paper_annotation',
+  'storybook',
+  'dark_focus',
+]
 
 export default {
   name: 'CoursewareLibrary',
@@ -305,14 +379,22 @@ export default {
       editorDialog: false,
       editorSaving: false,
       editingEntry: null,
+      visualQaDialog: false,
+      visualQaLoading: false,
+      visualQaReport: null,
       loadingGenerated: false,
       contextLoading: false,
       selectedLessonId: '',
       exportingKey: '',
       generatedContents: [],
       exportFormats: ['pptx', 'docx', 'pdf', 'html', 'json'],
+      coursewareThemes: COURSEWARE_THEME_ORDER.map(code => ({
+        code,
+        ...PRESENTATION_THEMES[code],
+      })),
       agentForm: {
         lesson_id: '',
+        theme_style: 'clear_classroom',
         requirements: '',
       },
     }
@@ -471,6 +553,7 @@ export default {
           product_code: 'courseware',
           options: {
             requirements: this.agentForm.requirements,
+            theme_style: this.agentForm.theme_style,
           },
         })
         this.agentDialog = false
@@ -553,6 +636,31 @@ export default {
       }
       this.editingEntry = entry
       this.editorDialog = true
+    },
+    async inspectGenerated(entry) {
+      this.visualQaDialog = true
+      this.visualQaLoading = true
+      this.visualQaReport = null
+      try {
+        const response = await getContentVisualQa(entry.content.id)
+        this.visualQaReport = response
+          && response.data !== undefined
+          && response.code !== undefined
+          ? response.data
+          : response
+      } catch (error) {
+        this.$message.error('视觉检查失败，请确认当前课件版本可以正常导出')
+        this.visualQaDialog = false
+      } finally {
+        this.visualQaLoading = false
+      }
+    },
+    qaStatusLabel(status) {
+      return {
+        passed: '通过',
+        warning: '有改进建议',
+        failed: '需要修复',
+      }[status] || '待检查'
     },
     openRecoverableDraft(draft) {
       const lesson = this.lessons.find(item => item.id === this.agentForm.lesson_id)
@@ -663,6 +771,43 @@ export default {
 .editor-footnote { float: left; max-width: 62%; color: #738682; font-size: 12px; line-height: 32px; text-align: left; }
 .slide-editor-dialog ::v-deep .el-dialog__body { padding: 12px 20px 4px; }
 .agent-form { margin-top: 16px; }
+.courseware-theme-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+.courseware-theme-grid button {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 3px 8px;
+  padding: 11px 12px;
+  border: 1px solid #dfe8e5;
+  border-radius: 10px;
+  color: #415651;
+  background: #fbfdfc;
+  text-align: left;
+  cursor: pointer;
+}
+.courseware-theme-grid button:hover { border-color: #9dc8c0; }
+.courseware-theme-grid button.active { border-color: #3b9084; background: #edf7f4; box-shadow: inset 3px 0 #287f75; }
+.courseware-theme-grid button > span { width: 10px; height: 10px; margin-top: 3px; border-radius: 50%; }
+.courseware-theme-grid button b { font-size: 12px; }
+.courseware-theme-grid button small { grid-column: 2; color: #83928f; font-size: 9px; line-height: 1.45; }
+.visual-qa-report { min-height: 180px; }
+.visual-qa-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-bottom: 14px; }
+.visual-qa-summary div { padding: 11px; border-radius: 10px; background: #f3f8f6; }
+.visual-qa-summary span, .visual-qa-summary b { display: block; }
+.visual-qa-summary span { color: #80908c; font-size: 9px; }
+.visual-qa-summary b { margin-top: 4px; color: #315f58; font-size: 13px; }
+.visual-qa-slide {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 14px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid #e2eae8;
+  border-radius: 10px;
+}
+.visual-qa-slide > div { display: flex; gap: 10px; align-items: center; }
+.visual-qa-slide > div span { color: #559087; font: 700 10px Georgia, serif; }
+.visual-qa-slide > div b { color: #354844; font-size: 12px; }
+.visual-qa-slide ul, .visual-qa-slide > small { grid-column: 1 / -1; margin: 0; color: #748581; font-size: 10px; line-height: 1.6; }
 .courseware-hero {
   min-height: 160px;
   display: grid;
@@ -710,7 +855,7 @@ export default {
 .generated-panel { grid-column: 1 / -1; min-height: 280px; }
 .generated-list { display: grid; gap: 9px; }
 .generated-list article {
-  display: grid; grid-template-columns: 42px minmax(180px, 1fr) auto auto;
+  display: grid; grid-template-columns: 42px minmax(180px, 1fr) auto auto auto;
   align-items: center; gap: 11px; padding: 12px;
   border: 1px solid #e2ebe8; border-radius: 10px; background: #fbfdfc;
 }

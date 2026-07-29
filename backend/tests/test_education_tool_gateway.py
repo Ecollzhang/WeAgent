@@ -392,6 +392,64 @@ def test_courseware_tool_rejects_noncanonical_lesson_plan_objects(app):
     assert response.get_json()["error_code"] == "invalid_lesson_plan"
 
 
+def test_courseware_tool_returns_page_level_visual_errors_for_agent_repair(app):
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Evidence and Voice",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        ["edu.courseware.create"],
+    )
+
+    response = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "lesson_id": lesson["id"],
+            "kind": "slide_document",
+            "schema_name": "weagent.education.slide-document",
+            "source_json": {
+                "title": "Evidence and Voice",
+                "theme": {"style": "clear_classroom"},
+                "slides": [{
+                    "id": "dense-slide",
+                    "title": "Too much content",
+                    "layout": "content",
+                    "blocks": [{
+                        "type": "text",
+                        "content": "dense content " * 100,
+                    }],
+                    "speaker_notes": "Repair this page.",
+                }],
+            },
+            "rendered_html": (
+                "<!doctype html><html><body><main>"
+                + ("preview " * 20)
+                + "</main></body></html>"
+            ),
+        },
+        "courseware-visual-repair-v1",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error_code"] == "courseware_visual_quality_failed"
+    assert "dense-slide" not in response.get_json()["error"]
+    assert "slide_text_too_dense" in response.get_json()["error"]
+
+
 def test_idempotency_key_reuse_with_different_input_is_rejected(app):
     client = app.test_client()
     teacher, _, course = setup_course(client, app)
