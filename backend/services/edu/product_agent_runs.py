@@ -9,6 +9,58 @@ screens or workspace paths.
 import json
 
 
+def education_action_protocol(*, courseware_kind=None, lesson_scoped=False):
+    """Return the one strict provider-neutral Education tool-call contract."""
+    lines = [
+        "【education_action 严格调用协议】",
+        "优先调用运行时已注册的 education_action 工具；若 Provider 只支持文本工具"
+        "循环，才输出下面所示的单个 literal <tool_call> 块。",
+        "Action-specific fields MUST be nested under args.arguments; "
+        "never place kind, source_json, questions, members, tree, title, "
+        "question_count or other business fields directly under args.",
+        "读取动作也必须显式传 arguments={}；写动作还必须传本次任务唯一且稳定的 "
+        "idempotency_key。",
+        "示例（读取）："
+        '<tool_call>{"name":"education_action","args":{"action":'
+        '"edu.course.context.get","arguments":{}}}</tool_call>',
+        "course_id、actor_user_id、user_id、role、authorization、token 和 "
+        "source_agent_run_id 均由服务端注入，任何情况下都不得作为 arguments。",
+    ]
+    if courseware_kind == "lesson_plan":
+        lines.extend(
+            [
+                "示例（采纳 canonical 教案草稿；source_json 必须替换为完整对象）：",
+                '<tool_call>{"name":"education_action","args":{"action":'
+                '"edu.courseware.create","arguments":{"kind":"lesson_plan",'
+                '"schema_name":"weagent.education.lesson-plan",'
+                '"source_json":{"subject_code":"...","learning_domain":"...",'
+                '"text_genre_code":"...","lesson_type_code":"...",'
+                '"title":"...","objectives":[],"stages":[]}},'
+                '"idempotency_key":"course-designer-lesson-plan-v1"}}'
+                "</tool_call>",
+            ]
+        )
+    elif courseware_kind == "slide_document":
+        lines.extend(
+            [
+                "示例（采纳 canonical slide_document；source_json 与 "
+                "rendered_html 必须替换为完整产物）：",
+                '<tool_call>{"name":"education_action","args":{"action":'
+                '"edu.courseware.create","arguments":{"kind":"slide_document",'
+                '"schema_name":"weagent.education.slide-document",'
+                '"source_json":{"title":"...","theme":{},"slides":[]},'
+                '"rendered_html":"<!doctype html>..."},"idempotency_key":'
+                '"product-courseware-slide-v1"}}</tool_call>',
+            ]
+        )
+    if lesson_scoped:
+        lines.append(
+            "lesson_id is injected from the lesson-scoped Agent run; omit "
+            "lesson_id and do not guess or copy an internal identifier."
+        )
+    return "\n".join(lines)
+
+
 PRODUCT_AGENT_WORKFLOWS = {
     "roster_import": {
         "name": "Agent 名单导入",
@@ -168,6 +220,12 @@ def build_product_prompt(product_code, course, options, lesson=None):
     if not contract:
         raise ValueError("unknown product Agent workflow")
     prompt = _base_prompt(course, contract, options, lesson)
+    prompt += "\n" + education_action_protocol(
+        courseware_kind=(
+            "slide_document" if product_code == "courseware" else None
+        ),
+        lesson_scoped=bool(lesson),
+    )
     options = _safe_options(options)
 
     if product_code == "roster_import":
@@ -190,7 +248,7 @@ def build_product_prompt(product_code, course, options, lesson=None):
             "slides；每页包含 id、title、layout、blocks、speaker_notes，blocks "
             "使用可渲染的 type/content。生成完整安全 HTML 预览，然后调用 "
             "edu.courseware.create，kind=slide_document，schema_name="
-            "weagent.education.slide-document，lesson_id 使用本提示中的课时，"
+            "weagent.education.slide-document；课时作用域由服务端注入，"
             "source_json 使用完整 slide_document，rendered_html 使用预览 HTML，"
             "idempotency_key=product-courseware-slide-v1。不得自动发布。"
             "\n【教学审校员】检查目标—活动—评价一致性、年级适配、答案泄露和"

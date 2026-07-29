@@ -58,6 +58,7 @@ RESERVED_SCOPE_ARGUMENTS = {
     "course_id",
     "membership_role",
     "role",
+    "source_agent_run_id",
     "user_id",
 }
 SENSITIVE_PARTS = {
@@ -265,9 +266,8 @@ TOOL_CATALOG = {
                 "source_json": {"type": "object"},
                 "rendered_html": {"type": "string"},
                 "change_summary": {"type": "string"},
-                "source_agent_run_id": {"type": "string"},
             },
-            ["lesson_id", "kind", "schema_name", "source_json"],
+            ["kind", "schema_name", "source_json"],
         ),
     },
     "edu.asset.attach": {
@@ -287,7 +287,6 @@ TOOL_CATALOG = {
                 },
                 "content_base64": {"type": "string"},
                 "text_content": {"type": "string"},
-                "source_agent_run_id": {"type": "string"},
             },
             ["title", "original_filename", "media_type"],
         ),
@@ -303,7 +302,6 @@ TOOL_CATALOG = {
                     "items": QUESTION_SCHEMA,
                 },
                 "publish": {"type": "boolean"},
-                "source_agent_run_id": {"type": "string"},
             },
             ["questions"],
         ),
@@ -956,8 +954,30 @@ def _checksum(value):
     return _payload_hash(value)
 
 
+def _scoped_lesson_id(grant, arguments):
+    """Resolve lesson scope from the run; callers cannot widen a scoped run."""
+    requested = str(arguments.get("lesson_id") or "").strip()
+    scoped = ""
+    if grant.agent_run_id:
+        from .workflow_models import EducationAgentRun
+
+        run = EducationAgentRun.query.filter_by(
+            id=grant.agent_run_id,
+            course_id=grant.course_id,
+            requested_by=grant.actor_user_id,
+        ).first()
+        scoped = str(run.lesson_id or "").strip() if run else ""
+    if scoped and requested and requested != scoped:
+        raise ToolGatewayError(
+            "lesson scope is server-issued and cannot be changed",
+            400,
+            "lesson_scope_argument_forbidden",
+        )
+    return scoped or requested
+
+
 def _courseware_create(grant, arguments):
-    lesson_id = str(arguments.get("lesson_id") or "").strip()
+    lesson_id = _scoped_lesson_id(grant, arguments)
     lesson = Lesson.query.filter_by(
         id=lesson_id,
         course_id=grant.course_id,
@@ -980,22 +1000,13 @@ def _courseware_create(grant, arguments):
             "invalid_courseware_payload",
         )
     if kind == "lesson_plan":
-        required = {
-            "subject_code",
-            "learning_domain",
-            "text_genre_code",
-            "objectives",
-            "stages",
-        }
-        if (
-            not required.issubset(source)
-            or not isinstance(source.get("objectives"), list)
-            or not source["objectives"]
-            or not isinstance(source.get("stages"), list)
-            or not source["stages"]
-        ):
+        from .runtime_client import CoreRuntimeError, validate_education_artifact
+
+        try:
+            validate_education_artifact("course_designer", source)
+        except CoreRuntimeError as error:
             raise ToolGatewayError(
-                "lesson plan is missing required structured fields",
+                str(error),
                 400,
                 "invalid_lesson_plan",
             )
@@ -1029,8 +1040,7 @@ def _courseware_create(grant, arguments):
         rendered_html=arguments.get("rendered_html"),
         change_summary=str(arguments.get("change_summary") or "Agent draft")[:500],
         created_by_user_id=grant.actor_user_id,
-        source_agent_run_id=str(arguments.get("source_agent_run_id") or "")[:100]
-        or grant.agent_run_id,
+        source_agent_run_id=grant.agent_run_id,
         checksum=_checksum(source),
     )
     db.session.add(version)
@@ -1056,7 +1066,7 @@ def _courseware_create(grant, arguments):
 
 
 def _attach_asset(grant, arguments):
-    lesson_id = str(arguments.get("lesson_id") or "").strip() or None
+    lesson_id = _scoped_lesson_id(grant, arguments) or None
     if lesson_id and not Lesson.query.filter_by(
         id=lesson_id,
         course_id=grant.course_id,
@@ -1103,8 +1113,7 @@ def _attach_asset(grant, arguments):
         visibility_scope=str(
             arguments.get("visibility_scope") or "course_teacher"
         ),
-        source_agent_run_id=str(arguments.get("source_agent_run_id") or "")[:100]
-        or grant.agent_run_id,
+        source_agent_run_id=grant.agent_run_id,
     )
     db.session.flush()
     return asset_to_dict(asset)
@@ -1118,10 +1127,7 @@ def _question_upsert(grant, arguments):
             400,
             "invalid_question_batch",
         )
-    source_agent_run_id = (
-        str(arguments.get("source_agent_run_id") or "")[:100]
-        or grant.agent_run_id
-    )
+    source_agent_run_id = grant.agent_run_id
     items = []
     for payload in questions:
         if not isinstance(payload, dict):

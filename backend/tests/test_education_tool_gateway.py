@@ -248,6 +248,138 @@ def test_teacher_question_tool_uses_canonical_service_and_is_idempotent(app):
         assert "token" not in str(calls[0].sanitized_input).lower()
 
 
+def test_lesson_scoped_run_injects_lesson_into_courseware_write(app):
+    from services.edu.tool_models import EducationToolGrant
+    from services.edu.workflow_models import EducationAgentRun
+
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "A Turning Point",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    with app.app_context():
+        db.session.add(
+            EducationAgentRun(
+                id="scoped-agent-run",
+                course_id=course["id"],
+                lesson_id=lesson["id"],
+                requested_by="teacher",
+                workflow_code="product.courseware",
+                workflow_name="Agent courseware",
+                status="running",
+                nodes=[],
+                input_payload={},
+                output={},
+            )
+        )
+        db.session.commit()
+
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        ["edu.courseware.create"],
+    )
+    with app.app_context():
+        stored_grant = EducationToolGrant.query.get(grant["id"])
+        stored_grant.agent_run_id = "scoped-agent-run"
+        db.session.commit()
+
+    source = {
+        "subject_code": "high_school_english",
+        "learning_domain": "integrated",
+        "text_genre_code": "narrative",
+        "lesson_type_code": "reading_writing",
+        "title": "A Turning Point",
+        "objectives": [
+            {"id": "objective-1", "description": "Read for evidence"}
+        ],
+        "stages": [
+            {
+                "name": "Close reading",
+                "duration_minutes": 20,
+                "teacher_activity": "Model evidence selection",
+                "student_activity": "Annotate evidence",
+                "assessment": "Exit note",
+            }
+        ],
+    }
+    response = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "kind": "lesson_plan",
+            "schema_name": "weagent.education.lesson-plan",
+            "source_json": source,
+        },
+        "scoped-lesson-plan-v1",
+    )
+
+    assert response.status_code == 200
+    created = response.get_json()["result"]
+    assert created["content"]["lesson_id"] == lesson["id"]
+    with app.app_context():
+        from services.edu.content_models import EducationContentVersion
+
+        version = EducationContentVersion.query.get(created["version"]["id"])
+        assert version.source_agent_run_id == "scoped-agent-run"
+
+
+def test_courseware_tool_rejects_noncanonical_lesson_plan_objects(app):
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Evidence and Voice",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        ["edu.courseware.create"],
+    )
+
+    response = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "lesson_id": lesson["id"],
+            "kind": "lesson_plan",
+            "schema_name": "weagent.education.lesson-plan",
+            "source_json": {
+                "subject_code": "high_school_english",
+                "learning_domain": "integrated",
+                "text_genre_code": "narrative",
+                "lesson_type_code": "reading_writing",
+                "title": "Evidence and Voice",
+                "objectives": ["Read for evidence"],
+                "stages": ["Close reading"],
+            },
+        },
+        "invalid-lesson-plan-v1",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error_code"] == "invalid_lesson_plan"
+
+
 def test_idempotency_key_reuse_with_different_input_is_rejected(app):
     client = app.test_client()
     teacher, _, course = setup_course(client, app)

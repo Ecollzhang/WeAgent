@@ -39,7 +39,11 @@ RUN pip install --no-cache-dir flask requests simple-websocket
 COPY container/ /app/container/
 COPY bin/weagent-report /usr/local/bin/weagent-report
 COPY bin/weagent-service /usr/local/bin/weagent-service
-RUN chmod +x /usr/local/bin/weagent-report /usr/local/bin/weagent-service
+COPY bin/weagent-tools-mcp /usr/local/bin/weagent-tools-mcp
+RUN chmod +x \
+        /usr/local/bin/weagent-report \
+        /usr/local/bin/weagent-service \
+        /usr/local/bin/weagent-tools-mcp
 
 # ---- 工作目录 (volume mount 点) ----
 WORKDIR /workspace

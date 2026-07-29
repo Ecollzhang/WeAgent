@@ -11,6 +11,90 @@ class CoreRuntimeError(RuntimeError):
     """Raised when the shared core runtime rejects or cannot serve a run."""
 
 
+def _validate_lesson_plan_artifact(payload):
+    allowed_fields = {
+        "subject_code",
+        "learning_domain",
+        "text_genre_code",
+        "lesson_type_code",
+        "title",
+        "duration_minutes",
+        "objectives",
+        "stages",
+    }
+    required_fields = {
+        "subject_code",
+        "learning_domain",
+        "text_genre_code",
+        "lesson_type_code",
+        "title",
+        "objectives",
+        "stages",
+    }
+    if (
+        not required_fields.issubset(payload)
+        or set(payload) - allowed_fields
+        or payload.get("subject_code")
+        not in {"high_school_english", "primary_chinese"}
+        or payload.get("learning_domain")
+        not in {"reading", "writing", "integrated"}
+        or payload.get("lesson_type_code")
+        not in {"reading", "writing", "reading_writing", "integrated"}
+    ):
+        raise CoreRuntimeError(
+            "lesson plan artifact must use the canonical top-level schema"
+        )
+    objectives = payload.get("objectives")
+    if not isinstance(objectives, list) or not objectives:
+        raise CoreRuntimeError(
+            "lesson plan artifact objectives must be a non-empty object array"
+        )
+    for index, objective in enumerate(objectives):
+        if (
+            not isinstance(objective, dict)
+            or set(objective) != {"id", "description"}
+            or not str(objective.get("id") or "").strip()
+            or not str(objective.get("description") or "").strip()
+        ):
+            raise CoreRuntimeError(
+                "lesson plan artifact "
+                f"objectives[{index}] requires only id and description"
+            )
+    stages = payload.get("stages")
+    required_stage_fields = {
+        "name",
+        "duration_minutes",
+        "teacher_activity",
+        "student_activity",
+        "assessment",
+    }
+    if not isinstance(stages, list) or not stages:
+        raise CoreRuntimeError(
+            "lesson plan artifact stages must be a non-empty object array"
+        )
+    for index, stage in enumerate(stages):
+        if (
+            not isinstance(stage, dict)
+            or set(stage) != required_stage_fields
+            or any(
+                not str(stage.get(field) or "").strip()
+                for field in required_stage_fields - {"duration_minutes"}
+            )
+        ):
+            raise CoreRuntimeError(
+                "lesson plan artifact "
+                f"stages[{index}] must use the canonical stage fields"
+            )
+        try:
+            if int(stage["duration_minutes"]) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise CoreRuntimeError(
+                "lesson plan artifact "
+                f"stages[{index}].duration_minutes must be positive"
+            )
+
+
 def _validate_exercise_artifact(payload):
     questions = payload.get("questions")
     if not isinstance(questions, list) or not questions:
@@ -61,7 +145,9 @@ def _validate_exercise_artifact(payload):
 
 
 def validate_education_artifact(artifact_role, payload):
-    if artifact_role == "exercise_generator":
+    if artifact_role == "course_designer":
+        _validate_lesson_plan_artifact(payload)
+    elif artifact_role == "exercise_generator":
         _validate_exercise_artifact(payload)
     return payload
 

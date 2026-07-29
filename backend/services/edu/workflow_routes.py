@@ -15,6 +15,7 @@ from .subject_packs import AGENT_ROLES, SUBJECT_PACKS, WORKFLOW_TEMPLATES
 from .content_models import Lesson
 from .product_agent_runs import (
     build_product_prompt,
+    education_action_protocol,
     product_template,
     product_workflow,
 )
@@ -545,9 +546,14 @@ def start_workflow_run():
         f"学习领域：{lesson.learning_domain}；文本类型：{lesson.text_genre_code}；"
         f"课型：{lesson.lesson_type_code}；时长：{lesson.duration_minutes} 分钟\n"
         f"教师补充要求：{requirements or '无'}\n"
-        "【课程设计师】调用课程设计 Skill，输出严格 JSON 到 "
-        "/workspace/shared/lesson_plan_draft.json；字段至少包括 objectives（数组）、"
-        "activities（字符串）、assessment（字符串）。\n"
+        "【课程设计师】调用课程设计 Skill，输出唯一 canonical JSON 到 "
+        "/workspace/shared/lesson_plan_draft.json。根对象只允许使用 "
+        "subject_code、learning_domain、text_genre_code、lesson_type_code、"
+        "title、duration_minutes、objectives、stages；objectives 是由 "
+        "{id, description} 构成的非空数组；stages 是由 {name, "
+        "duration_minutes, teacher_activity, student_activity, assessment} "
+        "构成的非空数组。禁止 meta/content 包装、activities 字符串、"
+        "同义字段或历史 schema。\n"
         "【习题生成器】调用“中英阅读与写作习题设计”Skill，先读取上述教案 JSON。\n"
         "【内容设计规范】根据当前学科、学段、课型和文本类型设计可作答的阅读与写作"
         "练习；题目必须覆盖教学目标，具备合理的难度梯度、用时和分值，答案与解析"
@@ -586,6 +592,10 @@ def start_workflow_run():
         "5. 教学审校员使用 `edu.course.context.get`、"
         "`edu.question_bank.search` 检查已采纳草稿；不得发布课程、题目或试卷。"
         "任何工具校验失败时先按 error_code 修正结构，再以新的幂等键重试。"
+    )
+    prompt += "\n" + education_action_protocol(
+        courseware_kind="lesson_plan",
+        lesson_scoped=True,
     )
     workflow = _workflow_payload(template, nodes)
     run = EducationAgentRun(

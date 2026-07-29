@@ -94,6 +94,90 @@ def test_education_runtime_reads_structured_json_from_shared_sandbox(monkeypatch
     assert result == {"objectives": ["Read for evidence"]}
 
 
+def test_lesson_plan_artifact_accepts_only_canonical_teacher_schema(monkeypatch):
+    payload = {
+        "subject_code": "high_school_english",
+        "learning_domain": "integrated",
+        "text_genre_code": "narrative",
+        "lesson_type_code": "reading_writing",
+        "title": "A Turning Point",
+        "objectives": [
+            {
+                "id": "objective-1",
+                "description": "Infer emotion changes from textual evidence",
+            }
+        ],
+        "stages": [
+            {
+                "name": "Close reading",
+                "duration_minutes": 20,
+                "teacher_activity": "Model evidence selection",
+                "student_activity": "Annotate the turning point",
+                "assessment": "Evidence note",
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        "services.edu.runtime_client.requests.request",
+        lambda *_args, **_kwargs: FakeRawResponse(
+            json.dumps(payload).encode("utf-8")
+        ),
+    )
+    client = CoreRuntimeClient(base_url="http://core")
+
+    result = client.get_workspace_json(
+        authorization="Bearer token",
+        sandbox_session_id="sandbox-1",
+        path="/workspace/shared/lesson_plan_draft.json",
+        artifact_role="course_designer",
+    )
+
+    assert result["objectives"][0]["id"] == "objective-1"
+    assert result["stages"][0]["duration_minutes"] == 20
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "meta": {"subject_code": "high_school_english"},
+            "content": {
+                "objectives": ["Read for evidence"],
+                "activities": "Close reading",
+                "assessment": "Exit ticket",
+            },
+        },
+        {
+            "subject_code": "high_school_english",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "objectives": ["Read for evidence"],
+            "stages": [{"name": "Close reading"}],
+        },
+    ],
+)
+def test_lesson_plan_artifact_rejects_legacy_or_ambiguous_schema(
+    monkeypatch,
+    payload,
+):
+    monkeypatch.setattr(
+        "services.edu.runtime_client.requests.request",
+        lambda *_args, **_kwargs: FakeRawResponse(
+            json.dumps(payload).encode("utf-8")
+        ),
+    )
+    client = CoreRuntimeClient(base_url="http://core")
+
+    with pytest.raises(CoreRuntimeError, match="lesson plan artifact"):
+        client.get_workspace_json(
+            authorization="Bearer token",
+            sandbox_session_id="sandbox-1",
+            path="/workspace/shared/lesson_plan_draft.json",
+            artifact_role="course_designer",
+        )
+
+
 def test_education_runtime_fetches_public_profiles_in_one_request(monkeypatch):
     def fake_request(method, url, **kwargs):
         assert method == "POST"

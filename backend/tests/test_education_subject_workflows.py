@@ -302,6 +302,16 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
     assert runtime.started["education_run_grant"] not in runtime.started["prompt"]
     assert "education_action" in runtime.started["prompt"]
     assert "edu.question_bank.upsert" in runtime.started["prompt"]
+    assert '"name":"education_action"' in runtime.started["prompt"]
+    assert '"args":{"action":"edu.courseware.create","arguments":{' in (
+        runtime.started["prompt"]
+    )
+    assert "Action-specific fields MUST be nested under args.arguments" in (
+        runtime.started["prompt"]
+    )
+    assert "lesson_id is injected from the lesson-scoped Agent run" in (
+        runtime.started["prompt"]
+    )
     assert "/workspace/shared/exercises_draft.json" in runtime.started["prompt"]
     assert "questions" in runtime.started["prompt"]
     assert "【内容设计规范】" in runtime.started["prompt"]

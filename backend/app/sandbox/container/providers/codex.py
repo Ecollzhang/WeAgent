@@ -300,14 +300,65 @@ class CodexRunner(ProviderRunner):
                 "requires_openai_auth = true",
                 f"base_url = {self._toml_string(base_url)}",
             ])
-        for server in self._bound_mcp_servers():
+        servers = self._bound_mcp_servers()
+        if self._has_bound_tools():
+            used_names = {server["config_name"] for server in servers}
+            config_name = "weagent_tools"
+            suffix = 2
+            while config_name in used_names:
+                config_name = f"weagent_tools_{suffix}"
+                suffix += 1
+            servers.append(
+                {
+                    "config_name": config_name,
+                    "command": "weagent-tools-mcp",
+                    "args": [],
+                    "startup_timeout_sec": 10,
+                    "tool_timeout_sec": 120,
+                }
+            )
+        for server in servers:
             lines.extend([
                 "",
                 f"[mcp_servers.{server['config_name']}]",
                 f"command = {self._toml_string(server['command'])}",
                 f"args = {json.dumps(server['args'], ensure_ascii=False)}",
             ])
+            if server.get("startup_timeout_sec"):
+                lines.append(
+                    f"startup_timeout_sec = {int(server['startup_timeout_sec'])}"
+                )
+            if server.get("tool_timeout_sec"):
+                lines.append(
+                    f"tool_timeout_sec = {int(server['tool_timeout_sec'])}"
+                )
         return "\n".join(lines).strip() + "\n"
+
+    def _has_bound_tools(self) -> bool:
+        capabilities_path = os.path.join(
+            self._workspace_root(),
+            ".weagent",
+            "agents",
+            _safe_segment(self.runtime.agent_id),
+            "capabilities.json",
+        )
+        try:
+            with open(capabilities_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            return False
+        for capability in payload.get("capabilities") or []:
+            if capability.get("type") != "tool":
+                continue
+            if (capability.get("status") or "implemented") not in {
+                "implemented",
+                "partial",
+            }:
+                continue
+            manifest = capability.get("manifest") or {}
+            if capability.get("tool_names") or manifest.get("tool_names"):
+                return True
+        return False
 
     def _bound_mcp_servers(self) -> list[dict]:
         capabilities_path = os.path.join(

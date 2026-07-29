@@ -168,6 +168,77 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn('command = "npx"', config)
         self.assertIn('args = ["--yes", "@modelcontextprotocol/server-memory"]', config)
 
+    def test_setup_registers_bound_builtin_tools_through_mcp_bridge(self):
+        runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
+        projection = {
+            "schema_version": "weagent.capability_projection/v1",
+            "session_id": "session-1",
+            "capabilities": {},
+            "skills": {},
+            "mcp": {},
+            "plugins": {},
+            "tools": {},
+            "agents": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "capabilities": [
+                        {
+                            "runtime_id": "builtin-education-actions",
+                            "capability_id": "builtin-education-actions",
+                            "capability_version_id": "version-1",
+                            "type": "tool",
+                            "name": "Education actions",
+                            "description": "Scoped Education business operations",
+                            "tool_names": ["education_action"],
+                            "granted_permissions": ["network"],
+                            "status": "implemented",
+                            "manifest": {
+                                "input_schema": {
+                                    "type": "object",
+                                    "required": ["action", "arguments"],
+                                    "properties": {
+                                        "action": {"type": "string"},
+                                        "arguments": {"type": "object"},
+                                    },
+                                    "additionalProperties": False,
+                                },
+                            },
+                        }
+                    ],
+                    "skill_index": [],
+                    "tool_index": [],
+                    "permissions": {"agent_id": "agent-1", "grants": []},
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "coder")
+            write_projection(projection, workspace_root=tmpdir)
+            with patch("app.sandbox.container.providers.codex.log_agent"), patch.dict(
+                "os.environ",
+                {
+                    "CODEX_API_KEY": "sk-test",
+                    "CODEX_BASE_URL": "https://api.openai.com/v1",
+                    "CODEX_MODEL": "gpt-5.1-codex",
+                    "WEAGENT_WORKSPACE_ROOT": tmpdir,
+                },
+                clear=True,
+            ):
+                runtime.provider_runner.setup()
+
+            with open(
+                os.path.join(runtime.provider_runner.home_dir, "config.toml"),
+                "r",
+                encoding="utf-8",
+            ) as handle:
+                config = handle.read()
+
+        self.assertIn("[mcp_servers.weagent_tools]", config)
+        self.assertIn('command = "weagent-tools-mcp"', config)
+        self.assertIn("startup_timeout_sec = 10", config)
+        self.assertIn("tool_timeout_sec = 120", config)
+
     def test_setup_fails_fast_without_codex_credentials(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
         with tempfile.TemporaryDirectory() as tmpdir:

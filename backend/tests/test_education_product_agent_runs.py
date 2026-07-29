@@ -213,6 +213,17 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     assert started["agent_ids"] == ["_edu_1", "_edu_2", "_edu_9"]
     assert "edu.courseware.create" in started["prompt"]
     assert "slide_document" in started["prompt"]
+    assert '"name":"education_action"' in started["prompt"]
+    assert '"args":{"action":"edu.courseware.create","arguments":{' in (
+        started["prompt"]
+    )
+    assert "Action-specific fields MUST be nested under args.arguments" in (
+        started["prompt"]
+    )
+    assert "lesson_id is injected from the lesson-scoped Agent run" in (
+        started["prompt"]
+    )
+    assert lesson["id"] not in started["prompt"]
     assert "不得自动发布" in started["prompt"]
 
 
