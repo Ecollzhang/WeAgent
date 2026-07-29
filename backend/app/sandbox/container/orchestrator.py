@@ -157,6 +157,22 @@ class Orchestrator:
     def list_agents(self) -> list[dict]:
         return [a.to_dict() for a in self.agents.values()]
 
+    def preflight_agent_tools(self, agent_id: str, required_tools=None) -> dict:
+        agent = self._get_or_recreate_agent(agent_id)
+        if isinstance(agent, dict):
+            return {
+                "ready": False,
+                "agent_id": agent_id,
+                "required_tools": required_tools or [],
+                "available_tools": [],
+                "missing_tools": required_tools or [],
+                "error": agent.get("error") or "Agent not found",
+            }
+        return {
+            "agent_id": agent_id,
+            **agent.tool_preflight(required_tools or []),
+        }
+
     # ---- Message handling ----
 
     def send_to_agent(self, agent_id: str, message: str) -> dict:

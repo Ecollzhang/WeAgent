@@ -48,6 +48,7 @@
           :run="run"
           @terminal="$emit('terminal', $event)"
           @poll-error="$emit('poll-error', $event)"
+          @recover-draft="$emit('recover-draft', $event)"
           @close="$emit('close')"
         />
       </div>

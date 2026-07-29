@@ -182,6 +182,9 @@ for (const fragment of [
   'data-testid="product-agent-node"',
   'tool_calls',
   '已写入 Education',
+  'recoverable_draft',
+  '修复并保存草稿',
+  'recover-draft',
 ]) {
   contains(
     'src/components/education/ProductAgentRunPanel.vue',

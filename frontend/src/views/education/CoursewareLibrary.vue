@@ -40,6 +40,7 @@
         :run="productAgentRun"
         @terminal="handleAgentTerminal"
         @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
+        @recover-draft="openRecoverableDraft"
         @close="closeAgentRun"
       />
 
@@ -279,6 +280,7 @@
 
 <script>
 import {
+  createLessonContent,
   downloadCourseAsset,
   exportEducationContent,
   getContentVersions,
@@ -552,6 +554,33 @@ export default {
       this.editingEntry = entry
       this.editorDialog = true
     },
+    openRecoverableDraft(draft) {
+      const lesson = this.lessons.find(item => item.id === this.agentForm.lesson_id)
+        || this.lessons.find(item => item.id === this.selectedLessonId)
+      if (!lesson || !draft || !draft.source_json) return
+      const source = JSON.parse(JSON.stringify(draft.source_json))
+      if (!Array.isArray(source.slides) || !source.slides.length) {
+        source.slides = [{
+          id: 'recovered-slide-1',
+          title: '待修复课件内容',
+          layout: 'content',
+          blocks: [{
+            type: 'text',
+            content: JSON.stringify(draft.source_json, null, 2),
+          }],
+          speaker_notes: '此页由未通过校验的 Agent 草稿恢复，请教师确认并修改。',
+        }]
+      }
+      if (!source.theme || typeof source.theme !== 'object') source.theme = {}
+      if (!source.title) source.title = lesson.title
+      this.editingEntry = {
+        recoverable: true,
+        lesson,
+        content: { kind: 'slide_document' },
+        version: { source_json: source },
+      }
+      this.editorDialog = true
+    },
     async saveGeneratedEditor() {
       const editor = this.$refs.slideEditor
       if (!editor || !this.editingEntry) return
@@ -562,13 +591,24 @@ export default {
       }
       this.editorSaving = true
       try {
-        await saveContentVersion(this.editingEntry.content.id, {
+        const versionPayload = {
           schema_name: 'weagent.education.slide-document',
           schema_version: '1.0',
           source_json: source,
           rendered_html: renderSlideDocumentHtml(source),
-          change_summary: '教师在结构化幻灯片编辑器中修改',
-        })
+          change_summary: this.editingEntry.recoverable
+            ? '教师修复并采纳 Agent 校验失败草稿'
+            : '教师在结构化幻灯片编辑器中修改',
+        }
+        if (this.editingEntry.recoverable) {
+          await createLessonContent(this.editingEntry.lesson.id, {
+            ...versionPayload,
+            kind: 'slide_document',
+            visibility_scope: 'course_teacher',
+          })
+        } else {
+          await saveContentVersion(this.editingEntry.content.id, versionPayload)
+        }
         this.editorDialog = false
         this.editingEntry = null
         await this.loadGeneratedContents()

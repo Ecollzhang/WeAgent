@@ -531,6 +531,39 @@ class DockerContainerManager:
             raise KeyError(f"Session '{session_id}' not found")
         return session.client.restart_agent(agent_id)
 
+    def preflight_tools(self, session_id: str, required_tools: list[str]) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        results = []
+        for config in session.agents_config or []:
+            agent_id = str(config.get("agent_id") or "").strip()
+            if not agent_id:
+                continue
+            try:
+                result = session.client.preflight_agent_tools(
+                    agent_id,
+                    required_tools,
+                )
+            except Exception as exc:
+                result = {
+                    "ready": False,
+                    "agent_id": agent_id,
+                    "missing_tools": list(required_tools),
+                    "error": str(exc),
+                }
+            results.append(result)
+        return {
+            "ready": bool(results) and all(item.get("ready") for item in results),
+            "required_tools": sorted(set(required_tools)),
+            "agents": results,
+            "missing_tools": sorted({
+                tool
+                for item in results
+                for tool in (item.get("missing_tools") or [])
+            }),
+        }
+
     def update_model_config(self, session_id: str, env_vars: dict) -> dict:
         """Hot-update model configuration in a running session container."""
         session = self.get_session(session_id)

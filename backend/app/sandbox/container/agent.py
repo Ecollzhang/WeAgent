@@ -5,6 +5,7 @@ Each agent runs in its own workspace directory with its own .claude/agent.md
 for role definition. Uses subprocess to invoke `claude -p` non-interactively.
 """
 
+import json
 import os
 import queue
 import re
@@ -62,6 +63,40 @@ class AgentRuntime:
             work_dir=agent_dir,
             provider=self.provider_runner.provider_name,
         )
+
+    def bound_tool_names(self) -> list[str]:
+        """Read the server-projected tool catalog for this Agent."""
+        safe_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(self.agent_id or "").strip())
+        path = os.path.join(
+            os.environ.get("WEAGENT_WORKSPACE_ROOT", "/workspace"),
+            ".weagent",
+            "agents",
+            safe_id.strip(".-") or "item",
+            "capabilities.json",
+        )
+        try:
+            with open(path, encoding="utf-8") as stream:
+                payload = json.load(stream)
+        except (OSError, ValueError):
+            return []
+        names = set()
+        for capability in payload.get("capabilities") or []:
+            if capability.get("type") != "tool":
+                continue
+            if (capability.get("status") or "implemented") not in {
+                "implemented",
+                "partial",
+            }:
+                continue
+            manifest = capability.get("manifest") or {}
+            for name in capability.get("tool_names") or manifest.get("tool_names") or []:
+                clean = str(name or "").strip()
+                if clean:
+                    names.add(clean)
+        return sorted(names)
+
+    def tool_preflight(self, required_tools=None) -> dict:
+        return self.provider_runner.tool_preflight(required_tools or [])
 
     def _format_agent_md(self) -> str:
         """Format the agent.md file from the system prompt."""

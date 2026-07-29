@@ -527,6 +527,80 @@ def test_product_run_without_required_durable_tool_write_is_partial(education_ap
     assert "未写入" in run["error_summary"]
 
 
+def test_invalid_courseware_write_keeps_an_editable_recoverable_draft(
+    education_app,
+):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, lesson, teacher, _, _ = seed_course(education_app)
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "lesson_id": lesson["id"],
+            "product_code": "courseware",
+            "options": {"requirements": "make a concise deck"},
+        },
+    ).get_json()
+    raw_grant = runtime.started[-1]["education_run_grant"]
+    invalid_source = {
+        "title": "Campus Life",
+        "theme": {"style": "editorial"},
+        "slides": "not-an-array",
+    }
+    rejected = client.post(
+        "/api/edu/tools/edu.courseware.create/invoke",
+        headers={"X-Education-Run-Grant": raw_grant},
+        json={
+            "agent_id": "_edu_2",
+            "idempotency_key": "product-courseware-slide-invalid-v1",
+            "arguments": {
+                "kind": "slide_document",
+                "schema_name": "weagent.education.slide-document",
+                "source_json": invalid_source,
+                "rendered_html": "<h1>Campus Life</h1>",
+            },
+        },
+    )
+    runtime.snapshot = {
+        "status": "done",
+        "agent_runs": [
+            {
+                "agent_id": "_edu_2",
+                "status": "done",
+                "content": '{"summary":"courseware draft ready"}',
+            },
+            {
+                "agent_id": "_edu_1",
+                "status": "error",
+                "error": "review deferred",
+                "content": "",
+            },
+            {
+                "agent_id": "_edu_9",
+                "status": "error",
+                "error": "review deferred",
+                "content": "",
+            },
+        ],
+    }
+
+    refreshed = client.get(
+        f"/api/edu/product-agent-runs/{created['id']}",
+        headers=teacher,
+    )
+
+    assert rejected.status_code == 400
+    run = refreshed.get_json()
+    assert run["status"] == "partial"
+    draft = run["output"]["recoverable_draft"]
+    assert draft["kind"] == "slide_document"
+    assert draft["source_json"] == invalid_source
+    assert draft["validation_error"]
+
+
 def test_moderator_plan_does_not_end_run_before_workers_are_visible(education_app):
     runtime = FakeProductRuntime()
     education_app.extensions["education_runtime_client"] = runtime

@@ -77,6 +77,19 @@
       :closable="false"
       show-icon
     />
+    <div v-if="recoverableDraft" class="recoverable-draft">
+      <i class="el-icon-edit-outline"></i>
+      <span>
+        <b>已保留未采纳草稿</b>
+        <small>{{ recoverableDraft.validation_error || '结构校验未通过，可由教师修复后保存。' }}</small>
+      </span>
+      <el-button
+        size="mini"
+        type="primary"
+        plain
+        @click="$emit('recover-draft', recoverableDraft)"
+      >修复并保存草稿</el-button>
+    </div>
     <footer>
       <i class="el-icon-lock"></i>
       <span>课程、用户和角色由服务端授权；临时沙箱删除后，已采纳结果仍保存在 Education 数据库。</span>
@@ -109,6 +122,11 @@ export default {
     },
     isRunning() {
       return Boolean(this.run && ['pending', 'running'].includes(this.run.status))
+    },
+    recoverableDraft() {
+      return this.run
+        && this.run.output
+        && this.run.output.recoverable_draft
     },
     statusLabel() {
       const labels = {
@@ -328,6 +346,15 @@ export default {
   align-items: center; gap: 8px; padding: 8px 9px;
   border: 1px solid #dce9e6; border-radius: 8px; background: #fff;
 }
+.recoverable-draft {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center;
+  gap: 10px; margin: 0 18px 12px; padding: 10px 12px; border: 1px solid #efd8aa;
+  border-radius: 9px; background: #fffaf0; color: #805f24;
+}
+.recoverable-draft > i { font-size: 18px; }
+.recoverable-draft b, .recoverable-draft small { display: block; }
+.recoverable-draft b { font-size: 11px; }
+.recoverable-draft small { margin-top: 3px; color: #9b7f4e; font-size: 9px; }
 .business-call > i { color: #3b8479; }
 .business-call span b, .business-call span small { display: block; }
 .business-call span b { color: #39514c; font-size: 10px; }

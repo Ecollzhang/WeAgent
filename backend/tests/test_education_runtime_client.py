@@ -37,6 +37,16 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
                 },
                 201,
             )
+        if url.endswith("/runtime-preflight"):
+            return FakeResponse(
+                {
+                    "code": 200,
+                    "data": {
+                        "ready": True,
+                        "required_tools": ["education_action"],
+                    },
+                }
+            )
         return FakeResponse({"code": 201, "data": {"id": "message-1"}}, 201)
 
     monkeypatch.setattr("services.edu.runtime_client.requests.request", fake_request)
@@ -72,8 +82,59 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
             },
         },
     }
-    assert "opaque-run-grant" not in requests[1][2]["json"]["content"]
+    assert requests[1][0] == "GET"
+    assert requests[1][1].endswith(
+        "/api/conversations/conversation-1/runtime-preflight"
+    )
+    assert requests[1][2]["params"] == {"required_tools": "education_action"}
+    assert "opaque-run-grant" not in requests[2][2]["json"]["content"]
     assert started["runtime_generation"] == 3
+
+
+def test_education_runtime_aborts_before_message_when_tool_preflight_fails(
+    monkeypatch,
+):
+    requests = []
+
+    def fake_request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        if url.endswith("/api/conversations"):
+            return FakeResponse(
+                {
+                    "code": 201,
+                    "data": {
+                        "id": "conversation-1",
+                        "sandbox_session_id": "sandbox-1",
+                    },
+                },
+                201,
+            )
+        if url.endswith("/runtime-preflight"):
+            return FakeResponse(
+                {
+                    "code": 200,
+                    "data": {
+                        "ready": False,
+                        "missing_tools": ["education_action"],
+                    },
+                }
+            )
+        return FakeResponse({"code": 200, "data": {"deleted": True}})
+
+    monkeypatch.setattr("services.edu.runtime_client.requests.request", fake_request)
+    client = CoreRuntimeClient(base_url="http://core", agent_adapter="codex")
+
+    with pytest.raises(CoreRuntimeError, match="education_action"):
+        client.start_workflow(
+            authorization="Bearer token",
+            title="Lesson run",
+            prompt="Build lesson",
+            agent_ids=["_edu_2"],
+            workflow={"id": "courseware"},
+            education_run_grant="opaque-run-grant-1234567890",
+        )
+
+    assert [request[0] for request in requests] == ["POST", "GET", "DELETE"]
 
 
 def test_education_runtime_reads_structured_json_from_shared_sandbox(monkeypatch):

@@ -122,6 +122,11 @@ class OrchestratorClient:
     def remove_agent(self, agent_id: str) -> dict:
         return self._request("DELETE", f"/api/agents/{agent_id}")
 
+    def preflight_agent_tools(self, agent_id: str, required_tools: list[str]) -> dict:
+        return self._request("POST", f"/api/agents/{agent_id}/tools/preflight", {
+            "required_tools": required_tools,
+        })
+
     def list_agents(self) -> dict:
         return self._request("GET", "/api/agents")
 

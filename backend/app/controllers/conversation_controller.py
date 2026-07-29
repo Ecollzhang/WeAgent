@@ -145,6 +145,24 @@ def stop_agent(conversation_id, agent_id):
 
     return success_response(result, message='Agent stopped')
 
+@conversation_bp.route('/<conversation_id>/runtime-preflight', methods=['GET'])
+@jwt_required()
+def runtime_preflight(conversation_id):
+    user_id = get_jwt_identity()
+    required_tools = [
+        item.strip()
+        for item in request.args.get('required_tools', '').split(',')
+        if item.strip()
+    ]
+    result, error = conversation_service.runtime_preflight(
+        conversation_id,
+        user_id,
+        required_tools,
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result)
+
 
 @conversation_bp.route('/<conversation_id>/attachments', methods=['GET'])
 @jwt_required()

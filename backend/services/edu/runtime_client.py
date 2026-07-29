@@ -144,11 +144,85 @@ def _validate_exercise_artifact(payload):
                     )
 
 
+def _validate_slide_document(payload):
+    allowed_root = {"title", "theme", "slides"}
+    if (
+        not isinstance(payload, dict)
+        or set(payload) - allowed_root
+        or not str(payload.get("title") or "").strip()
+        or not isinstance(payload.get("theme"), dict)
+        or not isinstance(payload.get("slides"), list)
+        or not payload["slides"]
+        or len(payload["slides"]) > 60
+    ):
+        raise CoreRuntimeError(
+            "slide document requires only title, theme and 1-60 slides"
+        )
+    allowed_slide = {"id", "title", "layout", "blocks", "speaker_notes"}
+    allowed_block = {
+        "type",
+        "content",
+        "emphasis",
+        "source_ref",
+        "asset_id",
+        "alt_text",
+    }
+    allowed_types = {
+        "text",
+        "bullets",
+        "heading",
+        "subheading",
+        "quote",
+        "key-point",
+        "question",
+        "tip",
+        "image",
+        "table",
+        "timeline",
+        "comparison",
+        "vocabulary",
+        "activity",
+    }
+    for index, slide in enumerate(payload["slides"]):
+        path = f"slides[{index}]"
+        if (
+            not isinstance(slide, dict)
+            or set(slide) - allowed_slide
+            or any(
+                not str(slide.get(field) or "").strip()
+                for field in ("id", "title", "layout")
+            )
+            or not isinstance(slide.get("blocks"), list)
+            or not slide["blocks"]
+            or len(slide["blocks"]) > 30
+        ):
+            raise CoreRuntimeError(
+                f"{path} requires id, title, layout, non-empty blocks and optional speaker_notes"
+            )
+        for block_index, block in enumerate(slide["blocks"]):
+            block_path = f"{path}.blocks[{block_index}]"
+            if (
+                not isinstance(block, dict)
+                or set(block) - allowed_block
+                or block.get("type") not in allowed_types
+                or "content" not in block
+                or not isinstance(
+                    block.get("content"),
+                    (str, list, dict, int, float),
+                )
+            ):
+                raise CoreRuntimeError(
+                    f"{block_path} must use a supported type and renderable content"
+                )
+
+
 def validate_education_artifact(artifact_role, payload):
     if artifact_role == "course_designer":
         _validate_lesson_plan_artifact(payload)
     elif artifact_role == "exercise_generator":
         _validate_exercise_artifact(payload)
+    elif artifact_role == "courseware_maker":
+        _validate_slide_document(payload)
     return payload
 
 
@@ -223,6 +297,26 @@ class CoreRuntimeClient:
                 "agent_configs": agent_configs,
             },
         )
+        preflight = self._request(
+            "GET",
+            f"/api/conversations/{conversation['id']}/runtime-preflight",
+            authorization,
+            params={"required_tools": "education_action"},
+        )
+        if not preflight.get("ready"):
+            try:
+                self._request(
+                    "DELETE",
+                    f"/api/conversations/{conversation['id']}",
+                    authorization,
+                )
+            except CoreRuntimeError:
+                pass
+            missing = ", ".join(preflight.get("missing_tools") or [])
+            raise CoreRuntimeError(
+                "Education Agent tool preflight failed"
+                + (f": missing {missing}" if missing else "")
+            )
         message = self._request(
             "POST",
             "/api/messages",

@@ -719,6 +719,32 @@ class ConversationService:
         sandbox_event_bridge.mark_agent_stopped(conversation.id, agent_id)
         return result, None
 
+    def runtime_preflight(self, conversation_id, user_id, required_tools):
+        conversation, error = self.get_owned_conversation_or_error(
+            conversation_id,
+            user_id,
+        )
+        if error:
+            return None, error
+        required = sorted({
+            str(item or '').strip()
+            for item in (required_tools or [])
+            if str(item or '').strip()
+        })
+        _, error = self.ensure_sandbox_runtime(conversation, user_id)
+        if error:
+            return None, error
+        try:
+            from app.sandbox import get_manager
+            result = get_manager().preflight_tools(
+                conversation.sandbox_session_id,
+                required,
+            )
+        except Exception as exc:
+            return None, str(exc)
+        result['runtime_generation'] = conversation.sandbox_generation or 1
+        return result, None
+
     def _get_conversation_agent(self, conversation, agent_id=None):
         agents = [p for p in conversation.participants if p.participant_type == 'agent']
         if agent_id:

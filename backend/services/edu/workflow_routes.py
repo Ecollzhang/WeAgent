@@ -111,6 +111,40 @@ def _missing_required_product_write(run):
     return None if adopted else required
 
 
+def _attach_recoverable_draft(run, required_tool):
+    """Expose one failed validated write as an editable, non-adopted draft."""
+    if not run.tool_grant_id or not required_tool:
+        return None
+    failed = (
+        EducationToolCall.query.filter_by(
+            grant_id=run.tool_grant_id,
+            tool_name=required_tool,
+            status="failed",
+        )
+        .order_by(EducationToolCall.created_at.desc())
+        .first()
+    )
+    source = (failed.sanitized_input or {}) if failed else {}
+    if (
+        required_tool != "edu.courseware.create"
+        or not isinstance(source.get("source_json"), dict)
+    ):
+        return None
+    draft = {
+        "kind": source.get("kind") or "slide_document",
+        "schema_name": source.get("schema_name")
+        or "weagent.education.slide-document",
+        "source_json": source["source_json"],
+        "rendered_html": source.get("rendered_html") or "",
+        "validation_error": failed.error_message or failed.error_code,
+        "adopted": False,
+    }
+    output = dict(run.output or {})
+    output["recoverable_draft"] = draft
+    run.output = output
+    return draft
+
+
 def _reconcile_product_completion(run):
     """Repair historical optimistic statuses using the durable write audit."""
     if run.status != "completed":
@@ -123,6 +157,7 @@ def _reconcile_product_completion(run):
         "Agent 团队已结束，但未写入可验收的业务产物："
         f"缺少成功的 {missing_write} 工具调用。"
     )
+    _attach_recoverable_draft(run, missing_write)
     return True
 
 
@@ -369,6 +404,7 @@ def _sync_run(run, authorization):
                 "Agent 团队已结束，但未写入可验收的业务产物："
                 f"缺少成功的 {missing_write} 工具调用。"
             )
+            _attach_recoverable_draft(run, missing_write)
         else:
             run.status = "awaiting_approval" if has_approval else "completed"
             run.error_summary = None
@@ -382,6 +418,11 @@ def _sync_run(run, authorization):
         run.status = "running"
     run.nodes = nodes
     run.output = outputs
+    if run.status == "partial":
+        _attach_recoverable_draft(
+            run,
+            REQUIRED_PRODUCT_WRITE_TOOL.get(run.workflow_code),
+        )
     _attach_tool_calls(run)
     db.session.commit()
     if repairs:

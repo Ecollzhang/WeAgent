@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.sandbox.container.agent import AgentRuntime
@@ -238,6 +239,82 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn('command = "weagent-tools-mcp"', config)
         self.assertIn("startup_timeout_sec = 10", config)
         self.assertIn("tool_timeout_sec = 120", config)
+
+    def test_courseware_tool_preflight_proves_bridge_catalog_before_model_run(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+        projection = {
+            "schema_version": "weagent.capability_projection/v1",
+            "session_id": "session-1",
+            "capabilities": {},
+            "skills": {},
+            "mcp": {},
+            "plugins": {},
+            "tools": {},
+            "agents": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "capabilities": [
+                        {
+                            "type": "tool",
+                            "status": "implemented",
+                            "name": "Education actions",
+                            "tool_names": ["education_action"],
+                            "manifest": {"tool_names": ["education_action"]},
+                        }
+                    ],
+                    "skill_index": [],
+                    "tool_index": [],
+                    "permissions": {"agent_id": "agent-1", "grants": []},
+                }
+            },
+        }
+        bridge_response = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "education_action",
+                            "inputSchema": {"type": "object"},
+                        }
+                    ]
+                },
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "courseware")
+            write_projection(projection, workspace_root=tmpdir)
+            with patch("app.sandbox.container.providers.codex.log_agent"), patch.dict(
+                "os.environ",
+                {
+                    "CODEX_API_KEY": "sk-test",
+                    "CODEX_BASE_URL": "https://api.openai.com/v1",
+                    "CODEX_MODEL": "gpt-5.1-codex",
+                    "WEAGENT_WORKSPACE_ROOT": tmpdir,
+                },
+                clear=True,
+            ), patch(
+                "app.sandbox.container.providers.codex.shutil.which",
+                return_value="/usr/local/bin/weagent-tools-mcp",
+            ), patch(
+                "app.sandbox.container.providers.codex.subprocess.run",
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=bridge_response + "\n",
+                    stderr="",
+                ),
+            ):
+                runtime.provider_runner.setup()
+                result = runtime.tool_preflight(["education_action"])
+
+        self.assertTrue(result["ready"])
+        self.assertEqual("mcp", result["transport"])
+        self.assertEqual(["education_action"], result["available_tools"])
+        self.assertEqual([], result["missing_tools"])
 
     def test_setup_fails_fast_without_codex_credentials(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")

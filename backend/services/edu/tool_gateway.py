@@ -1030,6 +1030,28 @@ def _courseware_create(grant, arguments):
                 400,
                 "lesson_plan_scope_mismatch",
             )
+    elif kind == "slide_document":
+        from .runtime_client import CoreRuntimeError, validate_education_artifact
+
+        try:
+            validate_education_artifact("courseware_maker", source)
+        except CoreRuntimeError as error:
+            raise ToolGatewayError(
+                str(error),
+                400,
+                "invalid_slide_document",
+            )
+        rendered_html = arguments.get("rendered_html")
+        if (
+            not isinstance(rendered_html, str)
+            or len(rendered_html.strip()) < 80
+            or "<html" not in rendered_html.lower()
+        ):
+            raise ToolGatewayError(
+                "slide_document requires a complete rendered_html preview",
+                400,
+                "invalid_slide_preview",
+            )
     content = EducationContent(
         course_id=grant.course_id,
         lesson_id=lesson.id,

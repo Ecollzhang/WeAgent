@@ -113,6 +113,21 @@ class ProviderRunner:
     def unavailable_message(self) -> str:
         return f"Provider {self.provider_name} is not available."
 
+    def tool_preflight(self, required_tools: list[str]) -> dict:
+        """Verify provider-neutral text tool-loop availability."""
+        available = self.runtime.bound_tool_names()
+        required = sorted(set(str(item) for item in required_tools if item))
+        missing = sorted(set(required) - set(available))
+        return {
+            "ready": self.runnable and not missing,
+            "provider": self.provider_name,
+            "transport": "text_tool_loop",
+            "required_tools": required,
+            "available_tools": available,
+            "missing_tools": missing,
+            "error": self.unavailable_message() if not self.runnable else "",
+        }
+
 
 class UnsupportedProviderRunner(ProviderRunner):
     display_name = "Unsupported Provider"

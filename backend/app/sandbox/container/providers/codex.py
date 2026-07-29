@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import time
@@ -333,6 +334,103 @@ class CodexRunner(ProviderRunner):
                     f"tool_timeout_sec = {int(server['tool_timeout_sec'])}"
                 )
         return "\n".join(lines).strip() + "\n"
+
+    def tool_preflight(self, required_tools: list[str]) -> dict:
+        """Prove that projected tools are visible through Codex's MCP bridge."""
+        required = sorted(set(str(item) for item in required_tools if item))
+        config_path = os.path.join(self.home_dir, "config.toml")
+        try:
+            with open(config_path, encoding="utf-8") as stream:
+                config_text = stream.read()
+        except OSError as exc:
+            return {
+                "ready": False,
+                "provider": self.provider_name,
+                "transport": "mcp",
+                "required_tools": required,
+                "available_tools": [],
+                "missing_tools": required,
+                "error": f"Codex MCP config is unavailable: {exc}",
+            }
+        configured = bool(
+            re.search(
+                r"(?ms)^\[mcp_servers\.[^\]]+\].*?^command\s*=\s*"
+                r"[\"']weagent-tools-mcp[\"']",
+                config_text,
+            )
+        )
+        bridge = shutil.which("weagent-tools-mcp")
+        if not configured or not bridge:
+            reason = (
+                "Codex MCP bridge is not registered"
+                if not configured
+                else "weagent-tools-mcp is not installed"
+            )
+            return {
+                "ready": False,
+                "provider": self.provider_name,
+                "transport": "mcp",
+                "required_tools": required,
+                "available_tools": [],
+                "missing_tools": required,
+                "error": reason,
+            }
+
+        env = os.environ.copy()
+        env.update({
+            "WEAGENT_AGENT_ID": self.runtime.agent_id,
+            "WEAGENT_WORKSPACE_ROOT": self._workspace_root(),
+        })
+        request_line = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            separators=(",", ":"),
+        ) + "\n"
+        try:
+            completed = subprocess.run(
+                [bridge],
+                input=request_line,
+                text=True,
+                capture_output=True,
+                timeout=5,
+                cwd=self.runtime._agent_dir,
+                env=env,
+                check=False,
+            )
+            response_lines = [
+                line for line in str(completed.stdout or "").splitlines()
+                if line.strip()
+            ]
+            response = json.loads(response_lines[-1]) if response_lines else {}
+            tools = (response.get("result") or {}).get("tools") or []
+            available = sorted({
+                str(item.get("name") or "").strip()
+                for item in tools
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            })
+            bridge_error = (
+                (response.get("error") or {}).get("message")
+                if isinstance(response.get("error"), dict)
+                else ""
+            )
+            if completed.returncode != 0 and not bridge_error:
+                bridge_error = str(completed.stderr or "").strip()
+        except Exception as exc:
+            available = []
+            bridge_error = str(exc)
+        missing = sorted(set(required) - set(available))
+        return {
+            "ready": self.runnable and not missing and not bridge_error,
+            "provider": self.provider_name,
+            "transport": "mcp",
+            "required_tools": required,
+            "available_tools": available,
+            "missing_tools": missing,
+            "error": (
+                self.unavailable_message()
+                if not self.runnable
+                else bridge_error
+            ),
+        }
 
     def _has_bound_tools(self) -> bool:
         capabilities_path = os.path.join(
