@@ -32,6 +32,7 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
                     "data": {
                         "id": "conversation-1",
                         "sandbox_session_id": "sandbox-1",
+                        "sandbox_runtime": {"generation": 3},
                     },
                 },
                 201,
@@ -41,7 +42,7 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
     monkeypatch.setattr("services.edu.runtime_client.requests.request", fake_request)
     client = CoreRuntimeClient(base_url="http://core", agent_adapter="codex")
 
-    client.start_workflow(
+    started = client.start_workflow(
         authorization="Bearer token",
         title="Lesson run",
         prompt="Build lesson",
@@ -72,6 +73,7 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
         },
     }
     assert "opaque-run-grant" not in requests[1][2]["json"]["content"]
+    assert started["runtime_generation"] == 3
 
 
 def test_education_runtime_reads_structured_json_from_shared_sandbox(monkeypatch):

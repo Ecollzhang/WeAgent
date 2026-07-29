@@ -103,6 +103,18 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN last_active_at DATETIME DEFAULT NULL'))
             if 'stopped_at' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN stopped_at DATETIME DEFAULT NULL'))
+            if 'sandbox_generation' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_generation INTEGER NOT NULL DEFAULT 1'))
+            if 'sandbox_expires_at' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_expires_at DATETIME DEFAULT NULL'))
+            if 'sandbox_snapshot_path' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_path VARCHAR(500) DEFAULT NULL'))
+            if 'sandbox_snapshot_sha256' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_sha256 VARCHAR(64) DEFAULT NULL'))
+            if 'sandbox_snapshot_size' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_size INTEGER DEFAULT NULL'))
+            if 'sandbox_snapshot_at' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_at DATETIME DEFAULT NULL'))
             if 'workspace_id' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(36) DEFAULT NULL'))
             conn.commit()

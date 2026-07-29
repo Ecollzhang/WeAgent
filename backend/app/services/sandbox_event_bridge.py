@@ -2,7 +2,9 @@ import csv
 import hashlib
 import io
 import json
+from datetime import timedelta
 
+from flask import current_app
 from sqlalchemy.orm.attributes import flag_modified
 
 from app import db, socketio
@@ -78,6 +80,15 @@ class SandboxEventBridge:
             return
 
         conversation.last_active_at = beijing_now()
+        conversation.sandbox_expires_at = (
+            beijing_now()
+            + timedelta(
+                seconds=max(
+                    300,
+                    int(current_app.config.get("SANDBOX_TTL_SECONDS", 72 * 3600)),
+                )
+            )
+        )
 
         run = agent_run_service.find_active_run(conversation.id, agent_id)
         if not run:
@@ -337,6 +348,17 @@ class SandboxEventBridge:
             run.last_seq = max(run.last_seq or 0, int(seq or 0))
         db.session.commit()
         self._emit_status(conversation_id, message, run, agent_id, status, error=error)
+        try:
+            from app.services.conversation_service import conversation_service
+
+            conversation = Conversation.query.get(conversation_id)
+            if conversation and conversation.sandbox_status == "running":
+                conversation_service.snapshot_sandbox(conversation)
+        except Exception as exc:
+            current_app.logger.warning(
+                "sandbox snapshot after agent finish failed: %s",
+                exc,
+            )
 
     def _emit_status(self, conversation_id, message, run, agent_id, status, error=None):
         socketio.emit(

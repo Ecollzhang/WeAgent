@@ -436,6 +436,12 @@ def _start_core_run(
             run.conversation_id = started["conversation_id"]
             run.sandbox_session_id = started.get("sandbox_session_id")
             run.core_message_id = started.get("message_id")
+            run.input_payload = {
+                **(run.input_payload or {}),
+                "runtime_generation": int(
+                    started.get("runtime_generation") or 1
+                ),
+            }
             grant = EducationToolGrant.query.filter_by(
                 id=run.tool_grant_id
             ).first()

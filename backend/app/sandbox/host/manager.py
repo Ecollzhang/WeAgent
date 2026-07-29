@@ -837,6 +837,45 @@ class DockerContainerManager:
         disposition = f"attachment; filename=\"export.zip\"; filename*=UTF-8''{encoded_name}"
         return zip_bytes, "application/zip", disposition
 
+    def restore_zip(self, session_id: str, archive_bytes: bytes) -> dict:
+        """Restore a trusted durable workspace snapshot into a fresh runtime."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        if not isinstance(archive_bytes, (bytes, bytearray)):
+            raise ValueError("Snapshot archive must be bytes")
+
+        restored = []
+        total_size = 0
+        with zipfile.ZipFile(io.BytesIO(bytes(archive_bytes)), "r") as archive:
+            members = archive.infolist()
+            if len(members) > 5000:
+                raise ValueError("Snapshot archive contains too many files")
+            for member in members:
+                if member.is_dir():
+                    continue
+                raw_name = str(member.filename or "").replace("\\", "/").lstrip("/")
+                normalized = posixpath.normpath(raw_name)
+                if normalized in {"", ".", ".."} or normalized.startswith("../"):
+                    raise ValueError("Snapshot archive contains an unsafe path")
+                parts = [part for part in normalized.split("/") if part]
+                if parts and parts[0] == "workspace":
+                    parts = parts[1:]
+                if not parts or any(part in {".", ".."} for part in parts):
+                    continue
+                target_path = "/workspace/" + "/".join(parts)
+                content = archive.read(member)
+                total_size += len(content)
+                if total_size > 200 * 1024 * 1024:
+                    raise ValueError("Snapshot expands beyond the restore limit")
+                result = self.write_workspace_file(session_id, target_path, content)
+                if result.get("status") != "ok":
+                    raise RuntimeError(
+                        result.get("error") or f"Failed to restore {target_path}"
+                    )
+                restored.append(target_path)
+        return {"status": "ok", "restored_files": len(restored), "paths": restored}
+
     def write_workspace_file(self, session_id: str, file_path: str,
                              content_bytes: bytes) -> dict:
         """Write a file to any path under /workspace/ in the container."""

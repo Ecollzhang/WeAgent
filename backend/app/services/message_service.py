@@ -377,6 +377,17 @@ class MessageService:
             ]
             if not agent_participants:
                 return
+            from app.services.conversation_service import conversation_service
+            _, runtime_error = conversation_service.ensure_sandbox_runtime(
+                conversation,
+                user_id=conversation.owner_id,
+            )
+            if runtime_error:
+                self._emit_system_error(
+                    conversation.id,
+                    f'沙箱恢复失败，聊天和既有产物仍已保留：{runtime_error}',
+                )
+                return
             user_content = self._apply_session_agent_configs(
                 user_content,
                 agent_configs,

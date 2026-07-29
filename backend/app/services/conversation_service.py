@@ -1,3 +1,12 @@
+import hashlib
+import os
+import re
+import uuid
+from datetime import timedelta
+
+from flask import current_app
+
+from app.models.conversation import Conversation
 from app.models.message import Message
 from app.utils.timezone import format_beijing, beijing_now
 from app.models.user import User
@@ -172,6 +181,15 @@ class ConversationService:
     def _conv_to_dict(self, conversation):
         """Serialize conversation with participants."""
         data = conversation.to_dict()
+        data.pop('sandbox_snapshot_path', None)
+        data.pop('sandbox_snapshot_sha256', None)
+        data['sandbox_runtime'] = {
+            'status': conversation.sandbox_status,
+            'generation': conversation.sandbox_generation or 1,
+            'expires_at': format_beijing(conversation.sandbox_expires_at),
+            'snapshot_available': bool(conversation.sandbox_snapshot_path),
+            'snapshot_at': format_beijing(conversation.sandbox_snapshot_at),
+        }
         data['participant_ids'] = [
             f"{p.participant_type}_{p.participant_id}"
             for p in conversation.participants
@@ -391,11 +409,195 @@ class ConversationService:
         conversation.sandbox_host_port = session.host_port
         conversation.sandbox_status = 'running'
         conversation.last_active_at = beijing_now()
+        conversation.sandbox_generation = conversation.sandbox_generation or 1
+        conversation.sandbox_expires_at = (
+            beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
+        )
+        conversation.stopped_at = None
         db.session.commit()
         return None
 
+    @staticmethod
+    def _sandbox_ttl_seconds():
+        return max(300, int(current_app.config.get('SANDBOX_TTL_SECONDS', 72 * 3600)))
+
+    @staticmethod
+    def _safe_snapshot_segment(value):
+        return re.sub(r'[^A-Za-z0-9._-]', '_', str(value or 'unknown'))[:100]
+
+    def _snapshot_absolute_path(self, conversation, relative_path=None):
+        upload_root = os.path.abspath(current_app.config['UPLOAD_FOLDER'])
+        relative = relative_path or os.path.join(
+            'sandbox_snapshots',
+            self._safe_snapshot_segment(conversation.owner_id),
+            self._safe_snapshot_segment(conversation.id),
+            f'generation-{int(conversation.sandbox_generation or 1)}.zip',
+        )
+        absolute = os.path.abspath(os.path.join(upload_root, relative))
+        if absolute != upload_root and not absolute.startswith(upload_root + os.sep):
+            raise ValueError('Invalid sandbox snapshot path')
+        return upload_root, relative.replace('\\', '/'), absolute
+
+    def snapshot_sandbox(self, conversation, manager=None):
+        """Persist the visible workspace outside Docker before it can expire."""
+        if not conversation or not conversation.sandbox_session_id:
+            return {'status': 'skipped', 'reason': 'no sandbox session'}
+        if manager is None:
+            from app.sandbox import get_manager
+            manager = get_manager()
+        archive_bytes, _, _ = manager.export_zip(
+            conversation.sandbox_session_id,
+            '/workspace',
+        )
+        max_bytes = int(
+            current_app.config.get('SANDBOX_SNAPSHOT_MAX_BYTES', 50 * 1024 * 1024)
+        )
+        if len(archive_bytes) > max_bytes:
+            raise ValueError('Sandbox snapshot exceeds the configured size limit')
+
+        _, relative, absolute = self._snapshot_absolute_path(conversation)
+        os.makedirs(os.path.dirname(absolute), exist_ok=True)
+        temporary = f'{absolute}.tmp-{uuid.uuid4().hex}'
+        try:
+            with open(temporary, 'wb') as stream:
+                stream.write(archive_bytes)
+            os.replace(temporary, absolute)
+        finally:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+
+        conversation.sandbox_snapshot_path = relative
+        conversation.sandbox_snapshot_sha256 = hashlib.sha256(archive_bytes).hexdigest()
+        conversation.sandbox_snapshot_size = len(archive_bytes)
+        conversation.sandbox_snapshot_at = beijing_now()
+        db.session.commit()
+        return {
+            'status': 'snapshotted',
+            'runtime_generation': conversation.sandbox_generation or 1,
+            'size': len(archive_bytes),
+            'sha256': conversation.sandbox_snapshot_sha256,
+        }
+
+    def _restore_sandbox_snapshot(self, conversation, manager):
+        if not conversation.sandbox_snapshot_path:
+            return {'status': 'skipped', 'restored_files': 0}
+        _, _, absolute = self._snapshot_absolute_path(
+            conversation,
+            conversation.sandbox_snapshot_path,
+        )
+        if not os.path.isfile(absolute):
+            raise FileNotFoundError('Durable sandbox snapshot is missing')
+        with open(absolute, 'rb') as stream:
+            archive_bytes = stream.read()
+        digest = hashlib.sha256(archive_bytes).hexdigest()
+        if digest != conversation.sandbox_snapshot_sha256:
+            raise ValueError('Durable sandbox snapshot integrity check failed')
+        return manager.restore_zip(conversation.sandbox_session_id, archive_bytes)
+
+    def ensure_sandbox_runtime(self, conversation, user_id, manager=None):
+        """Return a live runtime, rehydrating a new generation when required."""
+        if manager is None:
+            from app.sandbox import get_manager
+            manager = get_manager()
+        session = (
+            manager.get_session(conversation.sandbox_session_id)
+            if conversation.sandbox_session_id
+            else None
+        )
+        if session and getattr(session, '_check_alive', lambda: True)():
+            conversation.sandbox_status = 'running'
+            conversation.last_active_at = beijing_now()
+            conversation.sandbox_expires_at = (
+                beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
+            )
+            db.session.commit()
+            return {
+                'rehydrated': False,
+                'runtime_generation': conversation.sandbox_generation or 1,
+            }, None
+
+        if conversation.sandbox_session_id:
+            manager.destroy_session(conversation.sandbox_session_id)
+        previous_generation = int(conversation.sandbox_generation or 1)
+        participants = [
+            item for item in conversation.participants
+            if item.participant_type == 'agent'
+        ]
+        error = self._create_agent_sandbox(conversation, participants, user_id)
+        if error:
+            conversation.sandbox_status = 'error'
+            db.session.commit()
+            return None, error
+        conversation.sandbox_generation = previous_generation + 1
+        try:
+            restored = self._restore_sandbox_snapshot(conversation, manager)
+        except Exception as exc:
+            manager.destroy_session(conversation.sandbox_session_id)
+            conversation.sandbox_status = 'error'
+            conversation.stopped_at = beijing_now()
+            db.session.commit()
+            return None, f'恢复持久工作区失败：{exc}'
+        conversation.sandbox_status = 'running'
+        conversation.stopped_at = None
+        conversation.last_active_at = beijing_now()
+        conversation.sandbox_expires_at = (
+            beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
+        )
+        db.session.commit()
+        return {
+            'rehydrated': True,
+            'runtime_generation': conversation.sandbox_generation,
+            'restored_files': restored.get('restored_files', 0),
+        }, None
+
+    def expire_idle_sandboxes(self, now=None, manager=None, owner_id=None):
+        """Snapshot and stop expired runtimes without deleting durable chat data."""
+        now = now or beijing_now()
+        uninitialized = Conversation.query.filter(
+            Conversation.sandbox_status == 'running',
+            Conversation.sandbox_expires_at.is_(None),
+        )
+        if owner_id:
+            uninitialized = uninitialized.filter(Conversation.owner_id == owner_id)
+        for conversation in uninitialized.all():
+            anchor = conversation.last_active_at or now
+            conversation.sandbox_expires_at = (
+                anchor + timedelta(seconds=self._sandbox_ttl_seconds())
+            )
+        db.session.commit()
+        query = Conversation.query.filter(
+            Conversation.sandbox_status == 'running',
+            Conversation.sandbox_expires_at.isnot(None),
+            Conversation.sandbox_expires_at <= now,
+        )
+        if owner_id:
+            query = query.filter(Conversation.owner_id == owner_id)
+        if manager is None:
+            from app.sandbox import get_manager
+            manager = get_manager()
+        stopped = 0
+        errors = []
+        for conversation in query.all():
+            try:
+                self.snapshot_sandbox(conversation, manager=manager)
+                manager.destroy_session(conversation.sandbox_session_id)
+                conversation.sandbox_status = 'stopped'
+                conversation.sandbox_container_id = None
+                conversation.sandbox_host_port = None
+                conversation.stopped_at = now
+                db.session.commit()
+                stopped += 1
+            except Exception as exc:
+                db.session.rollback()
+                errors.append({'conversation_id': conversation.id, 'error': str(exc)})
+        return {'stopped': stopped, 'errors': errors}
+
     def get_user_conversations(self, user_id, workspace_id=None):
         """Get all conversations for a user with last message, optionally filtered by workspace."""
+        try:
+            self.expire_idle_sandboxes(owner_id=user_id)
+        except Exception:
+            db.session.rollback()
         conversations = conversation_repo.get_user_conversations(user_id, workspace_id=workspace_id)
         result = []
         for conv in conversations:

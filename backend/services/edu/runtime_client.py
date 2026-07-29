@@ -237,6 +237,11 @@ class CoreRuntimeClient:
             "conversation_id": conversation["id"],
             "sandbox_session_id": conversation.get("sandbox_session_id"),
             "message_id": message["id"],
+            "runtime_generation": (
+                conversation.get("sandbox_runtime", {}).get("generation")
+                or conversation.get("sandbox_generation")
+                or 1
+            ),
         }
 
     def get_snapshot(self, *, authorization, conversation_id):

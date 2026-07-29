@@ -20,6 +20,12 @@ class Conversation(BaseModel):
                                 ondelete='SET NULL'), nullable=True)
     last_active_at = db.Column(db.DateTime, nullable=True)
     stopped_at = db.Column(db.DateTime, nullable=True)
+    sandbox_generation = db.Column(db.Integer, nullable=False, default=1)
+    sandbox_expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    sandbox_snapshot_path = db.Column(db.String(500), nullable=True)
+    sandbox_snapshot_sha256 = db.Column(db.String(64), nullable=True)
+    sandbox_snapshot_size = db.Column(db.Integer, nullable=True)
+    sandbox_snapshot_at = db.Column(db.DateTime, nullable=True)
 
     # Relationships
     participants = db.relationship('ConversationParticipant', backref='conversation',

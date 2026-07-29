@@ -41,6 +41,10 @@ class Config:
     # Upload
     UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', os.path.join(os.path.dirname(__file__), 'uploads'))
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
+    SANDBOX_TTL_SECONDS = int(os.getenv('SANDBOX_TTL_SECONDS', str(72 * 3600)))
+    SANDBOX_SNAPSHOT_MAX_BYTES = int(
+        os.getenv('SANDBOX_SNAPSHOT_MAX_BYTES', str(50 * 1024 * 1024))
+    )
 
     # SocketIO
     SOCKETIO_CORS_ALLOWED_ORIGINS = os.getenv('SOCKETIO_CORS_ALLOWED_ORIGINS', '*').split(',')
