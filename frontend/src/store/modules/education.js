@@ -96,6 +96,7 @@ export default {
     resourceResults: [],
     agentRun: null,
     productAgentRun: null,
+    productAgentRuns: [],
     assets: [],
     knowledgeSummary: null,
     questions: [],
@@ -130,6 +131,7 @@ export default {
     saving: state => state.saving,
     agentRun: state => state.agentRun,
     productAgentRun: state => state.productAgentRun,
+    productAgentRuns: state => state.productAgentRuns,
     assets: state => state.assets,
     knowledgeSummary: state => state.knowledgeSummary,
     questions: state => state.questions,
@@ -161,6 +163,7 @@ export default {
     SET_RESOURCE_RESULTS(state, value) { state.resourceResults = value },
     SET_AGENT_RUN(state, value) { state.agentRun = value },
     SET_PRODUCT_AGENT_RUN(state, value) { state.productAgentRun = value },
+    SET_PRODUCT_AGENT_RUNS(state, value) { state.productAgentRuns = value },
     SET_ASSETS(state, value) { state.assets = value },
     SET_KNOWLEDGE_SUMMARY(state, value) { state.knowledgeSummary = value },
     SET_QUESTIONS(state, value) { state.questions = value },
@@ -520,9 +523,13 @@ export default {
       return run
     },
 
-    async startProductAgentRun({ commit }, input) {
+    async startProductAgentRun({ commit, state }, input) {
       const run = payload(await startEducationProductAgentRun(input))
       commit('SET_PRODUCT_AGENT_RUN', run)
+      commit('SET_PRODUCT_AGENT_RUNS', [
+        run,
+        ...state.productAgentRuns.filter(item => item.id !== run.id),
+      ])
       return run
     },
 
@@ -536,9 +543,18 @@ export default {
       const runs = items(await getCourseProductAgentRuns(courseId, {
         product_code: productCode,
       }))
+      commit('SET_PRODUCT_AGENT_RUNS', runs)
       const run = runs[0] || null
       commit('SET_PRODUCT_AGENT_RUN', run)
       return run
+    },
+
+    async fetchProductAgentRuns({ commit }, { courseId, productCode }) {
+      const runs = items(await getCourseProductAgentRuns(courseId, {
+        product_code: productCode,
+      }))
+      commit('SET_PRODUCT_AGENT_RUNS', runs)
+      return runs
     },
 
     async ensureRoleCourse({ dispatch, state }, { courseId, role }) {

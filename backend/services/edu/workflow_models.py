@@ -6,6 +6,25 @@ from .extensions import db
 from .models import new_id
 
 
+def product_business_route(product_code, course_id, lesson_id=None):
+    query = {"courseId": course_id}
+    if lesson_id:
+        query["lessonId"] = lesson_id
+    routes = {
+        "roster_import": f"/education/courses/{course_id}",
+        "courseware": "/education/teacher/courseware",
+        "student_insight": "/education/teacher/insights",
+        "mock_exam": "/education/student/mock-exams",
+        "weakness_analysis": f"/education/courses/{course_id}",
+        "course_mind_map": "/education/student/mind-maps",
+    }
+    if product_code == "roster_import":
+        query["tab"] = "people"
+    elif product_code == "weakness_analysis":
+        query["tab"] = "weaknesses"
+    return {"path": routes.get(product_code, f"/education/courses/{course_id}"), "query": query}
+
+
 class EducationWorkflow(db.Model):
     __tablename__ = "edu_workflows"
 
@@ -81,6 +100,13 @@ class EducationAgentRun(db.Model):
     )
 
     def to_dict(self):
+        product_code = (
+            str(self.workflow_code or "").split(".", 1)[1]
+            if str(self.workflow_code or "").startswith("product.")
+            else None
+        )
+        nodes = self.nodes or []
+        agent_nodes = [node for node in nodes if node.get("type") == "agent_task"]
         return {
             "id": self.id,
             "course_id": self.course_id,
@@ -92,10 +118,20 @@ class EducationAgentRun(db.Model):
             "conversation_id": self.conversation_id,
             "sandbox_session_id": self.sandbox_session_id,
             "core_message_id": self.core_message_id,
-            "nodes": self.nodes or [],
+            "nodes": nodes,
             "input_payload": self.input_payload or {},
             "output": self.output or {},
             "error_summary": self.error_summary,
+            "product_code": product_code,
+            "business_route": (
+                product_business_route(product_code, self.course_id, self.lesson_id)
+                if product_code
+                else None
+            ),
+            "agent_count": len(agent_nodes),
+            "completed_agent_count": len(
+                [node for node in agent_nodes if node.get("status") == "done"]
+            ),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,

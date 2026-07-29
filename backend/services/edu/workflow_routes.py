@@ -807,6 +807,10 @@ def start_product_agent_run():
         input_payload={
             "product_code": product_code,
             "options": options,
+            "display_title": (
+                str(options.get("title") or "").strip()
+                or (lesson.title if lesson else membership.course.title)
+            ),
         },
         started_at=datetime.utcnow(),
     )
@@ -829,12 +833,17 @@ def start_product_agent_run():
     db.session.commit()
 
     title_target = lesson.title if lesson else membership.course.title
+    local_started_at = datetime.utcnow() + timedelta(hours=8)
+    conversation_title = (
+        f"{membership.course.title}｜Education·{title_target}"
+        f"（{template['name']}）｜{local_started_at:%Y-%m-%d %H:%M}"
+    )
     app = current_app._get_current_object()
     launch_args = (
         app,
         run.id,
         request.headers.get("Authorization", ""),
-        f"{title_target} · {template['name']}",
+        conversation_title,
         prompt,
         agent_ids,
         workflow,
@@ -913,7 +922,59 @@ def list_product_agent_runs(course_id):
         db.session.commit()
     for run in runs:
         _attach_tool_calls(run)
-    return jsonify({"items": [run.to_dict() for run in runs]})
+    return jsonify({"items": [run.to_dict() for run in runs], "total": len(runs)})
+
+
+@education_workflow_api.get(
+    "/conversations/<conversation_id>/product-context"
+)
+@jwt_required()
+def get_product_conversation_context(conversation_id):
+    user_id = get_jwt_identity()
+    run = (
+        EducationAgentRun.query.filter_by(
+            conversation_id=conversation_id,
+            requested_by=user_id,
+        )
+        .filter(EducationAgentRun.workflow_code.like("product.%"))
+        .order_by(EducationAgentRun.created_at.desc())
+        .first()
+    )
+    if not run:
+        return jsonify({"error": "Education conversation context not found"}), 404
+    membership = active_membership(run.course_id, user_id)
+    if not membership:
+        return jsonify({"error": "Education conversation context not found"}), 404
+    if _expire_stale_pending_run(run):
+        db.session.commit()
+    if _reconcile_product_completion(run):
+        db.session.commit()
+    _attach_tool_calls(run)
+    lesson = (
+        Lesson.query.filter_by(id=run.lesson_id, course_id=run.course_id).first()
+        if run.lesson_id
+        else None
+    )
+    run_data = run.to_dict()
+    return jsonify(
+        {
+            "course": {
+                "id": membership.course.id,
+                "title": membership.course.title,
+                "membership_role": membership.role,
+            },
+            "lesson": (
+                {"id": lesson.id, "title": lesson.title}
+                if lesson
+                else None
+            ),
+            "run": run_data,
+            "progress": {
+                "agent_count": run_data["agent_count"],
+                "completed_count": run_data["completed_agent_count"],
+            },
+        }
+    )
 
 
 @education_workflow_api.get("/workflow-runs/<run_id>")

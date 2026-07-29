@@ -9,6 +9,39 @@
       <el-tag size="mini" :type="statusType">{{ statusLabel }}</el-tag>
       <i :class="expanded ? 'el-icon-arrow-up' : 'el-icon-arrow-down'"></i>
     </button>
+    <div class="record-actions">
+      <button type="button" @click="openConversation(run)">
+        <i class="el-icon-chat-dot-round"></i> 返回本次聊天
+      </button>
+      <button
+        v-if="run.business_route"
+        type="button"
+        @click="previewLatestArtifact"
+      >
+        <i class="el-icon-view"></i> 预览最新产物
+      </button>
+      <button type="button" @click="historyExpanded = !historyExpanded">
+        <i class="el-icon-time"></i> 协作历史 {{ historyRuns.length }}
+      </button>
+    </div>
+    <el-collapse-transition>
+      <div v-show="historyExpanded" class="history-list">
+        <button
+          v-for="item in historyRuns"
+          :key="item.id"
+          type="button"
+          class="history-item"
+          @click="openConversation(item)"
+        >
+          <span>
+            <b>{{ item.workflow_name || title }}</b>
+            <small>{{ formatDate(item.started_at || item.created_at) }}</small>
+          </span>
+          <span>{{ item.completed_agent_count || 0 }}/{{ item.agent_count || 0 }} Agent</span>
+          <i class="el-icon-right"></i>
+        </button>
+      </div>
+    </el-collapse-transition>
     <el-collapse-transition>
       <div v-show="expanded" class="record-detail">
         <ProductAgentRunPanel
@@ -33,9 +66,13 @@ export default {
     title: { type: String, default: 'AI 生成记录' },
   },
   data() {
-    return { expanded: false }
+    return { expanded: false, historyExpanded: false }
   },
   computed: {
+    historyRuns() {
+      const runs = this.$store.getters['education/productAgentRuns'] || []
+      return runs.length ? runs : [this.run]
+    },
     statusLabel() {
       const labels = {
         pending: '等待中', running: '进行中', completed: '已完成',
@@ -55,6 +92,29 @@ export default {
       return 'info'
     },
   },
+  methods: {
+    openConversation(item) {
+      if (!item || !item.conversation_id) return
+      this.$router.push({
+        path: '/dashboard',
+        query: { conversation_id: item.conversation_id },
+      })
+    },
+    previewLatestArtifact() {
+      this.$emit('preview', this.run)
+      if (this.run.business_route && this.$route.fullPath !== this.run.business_route) {
+        this.$router.push(this.run.business_route)
+      }
+    },
+    formatDate(value) {
+      if (!value) return '时间待记录'
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return String(value)
+      return date.toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      })
+    },
+  },
 }
 </script>
 
@@ -70,6 +130,25 @@ export default {
 .record-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: #e7f2ef; color: #2e7e73; }
 .record-summary b, .record-summary small { display: block; }
 .record-summary b { font-size: 11px; }.record-summary small { margin-top: 3px; color: #8b9a97; font-size: 9px; }
+.record-actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 2px 0; }
+.record-actions button {
+  border: 0; border-radius: 8px; padding: 6px 9px; background: #eef6f4;
+  color: #2e746b; font-size: 11px; cursor: pointer;
+}
+.record-actions button:hover { background: #dfeeea; }
+.history-list {
+  display: grid; gap: 6px; margin-top: 8px; padding: 8px;
+  border: 1px solid #e4ecea; border-radius: 10px; background: #fff;
+}
+.history-item {
+  display: grid; grid-template-columns: 1fr auto 14px; align-items: center; gap: 10px;
+  width: 100%; padding: 8px; border: 0; border-radius: 8px; background: #f7faf9;
+  text-align: left; color: #48615c; cursor: pointer;
+}
+.history-item:hover { background: #edf5f3; }
+.history-item b, .history-item small { display: block; }
+.history-item b { font-size: 11px; }
+.history-item small, .history-item > span:last-of-type { margin-top: 2px; color: #8b9a97; font-size: 9px; }
 .record-detail { padding-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .record-summary { transition: none; }

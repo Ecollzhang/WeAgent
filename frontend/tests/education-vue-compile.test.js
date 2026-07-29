@@ -14,6 +14,7 @@ const files = [
   'src/components/education/LessonPlanEditor.vue',
   'src/components/education/ProductAgentRunPanel.vue',
   'src/components/education/EmbeddedAgentRecord.vue',
+  'src/components/education/EducationChatContext.vue',
   'src/components/education/ScoreDistributionChart.vue',
   'src/views/education/EducationHome.vue',
   'src/views/education/CourseSpace.vue',

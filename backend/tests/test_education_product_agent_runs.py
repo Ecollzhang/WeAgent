@@ -1,4 +1,5 @@
 from datetime import timedelta
+import re
 
 import pytest
 from flask_jwt_extended import create_access_token
@@ -204,12 +205,22 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     assert created.status_code == 202
     run = created.get_json()
     assert run["lesson_id"] == lesson["id"]
+    assert run["product_code"] == "courseware"
+    assert run["business_route"] == {
+        "path": "/education/teacher/courseware",
+        "query": {"courseId": course["id"], "lessonId": lesson["id"]},
+    }
     assert [node["agent_role"] for node in run["nodes"]] == [
         "course_designer",
         "courseware_maker",
         "teaching_reviewer",
     ]
     started = runtime.started[0]
+    assert re.fullmatch(
+        r"高中英语阅读与写作｜Education·校园生活叙事阅读"
+        r"（Agent 课件制作）｜\d{4}-\d{2}-\d{2} \d{2}:\d{2}",
+        started["title"],
+    )
     assert started["agent_ids"] == ["_edu_1", "_edu_2", "_edu_9"]
     assert "edu.courseware.create" in started["prompt"]
     assert "slide_document" in started["prompt"]
@@ -343,6 +354,77 @@ def test_product_run_is_private_to_requesting_member(education_app):
     assert peer_view.status_code == 404
     assert teacher_view.status_code == 404
     assert [row["id"] for row in owner_list.get_json()["items"]] == [created["id"]]
+
+
+def test_product_run_history_and_conversation_context_are_bidirectional(
+    education_app,
+):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, _, teacher, student, other_student = seed_course(education_app)
+
+    first = client.post(
+        "/api/edu/product-agent-runs",
+        headers=student,
+        json={
+            "course_id": course["id"],
+            "product_code": "course_mind_map",
+            "options": {"title": "第一次课程导图"},
+        },
+    ).get_json()
+    second = client.post(
+        "/api/edu/product-agent-runs",
+        headers=student,
+        json={
+            "course_id": course["id"],
+            "product_code": "course_mind_map",
+            "options": {"title": "第二次课程导图"},
+        },
+    ).get_json()
+
+    history = client.get(
+        f"/api/edu/courses/{course['id']}/product-agent-runs"
+        "?product_code=course_mind_map",
+        headers=student,
+    )
+    context = client.get(
+        f"/api/edu/conversations/{second['conversation_id']}/product-context",
+        headers=student,
+    )
+    peer_context = client.get(
+        f"/api/edu/conversations/{second['conversation_id']}/product-context",
+        headers=other_student,
+    )
+    teacher_context = client.get(
+        f"/api/edu/conversations/{second['conversation_id']}/product-context",
+        headers=teacher,
+    )
+
+    assert history.status_code == 200
+    history_body = history.get_json()
+    assert history_body["total"] == 2
+    assert [item["id"] for item in history_body["items"]] == [
+        second["id"],
+        first["id"],
+    ]
+    assert context.status_code == 200
+    context_body = context.get_json()
+    assert context_body["course"] == {
+        "id": course["id"],
+        "title": "高中英语阅读与写作",
+        "membership_role": "student",
+    }
+    assert context_body["run"]["id"] == second["id"]
+    assert context_body["run"]["product_code"] == "course_mind_map"
+    assert context_body["run"]["business_route"] == {
+        "path": "/education/student/mind-maps",
+        "query": {"courseId": course["id"]},
+    }
+    assert context_body["progress"]["agent_count"] == 2
+    assert context_body["progress"]["completed_count"] == 0
+    assert peer_context.status_code == 404
+    assert teacher_context.status_code == 404
 
 
 def test_student_agent_tool_write_is_visible_on_product_run(education_app):

@@ -139,6 +139,45 @@ contains(
   'product pages must restore persisted Agent progress after refresh'
 )
 for (const fragment of [
+  'productAgentRuns',
+  'fetchProductAgentRuns',
+  'SET_PRODUCT_AGENT_RUNS',
+]) {
+  contains(
+    'src/store/modules/education.js',
+    fragment,
+    'product pages must preserve a compact collaboration history'
+  )
+}
+for (const fragment of [
+  '协作历史',
+  '返回本次聊天',
+  'previewLatestArtifact',
+  'openConversation',
+]) {
+  contains(
+    'src/components/education/EmbeddedAgentRecord.vue',
+    fragment,
+    'latest run must link to chat and expose compact history'
+  )
+}
+for (const fragment of [
+  'EducationChatContext',
+  'educationContext',
+  'loadEducationContext',
+]) {
+  contains(
+    'src/views/Dashboard.vue',
+    fragment,
+    'Education chat must link back to its durable business context'
+  )
+}
+contains(
+  'src/api/education.js',
+  'getEducationConversationContext',
+  'chat context must be resolved by an authorized Education API'
+)
+for (const fragment of [
   'data-testid="product-agent-run"',
   'data-testid="product-agent-node"',
   'tool_calls',

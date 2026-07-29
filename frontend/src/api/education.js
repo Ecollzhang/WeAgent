@@ -217,6 +217,10 @@ export function getCourseProductAgentRuns(courseId, params = {}) {
   return service.get(url(`/courses/${courseId}/product-agent-runs`), { params })
 }
 
+export function getEducationConversationContext(conversationId) {
+  return service.get(url(`/conversations/${conversationId}/product-context`))
+}
+
 // Durable course assets -----------------------------------------------------
 
 export function getCourseAssets(courseId) {

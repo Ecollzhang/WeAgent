@@ -49,6 +49,11 @@
 
     <!-- 第三栏：主聊天内容区 -->
     <div class="chat-panel">
+      <EducationChatContext
+        v-if="educationContext || educationContextLoading"
+        :context="educationContext"
+        :loading="educationContextLoading"
+      />
       <ChatWindow
         :conversation="currentConversation"
         :messages="currentMessages"
@@ -398,7 +403,9 @@ import ArtifactWorkbench from '../components/ArtifactWorkbench/index.vue'
 import ConversationList from '../components/ConversationList/index.vue'
 import ChatWindow from '../components/ChatWindow/index.vue'
 import FileMigrationDialog from '../components/FileMigrationDialog/index.vue'
+import EducationChatContext from '../components/education/EducationChatContext.vue'
 import { getCategories, getAgents } from '../api/agent'
+import { getEducationConversationContext } from '../api/education'
 import { sendMessage as apiSendMessage } from '../api/message'
 import {
   stopConversationAgent,
@@ -431,7 +438,14 @@ function getAgentMeta(agentId) {
 
 export default {
   name: 'Dashboard',
-  components: { AppSidebar, ArtifactWorkbench, ConversationList, ChatWindow, FileMigrationDialog },
+  components: {
+    AppSidebar,
+    ArtifactWorkbench,
+    ConversationList,
+    ChatWindow,
+    FileMigrationDialog,
+    EducationChatContext,
+  },
   data() {
     return {
       showCreateDialog: false,
@@ -471,6 +485,9 @@ export default {
       serviceLogsVisible: false,
       serviceLogsLoading: false,
       serviceLogsData: null,
+      educationContext: null,
+      educationContextLoading: false,
+      educationContextRequestId: 0,
       serviceForm: {
         agent_id: '',
         port: 5173,
@@ -616,7 +633,10 @@ export default {
       if (!conversationId) return
       const conversation = this.conversations.find(item => item.id === conversationId)
       if (!conversation) return
-      if (this.currentConversation?.id === conversationId) return
+      if (this.currentConversation?.id === conversationId) {
+        this.loadEducationContext(conversationId)
+        return
+      }
       this.handleSelectConversation(conversation)
     },
 
@@ -632,6 +652,27 @@ export default {
       this.$store.dispatch('message/fetchMessages', {
         conversationId: conversation.id,
       })
+      this.loadEducationContext(conversation.id)
+    },
+
+    async loadEducationContext(conversationId) {
+      const requestId = ++this.educationContextRequestId
+      this.educationContext = null
+      this.educationContextLoading = true
+      try {
+        const response = await getEducationConversationContext(conversationId)
+        if (requestId !== this.educationContextRequestId) return
+        this.educationContext = response && response.data !== undefined
+          ? response.data
+          : response
+      } catch (error) {
+        if (requestId !== this.educationContextRequestId) return
+        this.educationContext = null
+      } finally {
+        if (requestId === this.educationContextRequestId) {
+          this.educationContextLoading = false
+        }
+      }
     },
 
     async handleSendMessage(payload) {
