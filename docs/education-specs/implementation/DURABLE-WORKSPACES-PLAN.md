@@ -1,4 +1,4 @@
-# Education Durable Workspaces Implementation Plan
+# Education Durable Domains Implementation Plan
 
 > Date: 2026-07-29  
 > Branch: `feature/education`  
@@ -22,8 +22,9 @@ The phase is complete only when all of the following are true:
   context projection, and manages editable SlideDocument versions and
   HTML/PPTX/PDF exports;
 - **学生画像与评估** combines finalized assignments and submitted mock exams,
-  showing class highest/lowest/average, completion, distribution, filters, and
-  evidence drill-down without mixing unconfirmed AI scores into official data;
+  showing class highest/lowest/average/median, completion, distribution, trend,
+  filters, and evidence drill-down without mixing unconfirmed AI scores into
+  official data;
 - each course has a working Question Bank, Paper Bank, and Knowledge Base;
 - UI and Agent tools call the same Education application services;
 - Agent writes are membership-scoped, capability-scoped, idempotent, and
@@ -72,7 +73,7 @@ new collaboration console.
 ### R4 — Teacher analytics experience
 
 - add class overview cards, assessment/time/learning-domain filters, and score
-  distribution;
+  distribution and trend;
 - retain per-student cards, but add grade trend, assignment completion, rubric
   dimensions, knowledge points, and evidence drawer;
 - show explicit “数据不足/待教师确认” states instead of filling missing values
@@ -88,6 +89,15 @@ new collaboration console.
   UAT, real Agent UAT, and sandbox-deletion persistence recovery;
 - update UAT evidence, commit verified slices atomically, then push
   `feature/education` at the final release gate.
+
+### R6 — Refined domain UI and help
+
+- preserve the existing green paper/editorial language with restrained page,
+  metric, chart, and version transitions;
+- respect reduced-motion preferences and keep mobile interactions direct;
+- add a lightweight illustrated Help Center for teacher and student quick-start
+  flows after the real pages are stable;
+- verify every help route, label, screenshot/diagram, and role boundary in UAT.
 
 ## Slice A — Durable assets
 
@@ -173,8 +183,8 @@ Cover:
 - teacher insight refresh from assignments and mock attempts.
 - official class aggregates using rule-scored objective work and
   teacher-confirmed subjective `final_score` only;
-- highest, lowest, average, graded count, completion rate, and score
-  distribution for course and selected assessment scopes;
+- highest, lowest, average, median, graded count, completion rate, score
+  distribution, and trend for course and selected assessment scopes;
 - unconfirmed AI suggestions remaining visible as pending evidence but excluded
   from official statistics;
 - mixed assignment/mock-exam evidence, no-evidence students, and partially
@@ -233,8 +243,8 @@ Implement:
   editable SlideDocument source, HTML preview, immutable version history,
   upload, download, page regeneration, and PPTX/PDF/HTML export;
 - **学生画像与评估** with class highest/lowest/average, graded count,
-  completion rate, distribution, assessment/time filters, student cards, and
-  evidence drill-down;
+  median, completion rate, distribution, trend, assessment/time filters,
+  student cards, and evidence drill-down;
 - course Knowledge Center tabs for questions, papers, and resources.
 
 Agent generation and analysis actions stay inside these pages. Their progress
@@ -248,6 +258,10 @@ Implement:
 - **模拟考试** creation, completion, submission, and result;
 - **作业弱点** evidence and recommended follow-up practice;
 - **课程思维导图** generation, editing, versioning, and source navigation.
+
+Add a shared Help Center entry with role-aware illustrated teacher and student
+quick-start guides. Apply purposeful domain-page motion and explicit
+`prefers-reduced-motion` fallbacks without introducing a second design system.
 
 Commit after frontend tests and production build pass.
 
@@ -313,6 +327,11 @@ Run:
   multi-version export without entering chat;
 - analytics browser/API UAT proving highest/lowest/average from finalized grades
   and exclusion of an unconfirmed AI-suggested score;
+- separate teacher and student authorization UAT proving private drafts,
+  answers, rubric data, unconfirmed scores, and other students' evidence never
+  cross the role boundary;
+- Help Center UAT proving screenshots/diagrams, labels, and direct links match
+  the current product;
 - persistence recovery by removing only a disposable source sandbox/path and
   reopening the adopted asset.
 

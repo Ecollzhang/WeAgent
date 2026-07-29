@@ -1,4 +1,4 @@
-# Education Durable Workspaces and Agent Tools
+# Education Durable Domains and Agent Tools
 
 > Status: approved for implementation by delegated product decision  
 > Date: 2026-07-29  
@@ -12,8 +12,8 @@ sandbox is removed.
 
 The deliverable has four visible outcomes:
 
-1. A role-aware Education workbench with three teacher modules and three student
-   modules.
+1. A role-aware Education product with three independent teacher domains and
+   three independent student domains.
 2. Course-scoped Question Bank, Paper Bank, and Knowledge Base.
 3. Database-owned user files and structured versions; sandbox files are
    temporary only.
@@ -127,7 +127,7 @@ Three information-architecture approaches were considered:
   runtime concepts before completing ordinary work, so it is rejected as the
   primary product structure.
 
-Education adds its own narrow module rail inside the existing global WeAgent
+Education adds its own narrow domain rail inside the existing global WeAgent
 sidebar. Authorization remains course-specific; there is no fake global
 teacher/student role switch.
 
@@ -142,7 +142,7 @@ generation or analysis capability behind domain actions. The ordinary teacher
 journey must remain usable without opening a chat or understanding Agent
 orchestration.
 
-### 4.1 Teacher modules
+### 4.1 Teacher domains
 
 1. **教学空间**
    - courses, units, lessons, members, activities, assignments;
@@ -154,15 +154,19 @@ orchestration.
      authorized Knowledge Base sources as the courseware context;
    - use editable slide JSON as the source, with HTML preview and immutable
      version history;
+   - treat the selected lesson plan, objectives, activities, materials, and
+     publication constraints as a reproducible context snapshot;
    - upload, download, AI-generate, locally edit, regenerate one page, and
      explicitly adopt;
    - PPTX export through an adapter, with HTML fallback.
+   - label Agent actions as generation, rewrite, illustration, and validation
+     helpers; the default page is not an Agent run timeline.
 3. **学生画像与评估**
    - enter through one teacher course and show a class overview before
      per-student cards;
    - aggregate finalized assignment grades and submitted mock-exam results;
    - show highest, lowest, average, graded-student count, completion rate, score
-     distribution, and assessment/time-range filters;
+     distribution, median, trend, and assessment/time-range filters;
    - show raw score/max score within one assessment, but normalize scores to a
      percentage before combining assessments with different maximum scores;
    - use submission, score, knowledge-point, error-reason, and rubric evidence
@@ -173,7 +177,7 @@ orchestration.
      them into official highest, lowest, or average values;
    - no personality labels or unsupported mastery probability.
 
-### 4.2 Student modules
+### 4.2 Student domains
 
 1. **模拟考试**
    - select a course, scope, question count, duration, and difficulty mix;
@@ -197,6 +201,18 @@ progress, tool calls, provenance, and generated artifacts may appear in a
 collapsed “AI 生成记录” or “分析依据” area, but Conversation IDs, Sandbox IDs,
 provider implementation details, and raw reasoning are never primary page
 content.
+
+### 4.3 Domain presentation and motion
+
+- Replace product-facing labels such as “教学协作台” and “教师工作台” with
+  “Education 教育中心” and “教师领域”/“学习领域”.
+- Preserve the existing green, paper, and teaching-material visual language.
+  Do not copy a generic analytics dashboard or unrelated design system.
+- Use restrained, purposeful motion: one staggered page entrance, animated
+  metric changes, chart transitions, and clear hover/focus feedback. All motion
+  must respect `prefers-reduced-motion`.
+- Durable output, versions, and evidence are visually primary. Agent run details
+  stay collapsed under “AI 生成记录” or “分析依据”.
 
 ## 5. Course Knowledge Center
 
@@ -339,6 +355,19 @@ published Question Bank + course scope
 → weakness evidence and student insight refresh
 ```
 
+### 7.4 Agent integration contract
+
+Domain services expose stable UI APIs and scoped Agent tools over the same
+application-service layer. The tool set may grow and its knowledge-base guide
+may be expanded later without changing domain page ownership.
+
+Agents call tools and interfaces; they do not manipulate frontend state, write
+Education tables directly, or make sandbox files authoritative. Courseware
+tools receive trusted course/lesson scope from the run grant and write validated
+draft `SlideDocument` or Education Asset versions. Insight tools read only
+authorized final grades and evidence, then persist a reproducible snapshot. The
+UI distinguishes deterministic, teacher-confirmed, and AI-suggested values.
+
 ## 8. Error handling and recovery
 
 - Database transaction failure leaves no half-created business object.
@@ -362,10 +391,10 @@ published Question Bank + course scope
 - Course Knowledge Center models and APIs.
 - canonical ownership tests and sandbox-deletion recovery test.
 
-### Slice B — Role workbench
+### Slice B — Role domains
 
-- Education module rail and active-course role context.
-- teacher and student module pages with real persisted data.
+- Education domain rail and active-course role context.
+- teacher and student domain pages with real persisted data.
 - empty/loading/error states and responsive behavior.
 
 ### Slice C — Assessment and insight
@@ -391,6 +420,12 @@ published Question Bank + course scope
 - an Agent performs at least one teacher write and one student write through
   authorized tools;
 - adopted files remain downloadable after the originating sandbox is removed.
+- teacher UAT verifies course/lesson-driven courseware, editable versions,
+  exports, class aggregates, filters, and evidence drill-down;
+- student UAT verifies that drafts, private answers, unconfirmed scores, and
+  teacher-only evidence never leak across the role boundary;
+- a lightweight illustrated Help Center explains both role flows using verified
+  screenshots or maintained diagrams.
 
 ## 10. Deferred boundaries
 
