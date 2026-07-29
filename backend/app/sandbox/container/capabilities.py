@@ -152,6 +152,11 @@ def agent_bootstrap_instruction(agent_id: str,
         f"- Read available skills from {base}/skill-index.json\n"
         f"- Read available tools from {base}/tool-index.json\n"
         f"- Respect permission grants in {base}/permissions.json\n"
+        "These JSON files are filesystem metadata, not MCP resources. Read them "
+        "only with an ordinary filesystem tool when one is available; never call "
+        "read_mcp_resource or invent an MCP server for their paths.\n"
+        "When bound tools are exposed by the provider, invoke bound native tools "
+        "directly from their supplied schema instead of probing for documentation.\n"
         "Only use capabilities listed in those files for this agent."
     )
 

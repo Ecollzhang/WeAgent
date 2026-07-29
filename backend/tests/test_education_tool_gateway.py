@@ -286,12 +286,24 @@ def test_lesson_scoped_run_injects_lesson_into_courseware_write(app):
         client,
         teacher,
         course["id"],
-        ["edu.courseware.create"],
+        ["edu.course.context.get", "edu.courseware.create"],
     )
     with app.app_context():
         stored_grant = EducationToolGrant.query.get(grant["id"])
         stored_grant.agent_run_id = "scoped-agent-run"
         db.session.commit()
+
+    context_response = invoke(
+        client,
+        grant["token"],
+        "edu.course.context.get",
+        {},
+    )
+    assert context_response.status_code == 200
+    assert (
+        context_response.get_json()["result"]["courseware_context"]["lesson"]["id"]
+        == lesson["id"]
+    )
 
     source = {
         "subject_code": "high_school_english",

@@ -22,7 +22,11 @@ def _isolated_orchestrator():
         patch("app.sandbox.container.providers.codex.CodexRunner._write_file"),
         patch("app.sandbox.container.providers.codex.log_agent"),
         patch("app.sandbox.container.providers.opencode.OpenCodeRunner._write_noninteractive_config"),
-        patch.dict("os.environ", {"CODEX_API_KEY": "sk-test"}),
+        # Provider tests must not inherit the developer's real .env. In a full
+        # suite the Flask config is imported first and legitimately loads it;
+        # leaking those settings here can start relays or change provider
+        # selection, making this isolation test order-dependent.
+        patch.dict("os.environ", {"CODEX_API_KEY": "sk-test"}, clear=True),
     ]
     for item in patches:
         item.start()

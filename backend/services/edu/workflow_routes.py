@@ -57,6 +57,14 @@ TEACHER_WORKFLOW_TOOLS = [
     "edu.paper.compose",
     "edu.student_insight.refresh",
 ]
+REQUIRED_PRODUCT_WRITE_TOOL = {
+    "product.roster_import": "edu.course.members.import",
+    "product.courseware": "edu.courseware.create",
+    "product.student_insight": "edu.student_insight.refresh",
+    "product.mock_exam": "edu.mock_exam.create",
+    "product.weakness_analysis": "edu.weakness.analyze",
+    "product.course_mind_map": "edu.mind_map.create",
+}
 
 
 def _tool_calls_by_agent(run):
@@ -83,6 +91,39 @@ def _attach_tool_calls(run):
         nodes.append(node)
     run.nodes = nodes
     return run
+
+
+def _missing_required_product_write(run):
+    """Return the required write action when Agents produced only chat output.
+
+    A core Agent node reaching ``done`` proves that the model stopped, not that
+    the requested product exists. Product workflows are complete only after the
+    scoped tool gateway has recorded their durable write successfully.
+    """
+    required = REQUIRED_PRODUCT_WRITE_TOOL.get(run.workflow_code)
+    if not required or not run.tool_grant_id:
+        return required
+    adopted = EducationToolCall.query.filter_by(
+        grant_id=run.tool_grant_id,
+        tool_name=required,
+        status="completed",
+    ).first()
+    return None if adopted else required
+
+
+def _reconcile_product_completion(run):
+    """Repair historical optimistic statuses using the durable write audit."""
+    if run.status != "completed":
+        return False
+    missing_write = _missing_required_product_write(run)
+    if not missing_write:
+        return False
+    run.status = "partial"
+    run.error_summary = (
+        "Agent 团队已结束，但未写入可验收的业务产物："
+        f"缺少成功的 {missing_write} 工具调用。"
+    )
+    return True
 
 
 def _revoke_tool_grant(run):
@@ -236,10 +277,17 @@ def _sync_run(run, authorization):
     }
     moderator = latest_by_agent.get("moderator")
     has_worker_activity = any(agent_id in latest_by_agent for agent_id in workflow_agent_ids)
+    moderator_payload = _extract_json(moderator.get("content")) if moderator else {}
+    moderator_has_worker_plan = (
+        str(moderator_payload.get("type") or "").lower() == "plan"
+        and isinstance(moderator_payload.get("tasks"), list)
+        and bool(moderator_payload["tasks"])
+    )
     if (
         moderator
         and moderator.get("status") in {"done", "error", "stopped"}
         and not has_worker_activity
+        and not moderator_has_worker_plan
     ):
         nodes = []
         for stored in run.nodes or []:
@@ -313,12 +361,21 @@ def _sync_run(run, authorization):
     if failed_count:
         run.status = "partial" if done_count else "failed"
     elif agent_count and done_count == agent_count:
+        missing_write = _missing_required_product_write(run)
         has_approval = any(node.get("type") == "approval" for node in nodes)
-        run.status = "awaiting_approval" if has_approval else "completed"
-        if has_approval:
-            for node in nodes:
-                if node.get("type") == "approval":
-                    node["status"] = "awaiting_approval"
+        if missing_write:
+            run.status = "partial"
+            run.error_summary = (
+                "Agent 团队已结束，但未写入可验收的业务产物："
+                f"缺少成功的 {missing_write} 工具调用。"
+            )
+        else:
+            run.status = "awaiting_approval" if has_approval else "completed"
+            run.error_summary = None
+            if has_approval:
+                for node in nodes:
+                    if node.get("type") == "approval":
+                        node["status"] = "awaiting_approval"
         run.finished_at = datetime.utcnow()
         _revoke_tool_grant(run)
     else:
@@ -825,6 +882,8 @@ def get_product_agent_run(run_id):
         except CoreRuntimeError as exc:
             run.error_summary = str(exc)
             db.session.commit()
+    if _reconcile_product_completion(run):
+        db.session.commit()
     _attach_tool_calls(run)
     return jsonify(run.to_dict())
 
@@ -846,7 +905,11 @@ def list_product_agent_runs(course_id):
             EducationAgentRun.workflow_code == f"product.{product_code}"
         )
     runs = query.order_by(EducationAgentRun.created_at.desc()).limit(50).all()
-    if any(_expire_stale_pending_run(run) for run in runs):
+    changed = False
+    for listed_run in runs:
+        changed = _expire_stale_pending_run(listed_run) or changed
+        changed = _reconcile_product_completion(listed_run) or changed
+    if changed:
         db.session.commit()
     for run in runs:
         _attach_tool_calls(run)

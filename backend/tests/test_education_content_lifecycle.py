@@ -235,6 +235,93 @@ def test_teacher_builds_versioned_lesson_and_student_only_sees_safe_snapshot(app
     ).status_code == 404
 
 
+def test_courseware_context_projects_one_selected_lesson_for_teacher(app):
+    client = app.test_client()
+    teacher = headers(app, "courseware-teacher")
+    student = headers(app, "courseware-student")
+    outsider = headers(app, "courseware-outsider")
+    created_course = course(client, teacher)
+    join(client, teacher, student, created_course["id"])
+    lesson = client.post(
+        f"/api/edu/courses/{created_course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Evidence into slides",
+            "learning_domain": "integrated",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    plan = client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "lesson_plan",
+            "schema_name": "weagent.education.lesson-plan",
+            "source_json": lesson_plan(),
+        },
+    ).get_json()
+    slides = client.post(
+        f"/api/edu/lessons/{lesson['id']}/contents",
+        headers=teacher,
+        json={
+            "kind": "slide_document",
+            "schema_name": "weagent.education.slide-document",
+            "source_json": {
+                "title": "Evidence into slides",
+                "theme": {"tone": "editorial"},
+                "slides": [
+                    {
+                        "id": "slide-1",
+                        "title": "Find the turning point",
+                        "layout": "title-content",
+                        "blocks": [],
+                        "speaker_notes": "Ask for textual evidence.",
+                    }
+                ],
+            },
+            "rendered_html": "<article>Find the turning point</article>",
+        },
+    ).get_json()
+    activity = client.post(
+        f"/api/edu/lessons/{lesson['id']}/activities",
+        headers=teacher,
+        json={
+            "activity_type": "reading",
+            "title": "Evidence ladder",
+            "position": 1,
+            "student_payload": {"prompt": "Choose and explain one quotation."},
+            "teacher_payload": {"look_for": "Relevant evidence"},
+        },
+    ).get_json()
+
+    response = client.get(
+        f"/api/edu/lessons/{lesson['id']}/courseware-context",
+        headers=teacher,
+    )
+
+    assert response.status_code == 200
+    context = response.get_json()
+    assert context["course"]["id"] == created_course["id"]
+    assert context["lesson"]["id"] == lesson["id"]
+    assert context["lesson_plan"]["content_id"] == plan["content"]["id"]
+    assert context["lesson_plan"]["source_json"]["objectives"][0]["id"] == "objective-1"
+    assert context["slide_documents"][0]["content_id"] == slides["content"]["id"]
+    assert context["slide_documents"][0]["source_json"]["slides"][0]["id"] == "slide-1"
+    assert context["activities"][0]["id"] == activity["id"]
+    assert context["context_checksum"]
+    assert client.get(
+        f"/api/edu/lessons/{lesson['id']}/courseware-context",
+        headers=student,
+    ).status_code == 404
+    assert client.get(
+        f"/api/edu/lessons/{lesson['id']}/courseware-context",
+        headers=outsider,
+    ).status_code == 404
+
+
 def test_publish_separates_private_plan_from_student_courseware(app):
     client = app.test_client()
     teacher = headers(app, "teacher")

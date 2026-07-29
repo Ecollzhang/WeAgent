@@ -5,9 +5,10 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from statistics import median
 
 from .access import active_membership
-from .content_models import LearningEvent, Lesson
+from .content_models import Assignment, LearningEvent, Lesson, Submission
 from .extensions import db
 from .knowledge_models import (
     AssessmentAnswerVersion,
@@ -729,6 +730,23 @@ def refresh_student_insights(course_id, actor):
         role="student",
         status="active",
     ).all()
+    published_assignments = Assignment.query.filter_by(
+        course_id=course_id,
+        status="published",
+    ).all()
+    assignments_by_id = {item.id: item for item in published_assignments}
+    assignment_ids = list(assignments_by_id)
+    submissions = (
+        Submission.query.filter(Submission.assignment_id.in_(assignment_ids)).all()
+        if assignment_ids
+        else []
+    )
+    submissions_by_student = defaultdict(list)
+    for submission in submissions:
+        submissions_by_student[submission.student_user_id].append(submission)
+    lessons = {
+        row.id: row for row in Lesson.query.filter_by(course_id=course_id).all()
+    }
     snapshots = []
     for membership in students:
         attempts = (
@@ -758,10 +776,17 @@ def refresh_student_insights(course_id, actor):
             {
                 "object_type": "mock_exam_attempt",
                 "object_id": attempt.id,
+                "assessment_id": attempt.paper_version_id,
+                "assessment_title": "模拟考试",
                 "paper_version_id": attempt.paper_version_id,
                 "score": attempt.score,
                 "max_score": attempt.max_score,
+                "normalized_score": _normalized_score(
+                    attempt.score,
+                    attempt.max_score,
+                ),
                 "accuracy": attempt.accuracy,
+                "score_status": "deterministic",
                 "submitted_at": (
                     attempt.submitted_at.isoformat()
                     if attempt.submitted_at
@@ -770,14 +795,83 @@ def refresh_student_insights(course_id, actor):
             }
             for attempt in attempts
         ]
+        assignment_evidence = []
+        pending_review_count = 0
+        for submission in submissions_by_student.get(membership.user_id, []):
+            assignment = assignments_by_id.get(submission.assignment_id)
+            if not assignment or submission.status == "draft":
+                continue
+            lesson = lessons.get(assignment.lesson_id)
+            if submission.final_score is None or not submission.graded_at:
+                pending_review_count += 1
+                continue
+            assignment_evidence.append(
+                {
+                    "object_type": "assignment_submission",
+                    "object_id": submission.id,
+                    "assessment_id": assignment.id,
+                    "assessment_title": assignment.title,
+                    "assignment_id": assignment.id,
+                    "lesson_id": assignment.lesson_id,
+                    "learning_domain": (
+                        lesson.learning_domain if lesson else None
+                    ),
+                    "score": submission.final_score,
+                    "max_score": assignment.max_score,
+                    "normalized_score": _normalized_score(
+                        submission.final_score,
+                        assignment.max_score,
+                    ),
+                    "score_status": "teacher_confirmed",
+                    "submitted_at": (
+                        submission.submitted_at.isoformat()
+                        if submission.submitted_at
+                        else None
+                    ),
+                    "graded_at": submission.graded_at.isoformat(),
+                }
+            )
+        evidence = assignment_evidence + evidence
+        official_scores = [
+            row["normalized_score"]
+            for row in evidence
+            if row.get("normalized_score") is not None
+        ]
+        submitted_assignment_count = sum(
+            1
+            for row in submissions_by_student.get(membership.user_id, [])
+            if row.status != "draft"
+        )
+        assignment_completion_rate = (
+            submitted_assignment_count / len(published_assignments)
+            if published_assignments
+            else 0.0
+        )
+        if official_scores or item_evidence:
+            data_state = "ready"
+        elif pending_review_count:
+            data_state = "pending_review"
+        else:
+            data_state = "insufficient"
         snapshot = StudentInsightSnapshot(
             course_id=course_id,
             student_user_id=membership.user_id,
-            data_state="ready" if item_evidence else "insufficient",
+            data_state=data_state,
             summary_json={
                 "accuracy": accuracy,
                 "evidence_count": len(item_evidence),
                 "attempt_count": len(attempts),
+                "official_score_count": len(official_scores),
+                "official_average_score": (
+                    round(sum(official_scores) / len(official_scores), 2)
+                    if official_scores
+                    else None
+                ),
+                "assignment_completion_rate": round(
+                    assignment_completion_rate,
+                    4,
+                ),
+                "pending_review_count": pending_review_count,
             },
             evidence_json=evidence,
             weaknesses_json=weaknesses,
@@ -788,6 +882,156 @@ def refresh_student_insights(course_id, actor):
         snapshots.append(snapshot)
     db.session.flush()
     return snapshots
+
+
+def _normalized_score(score, max_score):
+    try:
+        score = float(score)
+        max_score = float(max_score)
+    except (TypeError, ValueError):
+        return None
+    if max_score <= 0:
+        return None
+    return round(max(0.0, min(score / max_score * 100, 100.0)), 2)
+
+
+def _score_distribution(scores):
+    buckets = [
+        ("0–59", 0, 60),
+        ("60–69", 60, 70),
+        ("70–79", 70, 80),
+        ("80–89", 80, 90),
+        ("90–100", 90, 101),
+    ]
+    return [
+        {
+            "label": label,
+            "minimum": lower,
+            "maximum": 100 if upper == 101 else upper - 1,
+            "count": sum(1 for score in scores if lower <= score < upper),
+        }
+        for label, lower, upper in buckets
+    ]
+
+
+def build_class_insight_overview(course_id):
+    """Aggregate only official, normalized grade evidence for one course."""
+    students = CourseMembership.query.filter_by(
+        course_id=course_id,
+        role="student",
+        status="active",
+    ).all()
+    published_assignments = Assignment.query.filter_by(
+        course_id=course_id,
+        status="published",
+    ).all()
+    assignment_ids = [item.id for item in published_assignments]
+    submissions = (
+        Submission.query.filter(Submission.assignment_id.in_(assignment_ids)).all()
+        if assignment_ids
+        else []
+    )
+    assignment_by_id = {item.id: item for item in published_assignments}
+    evidence = []
+    pending_review_count = 0
+    submitted_assignment_count = 0
+    for submission in submissions:
+        if submission.status == "draft":
+            continue
+        submitted_assignment_count += 1
+        assignment = assignment_by_id.get(submission.assignment_id)
+        if not assignment:
+            continue
+        if submission.final_score is None or not submission.graded_at:
+            pending_review_count += 1
+            continue
+        normalized = _normalized_score(
+            submission.final_score,
+            assignment.max_score,
+        )
+        if normalized is None:
+            continue
+        evidence.append(
+            {
+                "student_user_id": submission.student_user_id,
+                "object_type": "assignment_submission",
+                "assessment_id": assignment.id,
+                "assessment_title": assignment.title,
+                "normalized_score": normalized,
+                "submitted_at": submission.submitted_at,
+            }
+        )
+    attempts = MockExamAttempt.query.filter(
+        MockExamAttempt.course_id == course_id,
+        MockExamAttempt.status.in_(("submitted", "pending_review")),
+        MockExamAttempt.score.isnot(None),
+    ).all()
+    for attempt in attempts:
+        normalized = _normalized_score(attempt.score, attempt.max_score)
+        if normalized is None:
+            continue
+        evidence.append(
+            {
+                "student_user_id": attempt.student_user_id,
+                "object_type": "mock_exam_attempt",
+                "assessment_id": attempt.paper_version_id,
+                "assessment_title": "模拟考试",
+                "normalized_score": normalized,
+                "submitted_at": attempt.submitted_at,
+            }
+        )
+    scores = [row["normalized_score"] for row in evidence]
+    trend_groups = defaultdict(list)
+    trend_meta = {}
+    for row in evidence:
+        key = (row["object_type"], row["assessment_id"])
+        trend_groups[key].append(row["normalized_score"])
+        trend_meta[key] = row
+    trend = []
+    for key, values in trend_groups.items():
+        meta = trend_meta[key]
+        timestamps = [
+            row["submitted_at"]
+            for row in evidence
+            if (row["object_type"], row["assessment_id"]) == key
+            and row.get("submitted_at")
+        ]
+        trend.append(
+            {
+                "object_type": key[0],
+                "assessment_id": key[1],
+                "assessment_title": meta["assessment_title"],
+                "average_score": round(sum(values) / len(values), 2),
+                "graded_count": len(values),
+                "submitted_at": max(timestamps).isoformat() if timestamps else None,
+            }
+        )
+    trend.sort(key=lambda row: row.get("submitted_at") or "")
+    expected_assignments = len(students) * len(published_assignments)
+    return {
+        "course_id": course_id,
+        "data_state": "ready" if scores else (
+            "pending_review" if pending_review_count else "insufficient"
+        ),
+        "score_unit": "percentage",
+        "official_score_policy": "deterministic_or_teacher_confirmed",
+        "student_count": len(students),
+        "graded_student_count": len(
+            {row["student_user_id"] for row in evidence}
+        ),
+        "pending_review_count": pending_review_count,
+        "completion_rate": round(
+            submitted_assignment_count / expected_assignments,
+            4,
+        ) if expected_assignments else 0.0,
+        "evidence_count": len(evidence),
+        "highest_score": max(scores) if scores else None,
+        "lowest_score": min(scores) if scores else None,
+        "average_score": round(sum(scores) / len(scores), 2) if scores else None,
+        "median_score": round(float(median(scores)), 2) if scores else None,
+        "score_distribution": _score_distribution(scores),
+        "trend": trend,
+    }
 
 
 def insight_to_dict(snapshot):

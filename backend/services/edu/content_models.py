@@ -174,6 +174,7 @@ class Assignment(TimestampMixin, db.Model):
     kind = db.Column(db.String(20), nullable=False)
     instruction_json = db.Column(db.JSON, nullable=False)
     evaluation_json = db.Column(db.JSON, nullable=False, default=dict)
+    max_score = db.Column(db.Float, nullable=False, default=100.0)
     max_attempts = db.Column(db.Integer, nullable=False, default=1)
     allow_revision_after_feedback = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(20), nullable=False, default="draft")

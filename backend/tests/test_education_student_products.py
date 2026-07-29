@@ -313,3 +313,107 @@ def test_teacher_insight_reports_insufficient_data_without_fabricated_scores(app
     assert insight["summary"]["evidence_count"] == 0
     assert insight["weaknesses"] == []
 
+
+def test_teacher_insight_aggregates_only_confirmed_assignment_scores(app):
+    client = app.test_client()
+    teacher, student_a, course = setup_course(client, app)
+    student_b = auth(app, "student-b")
+    student_pending = auth(app, "student-pending")
+    for student in (student_b, student_pending):
+        invitation = client.post(
+            f"/api/edu/courses/{course['id']}/invitations",
+            headers=teacher,
+            json={},
+        ).get_json()
+        assert client.post(
+            "/api/edu/invitations/accept",
+            headers=student,
+            json={"token": invitation["token"]},
+        ).status_code == 200
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Narrative evidence writing",
+            "learning_domain": "writing",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Write from evidence",
+            "kind": "writing",
+            "max_score": 20,
+            "instruction_json": {"prompt": "Write a short narrative."},
+            "evaluation_json": {"rubric": {"evidence": 10, "voice": 10}},
+        },
+    ).get_json()
+    assert assignment["max_score"] == 20
+    assert client.post(
+        f"/api/edu/assignments/{assignment['id']}/publish",
+        headers=teacher,
+    ).status_code == 200
+
+    submissions = []
+    for index, student in enumerate((student_a, student_b, student_pending), 1):
+        response = client.post(
+            f"/api/edu/assignments/{assignment['id']}/submissions",
+            headers=student,
+            json={"answer_json": {"writing": f"Draft {index}"}},
+        )
+        assert response.status_code == 201
+        submissions.append(response.get_json()["submission"])
+    for submission, score in zip(submissions[:2], (16, 12)):
+        assert client.post(
+            f"/api/edu/submissions/{submission['id']}/feedback",
+            headers=teacher,
+            json={"feedback_json": {"confirmed": True}, "score": score},
+        ).status_code == 201
+
+    refreshed = client.post(
+        f"/api/edu/courses/{course['id']}/student-insights/refresh",
+        headers=teacher,
+    )
+
+    assert refreshed.status_code == 201
+    payload = refreshed.get_json()
+    overview = payload["class_overview"]
+    assert overview["student_count"] == 3
+    assert overview["graded_student_count"] == 2
+    assert overview["pending_review_count"] == 1
+    assert overview["completion_rate"] == 1.0
+    assert overview["highest_score"] == 80.0
+    assert overview["lowest_score"] == 60.0
+    assert overview["average_score"] == 70.0
+    assert overview["median_score"] == 70.0
+    assert sum(bucket["count"] for bucket in overview["score_distribution"]) == 2
+    assert overview["trend"][0]["assessment_id"] == assignment["id"]
+
+    rows = {row["student_user_id"]: row for row in payload["items"]}
+    assert rows["student"]["summary"]["official_average_score"] == 80.0
+    assert rows["student-b"]["summary"]["official_average_score"] == 60.0
+    assert rows["student-pending"]["summary"]["official_average_score"] is None
+    assert rows["student-pending"]["summary"]["pending_review_count"] == 1
+    assert rows["student-pending"]["data_state"] == "pending_review"
+    assert all(
+        evidence["score_status"] == "teacher_confirmed"
+        for row in rows.values()
+        for evidence in row["evidence"]
+        if evidence["object_type"] == "assignment_submission"
+        and evidence.get("score") is not None
+    )
+
+    listed = client.get(
+        f"/api/edu/courses/{course['id']}/student-insights",
+        headers=teacher,
+    ).get_json()
+    assert listed["class_overview"]["average_score"] == 70.0
+    assert client.get(
+        f"/api/edu/courses/{course['id']}/student-insights",
+        headers=student_a,
+    ).status_code == 404

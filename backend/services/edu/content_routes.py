@@ -31,6 +31,7 @@ from .content_models import (
     SubmissionVersion,
 )
 from .content_exporters import ContentExportError, export_content_bytes
+from .course_context_service import build_courseware_context
 from .extensions import db
 from .models import Course, CourseMembership
 
@@ -356,6 +357,19 @@ def get_lesson(lesson_id):
         for row in activities
     ]
     return jsonify(result)
+
+
+@education_content_api.get("/lessons/<lesson_id>/courseware-context")
+@jwt_required()
+def get_courseware_context(lesson_id):
+    user_id = get_jwt_identity()
+    lesson = _lesson_for_member(lesson_id, user_id, "teacher")
+    if not lesson:
+        return jsonify({"error": "lesson not found"}), 404
+    context = build_courseware_context(lesson.course_id, lesson.id)
+    if not context:
+        return jsonify({"error": "lesson not found"}), 404
+    return jsonify(context)
 
 
 @education_content_api.post("/lessons/<lesson_id>/activities")
@@ -848,6 +862,7 @@ def _assignment_dict(assignment, include_evaluation=False):
         "title": assignment.title,
         "kind": assignment.kind,
         "instruction_json": assignment.instruction_json,
+        "max_score": assignment.max_score,
         "max_attempts": assignment.max_attempts,
         "allow_revision_after_feedback": assignment.allow_revision_after_feedback,
         "status": assignment.status,
@@ -932,6 +947,24 @@ def create_assignment(lesson_id):
         return jsonify({"error": "instruction_json is required"}), 400
     if not isinstance(evaluation, dict):
         return jsonify({"error": "evaluation_json must be an object"}), 400
+    rubric = evaluation.get("rubric")
+    inferred_max_score = None
+    if isinstance(rubric, dict) and rubric:
+        try:
+            inferred_max_score = sum(float(value) for value in rubric.values())
+        except (TypeError, ValueError):
+            inferred_max_score = None
+    try:
+        max_score = float(
+            data.get("max_score")
+            or evaluation.get("max_score")
+            or inferred_max_score
+            or 100
+        )
+    except (TypeError, ValueError):
+        return jsonify({"error": "max_score must be numeric"}), 400
+    if not 0 < max_score <= 10000:
+        return jsonify({"error": "invalid max_score"}), 400
     try:
         max_attempts = int(data.get("max_attempts", 1))
     except (TypeError, ValueError):
@@ -945,6 +978,7 @@ def create_assignment(lesson_id):
         kind=kind,
         instruction_json=instruction,
         evaluation_json=evaluation,
+        max_score=max_score,
         max_attempts=max_attempts,
         allow_revision_after_feedback=bool(
             data.get("allow_revision_after_feedback", True)
@@ -1203,8 +1237,8 @@ def release_feedback(submission_id):
         score = float(data["score"]) if data.get("score") is not None else None
     except (TypeError, ValueError):
         return jsonify({"error": "score must be numeric"}), 400
-    if score is not None and score < 0:
-        return jsonify({"error": "score cannot be negative"}), 400
+    if score is not None and not 0 <= score <= assignment.max_score:
+        return jsonify({"error": "score must be within assignment max_score"}), 400
     feedback = Feedback(
         submission_version_id=submission.current_version_id,
         feedback_json=feedback_json,

@@ -109,4 +109,19 @@ def migrate_existing_education_schema():
                     )
                 )
             changes.append("edu_agent_runs.tool_grant_id_index")
+
+    if "edu_assignments" in tables:
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns("edu_assignments")
+        }
+        if "max_score" not in columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_assignments "
+                        "ADD COLUMN max_score FLOAT NOT NULL DEFAULT 100"
+                    )
+                )
+            changes.append("edu_assignments.max_score")
     return changes

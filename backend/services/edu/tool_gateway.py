@@ -22,6 +22,7 @@ from .content_models import (
     EducationContentVersion,
     Lesson,
 )
+from .course_context_service import build_courseware_context
 from .extensions import db
 from .knowledge_models import AssessmentItem, AssessmentPaper, KnowledgeResource
 from .knowledge_service import (
@@ -36,6 +37,7 @@ from .knowledge_service import (
 from .learning_service import (
     LearningServiceError,
     attempt_to_dict,
+    build_class_insight_overview,
     create_mind_map,
     create_mock_exam,
     create_weakness_snapshot,
@@ -629,7 +631,7 @@ def _course_context(grant, _arguments):
         course_id=course.id,
         status="active",
     ).count()
-    return {
+    result = {
         "course": _course_dict(course, grant.actor_role),
         "counts": {
             "units": units,
@@ -639,6 +641,13 @@ def _course_context(grant, _arguments):
             "knowledge_resources": resources,
         },
     }
+    lesson_id = _scoped_lesson_id(grant, {})
+    if grant.actor_role == TEACHER and lesson_id:
+        context = build_courseware_context(grant.course_id, lesson_id)
+        if not context:
+            raise ToolGatewayError("lesson not found", 404, "lesson_not_found")
+        result["courseware_context"] = context
+    return result
 
 
 def _question_search(grant, arguments):
@@ -1159,7 +1168,10 @@ def _paper_compose(grant, arguments):
 
 def _student_insight(grant, _arguments):
     rows = refresh_student_insights(grant.course_id, grant.actor_user_id)
-    return {"items": [insight_to_dict(row) for row in rows]}
+    return {
+        "class_overview": build_class_insight_overview(grant.course_id),
+        "items": [insight_to_dict(row) for row in rows],
+    }
 
 
 def _mock_exam(grant, arguments):

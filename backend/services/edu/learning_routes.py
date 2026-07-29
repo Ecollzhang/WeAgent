@@ -15,6 +15,7 @@ from .learning_service import (
     LearningServiceError,
     add_mind_map_version,
     attempt_to_dict,
+    build_class_insight_overview,
     create_mind_map,
     create_mock_exam,
     create_weakness_snapshot,
@@ -217,7 +218,12 @@ def refresh_insights_route(course_id):
         db.session.commit()
     except LearningServiceError as error:
         return _error(error)
-    return jsonify({"items": [insight_to_dict(row) for row in snapshots]}), 201
+    return jsonify(
+        {
+            "class_overview": build_class_insight_overview(course_id),
+            "items": [insight_to_dict(row) for row in snapshots],
+        }
+    ), 201
 
 
 @education_learning_api.get("/courses/<course_id>/student-insights")
@@ -234,5 +240,9 @@ def list_insights_route(course_id):
     latest = {}
     for row in rows:
         latest.setdefault(row.student_user_id, row)
-    return jsonify({"items": [insight_to_dict(row) for row in latest.values()]})
-
+    return jsonify(
+        {
+            "class_overview": build_class_insight_overview(course_id),
+            "items": [insight_to_dict(row) for row in latest.values()],
+        }
+    )

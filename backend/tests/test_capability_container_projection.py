@@ -260,6 +260,8 @@ def test_write_run_snapshot_and_bootstrap_instruction():
     assert "/workspace/.weagent/agents/agent-a/tool-index.json" in instruction
     assert "/workspace/.weagent/agents/agent-a/capabilities.json" in instruction
     assert "/workspace/.weagent/agents/agent-a/permissions.json" in instruction
+    assert "not MCP resources" in instruction
+    assert "invoke bound native tools directly" in instruction
     assert ".claude" not in instruction
     assert ".codex" not in instruction
     assert ".mcp.json" not in instruction

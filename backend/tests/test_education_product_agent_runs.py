@@ -213,6 +213,9 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     assert started["agent_ids"] == ["_edu_1", "_edu_2", "_edu_9"]
     assert "edu.courseware.create" in started["prompt"]
     assert "slide_document" in started["prompt"]
+    assert "mcp__weagent_tools__education_action" in started["prompt"]
+    assert "MCP server `weagent_tools`" in started["prompt"]
+    assert "tool `education_action`" in started["prompt"]
     assert '"name":"education_action"' in started["prompt"]
     assert '"args":{"action":"edu.courseware.create","arguments":{' in (
         started["prompt"]
@@ -223,6 +226,7 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     assert "lesson_id is injected from the lesson-scoped Agent run" in (
         started["prompt"]
     )
+    assert "不得创建 .js" in started["prompt"]
     assert lesson["id"] not in started["prompt"]
     assert "不得自动发布" in started["prompt"]
 
@@ -397,3 +401,114 @@ def test_student_agent_tool_write_is_visible_on_product_run(education_app):
     assert note_node["tool_calls"][0]["status"] == "completed"
     assert "education_run_grant" not in str(run)
     assert raw_grant not in str(run)
+
+
+def test_product_run_without_required_durable_tool_write_is_partial(education_app):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, _, _, student, _ = seed_course(education_app)
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=student,
+        json={
+            "course_id": course["id"],
+            "product_code": "course_mind_map",
+            "options": {"title": "My course map"},
+        },
+    ).get_json()
+    runtime.snapshot = {
+        "status": "done",
+        "agent_runs": [
+            {
+                "agent_id": "_edu_7",
+                "status": "done",
+                "content": '{"summary":"drafted a map"}',
+            },
+            {
+                "agent_id": "_edu_5",
+                "status": "done",
+                "content": '{"summary":"reviewed the map"}',
+            },
+        ],
+    }
+
+    refreshed = client.get(
+        f"/api/edu/product-agent-runs/{created['id']}",
+        headers=student,
+    )
+
+    assert refreshed.status_code == 200
+    run = refreshed.get_json()
+    assert run["status"] == "partial"
+    assert "edu.mind_map.create" in run["error_summary"]
+    assert "未写入" in run["error_summary"]
+
+
+def test_moderator_plan_does_not_end_run_before_workers_are_visible(education_app):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, _, _, student, _ = seed_course(education_app)
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=student,
+        json={
+            "course_id": course["id"],
+            "product_code": "course_mind_map",
+            "options": {},
+        },
+    ).get_json()
+    runtime.snapshot = {
+        "status": "running",
+        "agent_runs": [
+            {
+                "agent_id": "moderator",
+                "status": "done",
+                "content": (
+                    'provider note\n{"type":"plan","tasks":['
+                    '{"task_id":"map","agent_id":"_edu_7"}]}'
+                ),
+            }
+        ],
+    }
+
+    refreshed = client.get(
+        f"/api/edu/product-agent-runs/{created['id']}",
+        headers=student,
+    )
+
+    assert refreshed.status_code == 200
+    assert refreshed.get_json()["status"] == "running"
+
+
+def test_legacy_completed_product_run_is_reconciled_when_write_is_missing(
+    education_app,
+):
+    from services.edu.workflow_models import EducationAgentRun
+
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, _, _, student, _ = seed_course(education_app)
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=student,
+        json={
+            "course_id": course["id"],
+            "product_code": "course_mind_map",
+            "options": {},
+        },
+    ).get_json()
+    with education_app.app_context():
+        stored = EducationAgentRun.query.filter_by(id=created["id"]).first()
+        stored.status = "completed"
+        db.session.commit()
+
+    refreshed = client.get(
+        f"/api/edu/product-agent-runs/{created['id']}",
+        headers=student,
+    )
+
+    assert refreshed.status_code == 200
+    assert refreshed.get_json()["status"] == "partial"
