@@ -16,7 +16,7 @@
         :loading="agentRunning"
         :disabled="!course"
         @click="startInsightAgent"
-      >Agent 分析画像</el-button>
+      >AI 分析建议</el-button>
     </template>
 
     <el-alert
@@ -27,12 +27,43 @@
       show-icon
     />
     <template v-else-if="course">
-      <ProductAgentRunPanel
+      <EmbeddedAgentRecord
         :run="productAgentRun"
+        title="AI 分析记录"
         @terminal="handleAgentTerminal"
         @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
         @close="closeAgentRun"
       />
+
+      <section class="class-overview" data-testid="student-insight-overview">
+        <header>
+          <div>
+            <span>OFFICIAL CLASS EVIDENCE</span>
+            <h2>班级正式成绩总览</h2>
+            <p>只统计规则判分完成或教师确认后的最终成绩，跨任务统一换算为百分制。</p>
+          </div>
+          <el-tag v-if="overview.pending_review_count" type="warning" size="small">
+            {{ overview.pending_review_count }} 份待教师确认
+          </el-tag>
+        </header>
+        <div class="official-metrics">
+          <article><span>最高分</span><b>{{ scoreMetric('highest_score') }}</b><small>百分制</small></article>
+          <article><span>最低分</span><b>{{ scoreMetric('lowest_score') }}</b><small>百分制</small></article>
+          <article><span>平均分</span><b>{{ scoreMetric('average_score') }}</b><small>{{ overview.graded_student_count || 0 }} 人有正式成绩</small></article>
+          <article><span>中位数</span><b>{{ scoreMetric('median_score') }}</b><small>降低极端值影响</small></article>
+          <article><span>完成率</span><b>{{ percent(overview.completion_rate) }}</b><small>已发布作业</small></article>
+        </div>
+        <div class="analytics-charts">
+          <article>
+            <h3>成绩分布</h3>
+            <ScoreDistributionChart :distribution="overview.score_distribution || []" />
+          </article>
+          <article>
+            <h3>评估趋势</h3>
+            <ScoreDistributionChart mode="trend" :trend="overview.trend || []" />
+          </article>
+        </div>
+      </section>
 
       <section class="evidence-banner">
         <div class="banner-seal"><i class="el-icon-data-board"></i></div>
@@ -71,16 +102,16 @@
           <template v-if="row.insight && row.insight.data_state === 'ready'">
             <div class="insight-metrics">
               <div>
-                <span>正确率</span>
-                <b>{{ percent(row.insight.summary.accuracy) }}</b>
+                <span>正式均分</span>
+                <b>{{ scoreValue(row.insight.summary.official_average_score) }}</b>
               </div>
               <div>
-                <span>证据题</span>
-                <b>{{ row.insight.summary.evidence_count || 0 }}</b>
+                <span>作业完成</span>
+                <b>{{ percent(row.insight.summary.assignment_completion_rate) }}</b>
               </div>
               <div>
-                <span>模拟考试</span>
-                <b>{{ row.insight.summary.attempt_count || 0 }}</b>
+                <span>正式证据</span>
+                <b>{{ row.insight.summary.official_score_count || 0 }}</b>
               </div>
             </div>
             <div class="weakness-strip">
@@ -100,7 +131,10 @@
           </template>
           <div v-else class="insufficient">
             <i class="el-icon-time"></i>
-            <p><b>数据不足</b><span>学生完成已发布作业或模拟考试后，这里才会形成可解释画像。</span></p>
+            <p>
+              <b>{{ row.insight && row.insight.data_state === 'pending_review' ? '待教师确认' : '数据不足' }}</b>
+              <span>{{ row.insight && row.insight.data_state === 'pending_review' ? '已有提交，但尚未进入正式班级统计。' : '学生完成已发布作业或模拟考试后，这里才会形成可解释画像。' }}</span>
+            </p>
           </div>
         </article>
         <div v-if="!loading && !studentRows.length" class="empty-roster">
@@ -125,9 +159,9 @@
         >
           <span><i class="el-icon-document-checked"></i></span>
           <div>
-            <b>模拟考试</b>
+            <b>{{ evidence.object_type === 'assignment_submission' ? evidence.assessment_title : '模拟考试' }}</b>
             <small>{{ dateLabel(evidence.submitted_at) }}</small>
-            <p>得分 {{ scoreLabel(evidence.score, evidence.max_score) }} · 正确率 {{ percent(evidence.accuracy) }}</p>
+            <p>得分 {{ scoreLabel(evidence.score, evidence.max_score) }} · 百分制 {{ scoreValue(evidence.normalized_score) }}</p>
           </div>
         </article>
         <h4>建议动作</h4>
@@ -143,11 +177,12 @@
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
-import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
+import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
+import ScoreDistributionChart from '../../components/education/ScoreDistributionChart.vue'
 
 export default {
   name: 'StudentInsights',
-  components: { EducationShell, ProductAgentRunPanel },
+  components: { EducationShell, EmbeddedAgentRecord, ScoreDistributionChart },
   data() {
     return {
       roleError: false,
@@ -161,6 +196,7 @@ export default {
     course() { return this.$store.getters['education/activeCourse'] },
     members() { return this.$store.getters['education/members'] || [] },
     insights() { return this.$store.getters['education/studentInsights'] || [] },
+    overview() { return this.$store.getters['education/studentInsightOverview'] || {} },
     studentRows() {
       return this.members
         .filter(member => member.role === 'student')
@@ -259,6 +295,12 @@ export default {
     percent(value) {
       return typeof value === 'number' ? `${Math.round(value * 100)}%` : '—'
     },
+    scoreMetric(key) {
+      return this.scoreValue(this.overview[key])
+    },
+    scoreValue(value) {
+      return typeof value === 'number' ? value.toFixed(1).replace('.0', '') : '—'
+    },
     scoreLabel(score, maxScore) {
       return typeof score === 'number' ? `${score}/${maxScore}` : '待教师评阅'
     },
@@ -270,6 +312,25 @@ export default {
 </script>
 
 <style scoped>
+.class-overview {
+  margin-bottom: 18px; padding: 22px; border: 1px solid #d8e5e2;
+  border-radius: 16px; background: linear-gradient(135deg, #fff 0%, #f5faf8 72%, #edf6f3 100%);
+  box-shadow: 0 14px 34px rgba(41, 84, 76, .06);
+  animation: insight-enter 320ms cubic-bezier(.2,.8,.2,1) both;
+}
+.class-overview > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 17px; }
+.class-overview > header span { color: #2f8277; font-size: 9px; font-weight: 800; letter-spacing: .14em; }
+.class-overview > header h2 { margin: 5px 0 5px; color: #263d39; font-family: 'Noto Serif SC', 'Songti SC', SimSun, serif; font-size: 20px; }
+.class-overview > header p { margin: 0; color: #7c8d89; font-size: 10px; }
+.official-metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 9px; }
+.official-metrics article { padding: 13px; border: 1px solid #e0e9e7; border-radius: 11px; background: rgba(255,255,255,.82); }
+.official-metrics span, .official-metrics b, .official-metrics small { display: block; }
+.official-metrics span { color: #7e8f8b; font-size: 9px; }.official-metrics b { margin-top: 6px; color: #286e65; font-family: Georgia, serif; font-size: 25px; }
+.official-metrics small { margin-top: 4px; color: #a0aaa7; font-size: 8px; }
+.analytics-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.analytics-charts > article { min-width: 0; padding: 13px 14px 6px; border: 1px solid #e4ecea; border-radius: 12px; background: #fff; }
+.analytics-charts h3 { margin: 0; color: #596e69; font-size: 10px; font-weight: 700; }
+@keyframes insight-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .evidence-banner {
   display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; align-items: center;
   gap: 18px; margin-bottom: 18px; padding: 22px 26px; border: 1px solid #dbe6e8;
@@ -320,7 +381,13 @@ export default {
 .evidence-row p, .recommendation { margin: 7px 0 0; color: #71817d; font-size: 10px; line-height: 1.6; }
 .recommendation { padding: 10px; border-radius: 8px; background: #f4f8f7; }
 @media (max-width: 860px) {
+  .official-metrics { grid-template-columns: repeat(2, 1fr); }
+  .analytics-charts { grid-template-columns: 1fr; }
   .evidence-banner { grid-template-columns: 52px 1fr; }
   .evidence-banner dl { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .class-overview { animation: none; }
+  .insight-card { transition: none; }
 }
 </style>

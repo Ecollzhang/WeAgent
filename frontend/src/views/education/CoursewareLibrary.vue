@@ -5,6 +5,7 @@
   >
     <template #actions>
       <input
+        v-if="canManageCourseware"
         ref="coursewareFile"
         data-testid="courseware-upload"
         class="visually-hidden"
@@ -12,16 +13,17 @@
         accept=".pdf,.doc,.docx,.ppt,.pptx,.html,.htm"
         @change="uploadSelectedFile"
       >
-      <el-button icon="el-icon-upload2" :loading="uploading" @click="$refs.coursewareFile.click()">
+      <el-button v-if="canManageCourseware" icon="el-icon-upload2" :loading="uploading" @click="$refs.coursewareFile.click()">
         上传课件
       </el-button>
       <el-button
+        v-if="canManageCourseware"
         type="primary"
         icon="el-icon-magic-stick"
         :disabled="!lessons.length"
         :loading="agentRunning"
         @click="openAgentDialog"
-      >用 Agent 制作</el-button>
+      >AI 生成课件</el-button>
     </template>
 
     <el-alert
@@ -34,7 +36,7 @@
     />
 
     <template v-else-if="course">
-      <ProductAgentRunPanel
+      <EmbeddedAgentRecord
         :run="productAgentRun"
         @terminal="handleAgentTerminal"
         @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
@@ -63,14 +65,62 @@
             </div>
             <small>教案、可视化 HTML、学习活动和 Agent 产物在同一课时版本中协作。</small>
           </header>
+          <div class="lesson-context-picker">
+            <label for="courseware-lesson-selector">当前课时</label>
+            <el-select
+              id="courseware-lesson-selector"
+              v-model="selectedLessonId"
+              data-testid="courseware-lesson-selector"
+              placeholder="选择课时以读取上下文"
+              @change="loadSelectedContext"
+            >
+              <el-option
+                v-for="lesson in lessons"
+                :key="lesson.id"
+                :label="lesson.title"
+                :value="lesson.id"
+              />
+            </el-select>
+          </div>
+          <div
+            v-if="coursewareContext"
+            v-loading="contextLoading"
+            class="context-sheet"
+            data-testid="courseware-context"
+          >
+            <div class="context-heading">
+              <span>课时上下文</span>
+              <small>校验码 {{ shortChecksum(coursewareContext.context_checksum) }}</small>
+            </div>
+            <h4>{{ coursewareContext.lesson.title }}</h4>
+            <div class="context-metrics">
+              <div><b>{{ contextObjectives.length }}</b><span>教学目标</span></div>
+              <div><b>{{ coursewareContext.activities.length }}</b><span>学习活动</span></div>
+              <div><b>{{ coursewareContext.materials.length }}</b><span>课时材料</span></div>
+              <div><b>{{ coursewareContext.knowledge_resources.length }}</b><span>知识来源</span></div>
+            </div>
+            <ul v-if="contextObjectives.length">
+              <li
+                v-for="objective in contextObjectives.slice(0, 3)"
+                :key="objective.id || objective.description || objective"
+              >{{ objective.description || objective.text || objective }}</li>
+            </ul>
+          </div>
           <div v-if="lessons.length" class="lesson-stack">
-            <article v-for="lesson in lessons" :key="lesson.id">
+            <article
+              v-for="lesson in lessons"
+              :key="lesson.id"
+              :class="{ active: lesson.id === selectedLessonId }"
+            >
               <div class="lesson-number">{{ lesson.position + 1 || '—' }}</div>
               <div>
                 <b>{{ lesson.title }}</b>
                 <span>{{ lesson.status === 'published' ? '已发布' : '草稿' }} · {{ lessonType(lesson) }}</span>
               </div>
-              <el-button size="mini" @click="openLesson(lesson)">编辑课件</el-button>
+              <div class="lesson-actions">
+                <el-button size="mini" type="text" @click="selectLesson(lesson)">读取</el-button>
+                <el-button size="mini" @click="openLesson(lesson)">编辑</el-button>
+              </div>
             </article>
           </div>
           <div v-else class="empty-paper">
@@ -124,7 +174,7 @@
           <header>
             <div>
               <span class="panel-index">03</span>
-              <h3>Agent 生成版本</h3>
+              <h3>结构化课件版本</h3>
             </div>
             <small>结构化源是可编辑主版本；PPTX、DOCX、PDF、HTML 与 JSON 均从当前版本即时导出。</small>
           </header>
@@ -151,11 +201,11 @@
                   @click="downloadGenerated(entry, format)"
                 >{{ format.toUpperCase() }}</el-button>
               </div>
-              <el-button size="mini" type="text" @click="openLesson(entry.lesson)">打开编辑</el-button>
+              <el-button size="mini" type="text" @click="openGeneratedEditor(entry)">打开编辑</el-button>
             </article>
             <div v-if="!loadingGenerated && !generatedContents.length" class="empty-paper compact">
               <i class="el-icon-cpu"></i>
-              <p>还没有 Agent 课件版本。选择课时启动课程设计、课件制作和教学审校团队。</p>
+              <p>还没有结构化课件版本。选择课时后可手动编写，或使用 AI 生成可编辑草稿。</p>
             </div>
           </div>
         </div>
@@ -201,6 +251,29 @@
         >启动 Agent 团队</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      title="结构化幻灯片编辑器"
+      :visible.sync="editorDialog"
+      width="94%"
+      top="3vh"
+      custom-class="slide-editor-dialog"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <SlideDocumentEditor
+        v-if="editingEntry"
+        ref="slideEditor"
+        :value="editingEntry.version.source_json"
+      />
+      <template #footer>
+        <span class="editor-footnote">保存后生成同一课件的新版本；PPTX、PDF、HTML 会从最新结构重新导出。</span>
+        <el-button @click="editorDialog = false">取消</el-button>
+        <el-button type="primary" :loading="editorSaving" @click="saveGeneratedEditor">
+          保存为新版本
+        </el-button>
+      </template>
+    </el-dialog>
   </EducationShell>
 </template>
 
@@ -210,20 +283,29 @@ import {
   exportEducationContent,
   getContentVersions,
   getLessonContents,
+  saveContentVersion,
 } from '../../api/education'
 import EducationShell from '../../components/education/EducationShell.vue'
-import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
+import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
+import SlideDocumentEditor from '../../components/education/SlideDocumentEditor.vue'
+const { formatVersionTime } = require('../../utils/educationContent')
+const { renderSlideDocumentHtml } = require('../../utils/slideDocument')
 
 export default {
   name: 'CoursewareLibrary',
-  components: { EducationShell, ProductAgentRunPanel },
+  components: { EducationShell, EmbeddedAgentRecord, SlideDocumentEditor },
   data() {
     return {
       roleError: false,
       uploading: false,
       loadingAssets: false,
       agentDialog: false,
+      editorDialog: false,
+      editorSaving: false,
+      editingEntry: null,
       loadingGenerated: false,
+      contextLoading: false,
+      selectedLessonId: '',
       exportingKey: '',
       generatedContents: [],
       exportFormats: ['pptx', 'docx', 'pdf', 'html', 'json'],
@@ -235,11 +317,19 @@ export default {
   },
   computed: {
     course() { return this.$store.getters['education/activeCourse'] },
+    canManageCourseware() {
+      return Boolean(this.course && this.course.membership_role === 'teacher' && !this.roleError)
+    },
     assets() {
       return (this.$store.getters['education/assets'] || [])
         .filter(asset => ['courseware', 'lesson_material', 'course_material', 'agent_output'].includes(asset.purpose))
     },
     units() { return this.$store.getters['education/units'] || [] },
+    coursewareContext() { return this.$store.getters['education/coursewareContext'] },
+    contextObjectives() {
+      const plan = this.coursewareContext && this.coursewareContext.lesson_plan
+      return (plan && plan.source_json && plan.source_json.objectives) || []
+    },
     lessons() {
       return this.units.flatMap(unit => unit.lessons || [])
     },
@@ -291,6 +381,10 @@ export default {
         if (!this.agentForm.lesson_id && this.lessons[0]) {
           this.agentForm.lesson_id = this.lessons[0].id
         }
+        if (!this.selectedLessonId && this.lessons[0]) {
+          this.selectedLessonId = this.lessons[0].id
+        }
+        if (this.selectedLessonId) await this.loadSelectedContext(this.selectedLessonId)
       } catch (error) {
         this.$message.error('课件资料加载失败')
       } finally {
@@ -347,10 +441,25 @@ export default {
       }
     },
     openAgentDialog() {
-      if (!this.agentForm.lesson_id && this.lessons[0]) {
-        this.agentForm.lesson_id = this.lessons[0].id
-      }
+      this.agentForm.lesson_id = this.selectedLessonId
+        || (this.lessons[0] && this.lessons[0].id)
       this.agentDialog = true
+    },
+    async loadSelectedContext(lessonId) {
+      if (!lessonId) return
+      this.selectedLessonId = lessonId
+      this.agentForm.lesson_id = lessonId
+      this.contextLoading = true
+      try {
+        await this.$store.dispatch('education/fetchCoursewareContext', lessonId)
+      } catch (error) {
+        this.$message.error('课时上下文加载失败')
+      } finally {
+        this.contextLoading = false
+      }
+    },
+    selectLesson(lesson) {
+      this.loadSelectedContext(lesson.id)
     },
     async startCoursewareAgent() {
       try {
@@ -376,6 +485,7 @@ export default {
           this.$store.dispatch('education/fetchCourseOverview', this.course.id),
         ])
         await this.loadGeneratedContents()
+        await this.loadSelectedContext(this.selectedLessonId)
         this.$message.success('Agent 课件草稿已写入课时，可继续编辑后发布')
       }
     },
@@ -434,6 +544,43 @@ export default {
         this.exportingKey = ''
       }
     },
+    openGeneratedEditor(entry) {
+      if (!entry || entry.content.kind !== 'slide_document') {
+        this.openLesson(entry.lesson)
+        return
+      }
+      this.editingEntry = entry
+      this.editorDialog = true
+    },
+    async saveGeneratedEditor() {
+      const editor = this.$refs.slideEditor
+      if (!editor || !this.editingEntry) return
+      const source = editor.exportDocument()
+      if (!source.title || !Array.isArray(source.slides) || !source.slides.length) {
+        this.$message.warning('课件至少需要一个标题和一页幻灯片')
+        return
+      }
+      this.editorSaving = true
+      try {
+        await saveContentVersion(this.editingEntry.content.id, {
+          schema_name: 'weagent.education.slide-document',
+          schema_version: '1.0',
+          source_json: source,
+          rendered_html: renderSlideDocumentHtml(source),
+          change_summary: '教师在结构化幻灯片编辑器中修改',
+        })
+        this.editorDialog = false
+        this.editingEntry = null
+        await this.loadGeneratedContents()
+        await this.loadSelectedContext(this.selectedLessonId)
+        this.$message.success('课件新版本已保存，可按需导出或发布')
+      } catch (error) {
+        const detail = error.response && error.response.data && error.response.data.error
+        this.$message.error(detail || '课件版本保存失败')
+      } finally {
+        this.editorSaving = false
+      }
+    },
     openLesson(lesson) {
       this.$router.push(`/education/courses/${this.course.id}/lessons/${lesson.id}`)
     },
@@ -462,7 +609,10 @@ export default {
       return `${(bytes / 1024 / 1024).toFixed(1)} MB`
     },
     dateLabel(value) {
-      return value ? new Date(value).toLocaleString('zh-CN') : '刚刚'
+      return formatVersionTime(value) || '刚刚'
+    },
+    shortChecksum(value) {
+      return value ? value.slice(0, 8) : '—'
     },
   },
 }
@@ -470,6 +620,8 @@ export default {
 
 <style scoped>
 .visually-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.editor-footnote { float: left; max-width: 62%; color: #738682; font-size: 12px; line-height: 32px; text-align: left; }
+.slide-editor-dialog ::v-deep .el-dialog__body { padding: 12px 20px 4px; }
 .agent-form { margin-top: 16px; }
 .courseware-hero {
   min-height: 160px;
@@ -537,12 +689,30 @@ export default {
 .studio-panel h3 { margin: 0; color: #2c3d3a; font-size: 16px; }
 .studio-panel header small { display: block; margin-top: 7px; color: #8a9996; line-height: 1.5; }
 .panel-index { color: #36897e; font-family: Georgia, serif; font-size: 11px; }
+.lesson-context-picker { display: grid; gap: 6px; margin-bottom: 11px; }
+.lesson-context-picker label { color: #788985; font-size: 9px; font-weight: 700; }
+.context-sheet {
+  margin-bottom: 13px; padding: 14px; border: 1px solid #d9e8e4;
+  border-radius: 11px; background: linear-gradient(140deg, #fbfdfc, #f0f7f5);
+  animation: context-enter 260ms cubic-bezier(.2,.8,.2,1) both;
+}
+.context-heading { display: flex; justify-content: space-between; color: #3a8076; font-size: 9px; font-weight: 750; letter-spacing: .08em; }
+.context-heading small { color: #96a5a1; font-family: Consolas, monospace; font-weight: 400; letter-spacing: 0; }
+.context-sheet h4 { margin: 8px 0 10px; color: #30433f; font-family: 'Noto Serif SC', 'Songti SC', SimSun, serif; font-size: 15px; }
+.context-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.context-metrics div { padding: 7px; border-radius: 8px; background: rgba(255,255,255,.78); text-align: center; }
+.context-metrics b, .context-metrics span { display: block; }
+.context-metrics b { color: #2e7168; font-family: Georgia, serif; font-size: 16px; }.context-metrics span { margin-top: 2px; color: #8a9996; font-size: 8px; }
+.context-sheet ul { margin: 10px 0 0; padding-left: 18px; color: #657a75; font-size: 9px; line-height: 1.7; }
+@keyframes context-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .lesson-stack, .asset-list { display: flex; flex-direction: column; gap: 9px; }
 .lesson-stack article, .asset-list article {
   display: grid; align-items: center; gap: 11px; padding: 12px;
   border: 1px solid #e6edeb; border-radius: 10px; background: #fbfdfc;
 }
 .lesson-stack article { grid-template-columns: 34px 1fr auto; }
+.lesson-stack article.active { border-color: #9cc9c0; background: #f4faf8; box-shadow: inset 3px 0 #2e887c; }
+.lesson-actions { display: flex; align-items: center; }
 .lesson-number {
   width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px;
   background: #e8f2ef; color: #357d73; font-family: Georgia, serif;
@@ -573,5 +743,9 @@ export default {
   .asset-list article .el-tag { display: none; }
   .generated-list article { grid-template-columns: 38px 1fr auto; }
   .format-actions { grid-column: 2 / -1; justify-content: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-sheet { animation: none; }
+  .lesson-stack article { transition: none; }
 }
 </style>

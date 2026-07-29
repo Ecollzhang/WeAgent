@@ -33,7 +33,7 @@
     />
 
     <template v-else-if="course">
-      <ProductAgentRunPanel
+      <EmbeddedAgentRecord
         :run="productAgentRun"
         @terminal="handleAgentTerminal"
         @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
@@ -132,11 +132,11 @@
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
 import MindMapTree from '../../components/education/MindMapTree.vue'
-import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
+import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
 
 export default {
   name: 'MindMapCenter',
-  components: { EducationShell, MindMapTree, ProductAgentRunPanel },
+  components: { EducationShell, MindMapTree, EmbeddedAgentRecord },
   data() {
     return {
       roleError: false,

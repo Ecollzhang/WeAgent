@@ -3,7 +3,7 @@
     <div class="rail-brand">
       <span class="brand-mark">EDU</span>
       <div>
-        <b>教学协作台</b>
+        <b>Education 教育中心</b>
         <small>Teach · Learn · Evidence</small>
       </div>
     </div>
@@ -45,7 +45,7 @@
     </section>
 
     <div class="rail-divider"></div>
-    <p class="section-label">{{ membershipRole === 'student' ? '学习工具' : '教师工作台' }}</p>
+    <p class="section-label">{{ membershipRole === 'student' ? '学习领域' : '教师领域' }}</p>
 
     <nav class="module-list">
       <button
@@ -64,6 +64,11 @@
         <i class="el-icon-arrow-right module-arrow"></i>
       </button>
     </nav>
+
+    <button type="button" class="help-link" @click="$router.push('/education/help')">
+      <i class="el-icon-guide"></i>
+      <span><b>图文帮助</b><small>教师与学生快速开始</small></span>
+    </button>
 
     <footer class="durability-note">
       <i class="el-icon-coin"></i>
@@ -453,6 +458,16 @@ export default {
   color: #70817e;
 }
 
+.help-link {
+  width: 100%; display: flex; align-items: center; gap: 9px; margin-top: auto;
+  padding: 10px; border: 1px solid #dfe9e6; border-radius: 10px;
+  background: rgba(255,255,255,.66); color: #4a746d; cursor: pointer;
+  text-align: left; transition: transform 160ms ease, border-color 160ms ease;
+}
+.help-link:hover { transform: translateY(-1px); border-color: #9fc5bd; }
+.help-link b, .help-link small { display: block; }
+.help-link b { font-size: 10px; }.help-link small { margin-top: 2px; color: #97a5a2; font-size: 8px; }
+
 .durability-note > i {
   color: #3e8f84;
 }
@@ -498,6 +513,7 @@ export default {
   .durability-note span {
     display: none;
   }
+  .help-link span { display: none; }
   .all-courses { justify-content: center; padding: 0; }
   .all-courses span { display: none; }
   .rail-divider { margin-top: 11px; }

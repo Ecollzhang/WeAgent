@@ -62,6 +62,10 @@ export function getLessonContents(lessonId) {
   return service.get(url(`/lessons/${lessonId}/contents`))
 }
 
+export function getLessonCoursewareContext(lessonId) {
+  return service.get(url(`/lessons/${lessonId}/courseware-context`))
+}
+
 export function getContentVersions(contentId) {
   return service.get(url(`/contents/${contentId}/versions`))
 }

@@ -152,6 +152,12 @@ const routes = [
     meta: { requiresAuth: true, education: true, educationModule: 'mind-maps' },
   },
   {
+    path: '/education/help',
+    name: 'EducationHelpCenter',
+    component: () => import('../views/education/HelpCenter.vue'),
+    meta: { requiresAuth: true, education: true },
+  },
+  {
     path: '/courses',
     redirect: '/education',
   },

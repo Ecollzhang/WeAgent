@@ -13,6 +13,8 @@ const files = [
   'src/components/education/SafeHtmlPreview.vue',
   'src/components/education/LessonPlanEditor.vue',
   'src/components/education/ProductAgentRunPanel.vue',
+  'src/components/education/EmbeddedAgentRecord.vue',
+  'src/components/education/ScoreDistributionChart.vue',
   'src/views/education/EducationHome.vue',
   'src/views/education/CourseSpace.vue',
   'src/views/education/LessonWorkbench.vue',
@@ -23,6 +25,7 @@ const files = [
   'src/views/education/MockExamCenter.vue',
   'src/views/education/WeaknessCenter.vue',
   'src/views/education/MindMapCenter.vue',
+  'src/views/education/HelpCenter.vue',
 ]
 
 for (const relPath of files) {

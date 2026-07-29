@@ -21,6 +21,7 @@ assert.ok(!normalizeActivities([
   { name: '阅读', description: '精读课文', assessment: '完成退出卡' },
 ]).includes('完成退出卡'))
 assert.ok(formatVersionTime('2026-07-28T08:30:00Z'))
+assert.match(formatVersionTime('2026-07-28T08:30:00', 'zh-CN'), /16:30/)
 assert.strictEqual(normalizeChoiceOption('A. Excitement only', 0), 'A. Excitement only')
 assert.strictEqual(normalizeChoiceOption('A Excitement only', 0), 'A. Excitement only')
 assert.strictEqual(normalizeChoiceOption('Excitement only', 0), 'A. Excitement only')

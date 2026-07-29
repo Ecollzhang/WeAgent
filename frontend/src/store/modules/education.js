@@ -37,6 +37,7 @@ import {
   getLessonPublication,
   getLessonRelease,
   getLesson,
+  getLessonCoursewareContext,
   getLessonContents,
   getLessonMaterials,
   getMySubmission,
@@ -85,6 +86,7 @@ export default {
     activeCourse: null,
     units: [],
     activeLesson: null,
+    coursewareContext: null,
     assignments: [],
     activeAssignment: null,
     submissions: [],
@@ -105,6 +107,7 @@ export default {
     mindMaps: [],
     activeMindMap: null,
     studentInsights: [],
+    studentInsightOverview: null,
     loading: false,
     saving: false,
   },
@@ -119,6 +122,7 @@ export default {
     isStudent: (state, getters) => getters.membershipRole === 'student',
     canManageCourse: (state, getters) => getters.isTeacher,
     units: state => state.units,
+    coursewareContext: state => state.coursewareContext,
     assignments: state => state.assignments,
     members: state => state.members,
     analytics: state => state.analytics,
@@ -137,6 +141,7 @@ export default {
     mindMaps: state => state.mindMaps,
     activeMindMap: state => state.activeMindMap,
     studentInsights: state => state.studentInsights,
+    studentInsightOverview: state => state.studentInsightOverview,
   },
 
   mutations: {
@@ -146,6 +151,7 @@ export default {
     SET_ACTIVE_COURSE(state, value) { state.activeCourse = value },
     SET_UNITS(state, value) { state.units = value },
     SET_ACTIVE_LESSON(state, value) { state.activeLesson = value },
+    SET_COURSEWARE_CONTEXT(state, value) { state.coursewareContext = value },
     SET_ASSIGNMENTS(state, value) { state.assignments = value },
     SET_ACTIVE_ASSIGNMENT(state, value) { state.activeAssignment = value },
     SET_SUBMISSIONS(state, value) { state.submissions = value },
@@ -166,6 +172,7 @@ export default {
     SET_MIND_MAPS(state, value) { state.mindMaps = value },
     SET_ACTIVE_MIND_MAP(state, value) { state.activeMindMap = value },
     SET_STUDENT_INSIGHTS(state, value) { state.studentInsights = value },
+    SET_STUDENT_INSIGHT_OVERVIEW(state, value) { state.studentInsightOverview = value },
     UPSERT_COURSE(state, course) {
       const index = state.courses.findIndex(item => item.id === course.id)
       if (index < 0) state.courses.push(course)
@@ -335,6 +342,12 @@ export default {
       }
       commit('SET_ACTIVE_LESSON', value)
       return value
+    },
+
+    async fetchCoursewareContext({ commit }, lessonId) {
+      const context = payload(await getLessonCoursewareContext(lessonId))
+      commit('SET_COURSEWARE_CONTEXT', context)
+      return context
     },
 
     async saveLesson({ commit, state }, { lessonId, version }) {
@@ -673,15 +686,19 @@ export default {
     },
 
     async fetchStudentInsights({ commit }, courseId) {
-      const value = items(await getStudentInsights(courseId))
+      const response = payload(await getStudentInsights(courseId))
+      const value = Array.isArray(response.items) ? response.items : []
       commit('SET_STUDENT_INSIGHTS', value)
-      return value
+      commit('SET_STUDENT_INSIGHT_OVERVIEW', response.class_overview || null)
+      return response
     },
 
     async refreshStudentInsights({ commit }, courseId) {
-      const value = items(await refreshStudentInsights(courseId))
+      const response = payload(await refreshStudentInsights(courseId))
+      const value = Array.isArray(response.items) ? response.items : []
       commit('SET_STUDENT_INSIGHTS', value)
-      return value
+      commit('SET_STUDENT_INSIGHT_OVERVIEW', response.class_overview || null)
+      return response
     },
   },
 }

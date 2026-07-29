@@ -39,7 +39,8 @@
 
     <el-skeleton v-if="!course" :rows="8" animated />
     <template v-else>
-      <ProductAgentRunPanel
+      <EmbeddedAgentRecord
+        title="AI 名单导入记录"
         v-if="isTeacher"
         :run="productAgentRun"
         @terminal="handleRosterAgentTerminal"
@@ -287,6 +288,16 @@
               <el-option label="阅读 + 写作" value="mixed" />
             </el-select>
           </el-form-item>
+          <el-form-item label="作业满分">
+            <el-input-number
+              v-model="assignmentForm.max_score"
+              :min="1"
+              :max="10000"
+              :step="5"
+              controls-position="right"
+              style="width:100%"
+            />
+          </el-form-item>
         </div>
       </el-form>
       <template #footer>
@@ -369,11 +380,11 @@
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
-import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
+import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
 
 export default {
   name: 'EducationCourseSpace',
-  components: { EducationShell, ProductAgentRunPanel },
+  components: { EducationShell, EmbeddedAgentRecord },
   data() {
     return {
       activeTab: 'lessons',
@@ -400,6 +411,7 @@ export default {
         instructions: '',
         kind: 'mixed',
         lesson_id: '',
+        max_score: 100,
       },
       tabs: [
         { key: 'lessons', label: '课时', icon: 'el-icon-reading' },
@@ -587,6 +599,7 @@ export default {
           assignment: {
             title: this.assignmentForm.title,
             kind: this.assignmentForm.kind,
+            max_score: this.assignmentForm.max_score,
             instruction_json: { text: this.assignmentForm.instructions },
             evaluation_json: {},
             max_attempts: 3,
@@ -594,7 +607,9 @@ export default {
           },
         })
         this.assignmentDialog = false
-        this.assignmentForm = { title: '', instructions: '', kind: 'mixed', lesson_id: '' }
+        this.assignmentForm = {
+          title: '', instructions: '', kind: 'mixed', lesson_id: '', max_score: 100,
+        }
         this.$message.success('作业草稿已保存')
       } catch (error) {
         this.$message.error('作业保存失败')

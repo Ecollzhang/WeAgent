@@ -29,7 +29,7 @@
     />
 
     <template v-else-if="course">
-      <ProductAgentRunPanel
+      <EmbeddedAgentRecord
         :run="productAgentRun"
         @terminal="handleAgentTerminal"
         @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
@@ -178,11 +178,11 @@
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
-import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
+import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
 
 export default {
   name: 'MockExamCenter',
-  components: { EducationShell, ProductAgentRunPanel },
+  components: { EducationShell, EmbeddedAgentRecord },
   data() {
     return {
       roleError: false,

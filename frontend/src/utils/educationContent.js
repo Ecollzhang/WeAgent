@@ -34,7 +34,14 @@ function normalizeActivities(value) {
 
 function formatVersionTime(value, locale = 'zh-CN') {
   if (!value) return ''
-  const parsed = new Date(value)
+  // Education backend timestamps are persisted in UTC. Legacy rows are ISO
+  // strings without an explicit offset, so make that contract unambiguous
+  // before handing the value to the browser's local-time formatter.
+  const source = typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(value)
+    ? `${value}Z`
+    : value
+  const parsed = new Date(source)
   if (Number.isNaN(parsed.getTime())) return ''
   return parsed.toLocaleString(locale, {
     year: 'numeric',

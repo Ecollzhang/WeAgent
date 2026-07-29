@@ -69,16 +69,19 @@ const pages = {
     'data-testid="courseware-upload"',
     'downloadCourseAsset',
     'exportEducationContent',
-    'Agent 生成版本',
+    'SlideDocumentEditor',
+    'saveContentVersion',
+    'saveGeneratedEditor',
+    '结构化课件版本',
     "['pptx', 'docx', 'pdf', 'html', 'json']",
     'product_code: \'courseware\'',
-    'ProductAgentRunPanel',
+    'EmbeddedAgentRecord',
   ],
   'src/views/education/StudentInsights.vue': [
     'data-testid="student-insight-list"',
     '数据不足',
     'product_code: \'student_insight\'',
-    'ProductAgentRunPanel',
+    'EmbeddedAgentRecord',
   ],
   'src/views/education/KnowledgeCenter.vue': [
     'data-testid="question-bank"',
@@ -89,19 +92,19 @@ const pages = {
     'data-testid="mock-exam-generator"',
     'saveMockExamAnswers',
     'product_code: \'mock_exam\'',
-    'ProductAgentRunPanel',
+    'EmbeddedAgentRecord',
   ],
   'src/views/education/WeaknessCenter.vue': [
     'data-testid="weakness-evidence"',
     'evidence_item_version_ids',
     'product_code: \'weakness_analysis\'',
-    'ProductAgentRunPanel',
+    'EmbeddedAgentRecord',
   ],
   'src/views/education/MindMapCenter.vue': [
     'data-testid="course-mind-map"',
     'saveMindMapVersion',
     'product_code: \'course_mind_map\'',
-    'ProductAgentRunPanel',
+    'EmbeddedAgentRecord',
   ],
 }
 for (const [file, fragments] of Object.entries(pages)) {
@@ -118,7 +121,7 @@ contains(
 for (const fragment of [
   'data-testid="agent-roster-import"',
   "product_code: 'roster_import'",
-  'ProductAgentRunPanel',
+  'EmbeddedAgentRecord',
   'parseRoster',
 ]) {
   contains(
