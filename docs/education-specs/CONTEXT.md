@@ -43,6 +43,18 @@ An evidence-backed summary derived from submissions, attempts, and learning
 events, with every claim linked to its source facts.
 _Avoid_: Personality score, unsupported mastery probability
 
+**Courseware Domain**:
+The independent teacher product area that selects a course and lesson, projects
+authorized lesson context into an editable SlideDocument, and manages preview,
+versions, upload, publication, and export.
+_Avoid_: Agent workbench, chat-based PPT generator
+
+**Student Insight Domain**:
+The independent teacher analytics area that combines official finalized grades
+with completion and evidence drill-down. AI-suggested subjective scores remain
+pending and are excluded from official class aggregates.
+_Avoid_: Agent analysis chat, AI-only score dashboard
+
 **Education Tool**:
 An authorized Education use case exposed to Agents through the Tool Gateway.
 It validates the actor, course role, input schema, and audit record before

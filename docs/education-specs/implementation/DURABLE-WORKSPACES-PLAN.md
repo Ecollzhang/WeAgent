@@ -13,16 +13,81 @@ The phase is complete only when all of the following are true:
 
 - uploaded and adopted files remain available from the Education database after
   their source sandbox or local upload directory is removed;
-- the teacher rail exposes **教学空间**, **PPT 与课件**, and
-  **学生画像与评估**;
-- the student rail exposes **模拟考试**, **作业弱点**, and
+- the teacher domain rail exposes **教学空间**, **PPT 与课件**, and
+  **学生画像与评估** as independent course-driven product domains rather than
+  Agent workbench tabs;
+- the student domain rail exposes **模拟考试**, **作业弱点**, and
   **课程思维导图**;
+- **PPT 与课件** selects a course and lesson, consumes an explicit lesson
+  context projection, and manages editable SlideDocument versions and
+  HTML/PPTX/PDF exports;
+- **学生画像与评估** combines finalized assignments and submitted mock exams,
+  showing class highest/lowest/average, completion, distribution, filters, and
+  evidence drill-down without mixing unconfirmed AI scores into official data;
 - each course has a working Question Bank, Paper Bank, and Knowledge Base;
 - UI and Agent tools call the same Education application services;
 - Agent writes are membership-scoped, capability-scoped, idempotent, and
   audited;
 - automated tests, production builds, browser UAT, and real Agent UAT pass;
 - no P0/P1 issue remains and no secret is committed.
+
+## Current-baseline execution update
+
+The repository already has independent routes for the three teacher entries,
+course and lesson selection in the courseware page, durable Education assets,
+multi-format export adapters, and per-student mock-exam evidence. The remaining
+work must therefore extend these product seams instead of replacing them with a
+new collaboration console.
+
+### R1 — Domain contract and navigation
+
+- rename the normal Education surface from “教学协作台/教师工作台” to an
+  Education domain rail;
+- keep the three teacher routes independent and membership-driven;
+- make Agent run details secondary and collapsible;
+- add frontend contract tests for labels, routes, mixed-role courses, and the
+  absence of runtime IDs.
+
+### R2 — Courseware lesson-context projection
+
+- add one read model/API that resolves the selected course and lesson into
+  lesson-plan version, objectives, activities, authorized materials, Knowledge
+  Base sources, and existing SlideDocument versions;
+- use that projection as the only input seam for manual and Agent generation;
+- complete editable slide-page operations, immutable version save, HTML
+  preview, and PPTX/PDF/HTML export fallback;
+- verify the domain works without opening a conversation.
+
+### R3 — Official grade and class-insight projection
+
+- combine finalized assignment submissions with submitted mock-exam attempts;
+- exclude unconfirmed AI suggestions and unreviewed subjective work;
+- use raw score/max score for one assessment and normalized percentages for
+  cross-assessment course aggregates;
+- calculate highest, lowest, average, graded count, completion rate, and score
+  distribution;
+- retain source IDs so every statistic and student recommendation can drill
+  down to evidence.
+
+### R4 — Teacher analytics experience
+
+- add class overview cards, assessment/time/learning-domain filters, and score
+  distribution;
+- retain per-student cards, but add grade trend, assignment completion, rubric
+  dimensions, knowledge points, and evidence drawer;
+- show explicit “数据不足/待教师确认” states instead of filling missing values
+  with Agent guesses.
+
+### R5 — Embedded Agent and release verification
+
+- let courseware and insight Agents call the same R2/R3 application services
+  through scoped Education tools;
+- keep status, tool results, adopted versions, provenance, fallback, and retry
+  visible in collapsed records;
+- run backend/frontend regression, production build, teacher/student browser
+  UAT, real Agent UAT, and sandbox-deletion persistence recovery;
+- update UAT evidence, commit verified slices atomically, then push
+  `feature/education` at the final release gate.
 
 ## Slice A — Durable assets
 
@@ -106,6 +171,14 @@ Cover:
 - weakness output containing evidence, not unsupported labels;
 - mind-map version creation from published course sources;
 - teacher insight refresh from assignments and mock attempts.
+- official class aggregates using rule-scored objective work and
+  teacher-confirmed subjective `final_score` only;
+- highest, lowest, average, graded count, completion rate, and score
+  distribution for course and selected assessment scopes;
+- unconfirmed AI suggestions remaining visible as pending evidence but excluded
+  from official statistics;
+- mixed assignment/mock-exam evidence, no-evidence students, and partially
+  graded classes.
 
 ### C2. Services and API
 
@@ -114,12 +187,15 @@ Implement:
 - mock exam attempts, answer snapshots, score, and learning events;
 - evidence-backed weakness projections;
 - versioned editable mind-map JSON with source links;
-- per-student and class insight snapshots;
+- a class insight query/projection over finalized assignment grades and
+  submitted mock-exam results;
+- per-student and class insight snapshots with source references;
+- assessment, time-range, learning-domain, and knowledge-point filters;
 - explicit “数据不足” states.
 
 Commit after the complete teacher–student API loop passes.
 
-## Slice D — Role-aware Education workbench
+## Slice D — Role-aware Education product domains
 
 ### D1. Frontend contract tests
 
@@ -127,9 +203,15 @@ Add tests for:
 
 - active-course role resolution without a fake global role switch;
 - exact teacher/student rail labels;
+- absence of “教学协作台” and Agent-workbench terminology in normal domain
+  navigation;
 - mixed-role course selection;
 - persisted empty/loading/error/success states;
 - upload/download and knowledge-center actions.
+- courseware context loading by selected course and lesson;
+- class score cards and evidence drill-down using official-grade semantics;
+- Agent panels remaining secondary/collapsible while normal domain operations
+  work without a chat.
 
 ### D2. Shared shell
 
@@ -139,16 +221,25 @@ Implement:
 - a role-labelled active-course selector;
 - route guards driven by server membership;
 - responsive narrow-screen behavior.
+- domain labels and descriptions centered on course operations rather than
+  Agent collaboration.
 
 ### D3. Teacher pages
 
 Implement:
 
 - **教学空间** using the existing course and lesson flow;
-- **PPT 与课件** with upload, editable source, HTML preview, version history,
-  download, and generation/adoption entry points;
-- **学生画像与评估** with evidence drill-down;
+- **PPT 与课件** with course → lesson selection, a lesson-context summary,
+  editable SlideDocument source, HTML preview, immutable version history,
+  upload, download, page regeneration, and PPTX/PDF/HTML export;
+- **学生画像与评估** with class highest/lowest/average, graded count,
+  completion rate, distribution, assessment/time filters, student cards, and
+  evidence drill-down;
 - course Knowledge Center tabs for questions, papers, and resources.
+
+Agent generation and analysis actions stay inside these pages. Their progress
+and provenance are shown in a collapsed record area; they do not turn either
+page into a generic collaboration console.
 
 ### D4. Student pages
 
@@ -218,6 +309,10 @@ Run:
 - proxied UI checks through core and the frontend;
 - two-session browser UAT for teacher and student;
 - real-model Agent UAT using the ignored root `.env` without printing secrets;
+- teacher-domain browser UAT proving course → lesson → SlideDocument →
+  multi-version export without entering chat;
+- analytics browser/API UAT proving highest/lowest/average from finalized grades
+  and exclusion of an unconfirmed AI-suggested score;
 - persistence recovery by removing only a disposable source sandbox/path and
   reopening the adopted asset.
 
@@ -237,4 +332,3 @@ Run:
 - real-time Office co-editing;
 - mandatory object storage;
 - unrestricted filesystem tools for Agents.
-

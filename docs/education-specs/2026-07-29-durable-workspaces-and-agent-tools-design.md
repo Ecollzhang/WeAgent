@@ -112,7 +112,20 @@ new durable Education version/asset
 Deleting the conversation, core AgentRun, or container must not delete adopted
 course content. Unadopted temporary outputs may be garbage-collected.
 
-## 4. Role-aware workbench
+## 4. Role-aware product domains
+
+Three information-architecture approaches were considered:
+
+- **Independent course-driven domains (selected):** each left-rail entry owns a
+  real product workflow and embeds Agent actions where useful. This matches how
+  teachers think about producing courseware and evaluating students.
+- **Course-space tabs:** keep courseware and insight inside one large teaching
+  space. This reduces routes but makes the two frequent workflows harder to
+  enter and mixes authoring with analytics.
+- **Agent collaboration console:** organize pages around Agent teams and their
+  outputs. This makes orchestration visible but forces teachers to understand
+  runtime concepts before completing ordinary work, so it is rejected as the
+  primary product structure.
 
 Education adds its own narrow module rail inside the existing global WeAgent
 sidebar. Authorization remains course-specific; there is no fake global
@@ -122,6 +135,13 @@ When a user belongs to both teacher and student courses, the active course
 determines the module set. The course selector shows the role beside each
 course.
 
+The entries in this rail are independent Education product domains, not Agent
+workbenches. Each domain owns its own course-driven read model, page flow, APIs,
+empty states, and acceptance criteria. Agent collaboration is an embedded
+generation or analysis capability behind domain actions. The ordinary teacher
+journey must remain usable without opening a chat or understanding Agent
+orchestration.
+
 ### 4.1 Teacher modules
 
 1. **教学空间**
@@ -129,14 +149,28 @@ course.
    - current lesson authoring and publication flow;
    - entry to the course Knowledge Center.
 2. **PPT 与课件**
-   - course selector and lesson selector;
-   - slide-document source, HTML preview, version list;
-   - upload, download, generate, and adopt;
+   - enter through a teacher course, then select one lesson;
+   - load the lesson plan version, objectives, activities, materials, and
+     authorized Knowledge Base sources as the courseware context;
+   - use editable slide JSON as the source, with HTML preview and immutable
+     version history;
+   - upload, download, AI-generate, locally edit, regenerate one page, and
+     explicitly adopt;
    - PPTX export through an adapter, with HTML fallback.
 3. **学生画像与评估**
-   - roster and completion overview;
-   - submission, score, knowledge-point, error-reason, and rubric evidence;
-   - per-student insight cards and recommended interventions;
+   - enter through one teacher course and show a class overview before
+     per-student cards;
+   - aggregate finalized assignment grades and submitted mock-exam results;
+   - show highest, lowest, average, graded-student count, completion rate, score
+     distribution, and assessment/time-range filters;
+   - show raw score/max score within one assessment, but normalize scores to a
+     percentage before combining assessments with different maximum scores;
+   - use submission, score, knowledge-point, error-reason, and rubric evidence
+     for per-student insight cards and recommended interventions;
+   - include only rule-scored objective work and teacher-confirmed subjective
+     grades in official class statistics;
+   - display AI-suggested subjective scores as pending evidence and never mix
+     them into official highest, lowest, or average values;
    - no personality labels or unsupported mastery probability.
 
 ### 4.2 Student modules
@@ -157,8 +191,12 @@ course.
    - every node can link to a course source;
    - editable JSON is the source, SVG/HTML is a rendering.
 
-Course lessons and assignments remain reachable within each module; this rail
-reorganizes the product rather than deleting the current flow.
+Course lessons and assignments remain reachable within each domain; this rail
+reorganizes the product rather than deleting the current flow. Agent run
+progress, tool calls, provenance, and generated artifacts may appear in a
+collapsed “AI 生成记录” or “分析依据” area, but Conversation IDs, Sandbox IDs,
+provider implementation details, and raw reasoning are never primary page
+content.
 
 ## 5. Course Knowledge Center
 
