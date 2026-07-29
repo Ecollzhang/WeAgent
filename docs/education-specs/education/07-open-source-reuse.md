@@ -112,3 +112,21 @@ Sidecar 要求：
 
 - [Education 开源生态调研](../../../.planning/research/education-open-source-landscape.md)
 - [Education 语言学习工具接入调研](../../../.planning/research/education-language-tooling.md)
+
+## 9. 独立领域实现的借优结论（2026-07-29）
+
+本轮只引入可以替换、许可证清晰且不会反向接管 Education 业务数据的组件：
+
+| 项目 | 许可证 | 本轮决策 | 边界 |
+|---|---|---|---|
+| [Presenton](https://github.com/presenton/presenton) | Apache-2.0 | 预留 `CoursewareProvider` / API / MCP adapter，不作为 MVP 强依赖 | 未来可承担自动排版；课程、课时、版本与发布状态仍以 Education 数据库为准 |
+| [PptxGenJS](https://github.com/gitbrent/PptxGenJS) | MIT | 作为 `SlideDocument → PPTX` 的直接导出 Provider | 它是生成库，不是在线编辑器，也不保存业务状态 |
+| [PPTist](https://github.com/pipipi-pikachu/PPTist) | AGPL-3.0 | 仅研究 SlideDocument、页面缩略图和编辑器交互 | 不复制源码、不嵌入主前端，避免把 AGPL 实现混入主仓库 |
+| [Apache ECharts](https://github.com/apache/echarts) | Apache-2.0 | 学生画像与评估领域按需模块化加载 | 只负责图表表达，统计口径由 Education 后端计算并返回证据 |
+| [GrapesJS](https://github.com/GrapesJS/grapesjs) | BSD-3-Clause | 第二阶段再评估 HTML 页面级编辑 | MVP 继续使用现有富文本与结构化 SlideDocument，避免两套编辑器并存 |
+| [AutoAnimate](https://github.com/formkit/auto-animate) | MIT | 暂不新增依赖；只借鉴自动布局过渡原则 | 当前领域页使用克制的 CSS 动效，并尊重 `prefers-reduced-motion` |
+| [Driver.js](https://github.com/kamranahmedse/driver.js) | MIT | 帮助中心稳定后可作为站内导览 Provider | MVP 采用静态图文步骤，避免导览锚点随页面迭代失效 |
+
+落地原则：Agent 只通过受控 Education 工具写入 canonical 业务对象；导出器、图表库、
+排版服务和未来的编辑器都是 Provider。替换任何 Provider 都不能改变课程成员权限、
+课时上下文、正式成绩口径、内容版本或发布审核规则。

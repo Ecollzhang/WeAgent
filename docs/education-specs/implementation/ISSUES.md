@@ -121,3 +121,31 @@
 - 验证：`test_education_rag_scope.py`、`test_conversation_rag_scope.py`、
   `test_education_rag_resource_pipeline.py` 全部通过。
 - 状态：已解决。
+
+## EDU-AGENT-002：Product Agent 未写入正式对象仍可能显示完成（已解决）
+
+- 发现时间：2026-07-29
+- 模块：Education Product Agent
+- 等级：P0
+- 现象：Agent 返回自然语言完成说明或临时文件路径时，运行可能被乐观标记为完成；moderator
+  计划先于 worker 消息可见时还可能提前失败并撤销工具授权。
+- 根因：产品完成状态只参考会话终态，没有校验该产品要求的 Education 持久写工具调用；同步
+  逻辑也没有为合法 moderator 计划与 worker 可见性之间的短暂窗口保留运行态。
+- 处理：为每类产品声明必需写工具，完成时校验审计调用；无写入则标记 `partial` 并给出可诊断
+  原因。合法 moderator 计划存在时保持 `running`，等待 worker 出现；历史乐观完成记录在读取时
+  校正。
+- 验证：`test_education_product_agent_runs.py` 覆盖持久写不变量、历史校正和 moderator 竞态；
+  真实课件 Agent 调用 `edu.courseware.create` 后完成并留下可编辑课件。
+- 状态：已解决。
+
+## EDU-TEST-001：开发 `.env` 污染 provider 单元测试（已解决）
+
+- 发现时间：2026-07-29
+- 模块：sandbox provider 测试
+- 等级：P1
+- 现象：单独运行用例通过，但全量回归中三个 mixed-provider 用例会读取开发 `.env` 配置，产生
+  顺序相关失败。
+- 根因：测试只覆盖部分环境变量且未清空外围环境。
+- 处理：相关测试使用清空环境的隔离 patch，再注入用例所需最小变量。
+- 验证：后端全量 `373 passed`。
+- 状态：已解决。
