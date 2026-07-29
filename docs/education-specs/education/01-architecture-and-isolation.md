@@ -194,33 +194,37 @@ draft content versions
 - Docker、conversation workspace 和 `/workspace/shared` 只保存一次运行的投影与中间文件。
 - Agent 产物必须经过 schema 校验并由 Education 显式采用，才会成为持久化版本或
   `EducationAsset`。
+- 任何在聊天或业务页可预览、下载的运行文件都必须在 sandbox 进入 idle 前快照到
+  核心 Artifact 或 Education canonical storage；只保存 `/workspace/...` 路径不构成产物。
 - 删除聊天、核心 AgentRun 或 sandbox 不得删除已采用的课程内容。
 - 文件存储经 adapter 抽象；后续可切换 S3/MinIO，但不改变课程和 Agent 工具 API。
 
-### 7.2 前端
+### 7.3 前端
 
 - 保持 Vue 2.7、Element UI、Vuex 和现有路由体系。
 - 复用并抽取当前 ChatWindow 工作流编辑器，不重写一个教育专用图编辑器。
 - React-only 项目只允许隔离 iframe/微前端；MVP 不引入。
 
-### 7.3 调度
+### 7.4 调度
 
 - 保留现有 moderator → worker 计划格式。
 - 保留 `nodes`、`edges`、`depends_on`、`parallel_groups`。
 - 保留现有 AgentRun 和 Socket 事件。
 - Education Workflow Compiler 输出当前调度器可消费的数据，不引入第二套 scheduler。
 
-### 7.4 Capability
+### 7.5 Capability
 
 - 教育能力仍使用现有 `Capability`、`CapabilityVersion` 和 `AgentCapabilityBinding`。
 - SubjectPack 只引用 capability IDs 和不可变版本。
 - 不在 edu 服务复制 Skill/MCP/Plugin/Tool 注册系统。
 
-### 7.5 Artifact
+### 7.6 Artifact
 
 - Artifact 继续由核心服务拥有。
 - Education 保存 Artifact ID、业务语义、输入版本和发布引用。
 - 对旧 Artifact 类型保持兼容；Education 可新增语义 metadata，但不改变旧渲染路径。
+- Message 和 EducationAgentRun 只保存持久 Artifact ID 或 canonical reference，不把
+  sandbox path 当成可恢复引用。
 
 ## 8. 灰度与回滚
 
@@ -278,10 +282,23 @@ Agent 与 capability 体系，至少声明：
 - Agent 之间可以在同一运行的 workspace 中协作，但正式交接必须登记结构化
   EducationContentVersion、Artifact 或版本 ID。
 - `/workspace/shared` 只用于同一运行的临时协作，不是跨用户发布或权限授权机制。
-- context 恢复沿用现有 provider/session 策略；Education 不重复注入完整聊天历史。
+- Conversation、Message、Workflow elements 和可见输出由数据库恢复，不依赖原 Docker
+  容器。运行终态后 sandbox 按可配置 idle TTL 回收。
+- 继续旧聊天时创建新的 runtime generation，从有界消息摘要、持久附件、
+  Education 当前授权上下文和 canonical refs 重新投影；不能依赖旧容器或 provider 的隐式
+  resume marker，也不重复注入无界完整聊天历史。
 - 事件继续映射到现有 `elements`、`meta.events` 和 `raw_output` 持久化展示模型。
 
-### 10.4 协作交付
+### 10.4 业务页与聊天双向关联
+
+- 一次独立 Education 任务对应一组 Conversation；同一任务内的重试与写入修复留在原聊天。
+- EducationAgentRun 保存 `conversation_id`、业务对象定位和返回路由；核心消息可保存
+  `education_run_id` 与 canonical refs。
+- 业务页只展示最新一次运行和最新产物，并提供“返回本次聊天”和轻量“协作历史”入口。
+- 历史产物从对应聊天中的持久产物卡查看；聊天可通过授权投影返回 Education 业务页。
+- Conversation ID、Sandbox ID、内部路径和 provider 原始推理不进入产品界面。
+
+### 10.5 协作交付
 
 - 先更新设计/API/schema，再拆成 edu、core、RAG、frontend 和测试任务。
 - 一个提交只承担一个清晰模块责任；数据库迁移、依赖接入和公共核心改动分别 review。

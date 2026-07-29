@@ -47,7 +47,8 @@
 - 根据已确认或指定版本教案生成讲义。
 - 生成 `slide_document_json`。
 - 产出 reveal.js HTML。
-- 通过 PptxGenJS 产出可编辑 PPTX。
+- 通过可替换导出 Provider 产出可编辑 PPTX；当前基线为 `python-pptx`，PptxGenJS 作为
+  后续候选。
 - 生成简单图表、流程图和互动块。
 
 不能：
@@ -308,23 +309,34 @@ EducationAgentRun 状态：
 - 允许从失败节点重试。
 - 重试继续引用相同输入版本，除非教师显式选择新版本。
 - 不完整运行禁止自动发布。
+- 课件团队启动前预检实际 MCP/tool catalog、RunGrant 和必需写入节点；工具不可用时停在
+  `preflight_failed`，不启动整队 Agent。
+- 课件草稿 schema 错误返回原 Agent 定向修复一次；内容有效但缺少
+  `edu.courseware.create` 成功审计时进入 `recoverable_draft`，只重试写入节点一次。
+- 第二次仍未写入时进入 `partial`，保留结构化草稿和“重试写入”入口。聊天结束或生成
+  `/workspace` 文件不能替代 canonical 写入。
+- 只有工具审计返回可读取的 `object_id/version_id` 后，课件运行才能进入完成态。
 
 ## 11. 用户可见协作
 
-显示：
+业务页默认只显示当前对象的最新一次运行：
 
-- Agent 名称和角色。
-- 当前任务和状态。
-- 使用的资料/教案版本。
-- 生成的内容和 Artifact。
-- 节点间交接关系。
-- 错误、fallback 和教师审批。
+- 简化 Workflow、`x/y Agent 已完成`、最新产物摘要。
+- “预览最新产物”“返回本次聊天”和小型“协作历史”入口。
+
+协作历史只列任务、时间、状态、Agent 数量和“进入聊天”。聊天页显示：
+
+- Education 课程/课时/任务上下文。
+- Agent 名称、角色、用户可见说明、节点交接和当前状态。
+- 使用的资料/教案版本、错误、fallback 和教师审批。
+- 持久化产物卡及对应渲染器，并可返回业务页面。
 
 不显示：
 
 - provider 原始思维链。
 - 系统提示词。
 - secret、token 或内部权限 grant。
+- Conversation ID、Sandbox ID 和内部路径。
 - 学生不可见答案。
 
 ## 12. 人工审批门

@@ -7,13 +7,15 @@ still exists.
 ## Language
 
 **Teaching Space**:
-The teacher-facing course workspace containing lessons, members, assignments,
-and course assets.
+The role-aware primary Education domain in the global WeAgent Sidebar. Teachers
+manage lessons, members, assignments, and course assets; students download
+published courseware, complete assignments, and review assignment weaknesses.
+It appears exactly once in navigation.
 _Avoid_: Chat workspace, sandbox
 
 **Learning Space**:
-The student-facing view of published course content, assignments, practice, and
-feedback.
+An internal product term for the student-facing content inside Teaching Space,
+not a separate visible navigation layer or sidebar.
 _Avoid_: Student sandbox
 
 **Education Asset**:
@@ -44,9 +46,10 @@ events, with every claim linked to its source facts.
 _Avoid_: Personality score, unsupported mastery probability
 
 **Courseware Domain**:
-The independent teacher product area that selects a course and lesson, projects
-authorized lesson context into an editable SlideDocument, and manages preview,
-versions, upload, publication, and export.
+The independent teacher product area that consumes the course selected in the
+shared Education page header, selects a lesson, projects authorized lesson
+context into an editable SlideDocument, and manages preview, versions, upload,
+publication, and export.
 _Avoid_: Agent workbench, chat-based PPT generator
 
 **Student Insight Domain**:
@@ -70,3 +73,17 @@ _Avoid_: Publishing from `/workspace/shared`
 A temporary, least-privilege copy of durable Education inputs made available to
 one Agent run.
 _Avoid_: Source of truth
+
+**Education Collaboration Link**:
+The durable association between an EducationAgentRun, its core Conversation,
+and the canonical Education object/version produced by a successful tool call.
+Product pages show only the latest run and link historical collaboration to
+chat; chat links back to the business object.
+_Avoid_: Parsing a chat title or sandbox path to find the business object
+
+**Runtime Generation**:
+One disposable sandbox instance used to execute or continue a conversation.
+Historical messages and user-visible artifacts remain readable after this
+instance expires; a later turn may create a new generation and rehydrate
+bounded context.
+_Avoid_: Permanent conversation container

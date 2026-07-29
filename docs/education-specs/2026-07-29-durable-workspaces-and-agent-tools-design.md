@@ -4,6 +4,11 @@
 > Date: 2026-07-29  
 > Scope: next product phase after the teacher–student MVP
 
+> Navigation, Agent/chat traceability, sandbox TTL, and courseware quality are
+> further refined by
+> [Education 单一导航、Agent 双向关联与课件质量设计](./2026-07-29-unified-navigation-agent-chat-and-ppt-quality-design.md).
+> The refinements below replace the earlier inner-rail interpretation.
+
 ## 1. Outcome
 
 This phase turns the current course MVP into a durable Education product that
@@ -127,9 +132,10 @@ Three information-architecture approaches were considered:
   runtime concepts before completing ordinary work, so it is rejected as the
   primary product structure.
 
-Education adds its own narrow domain rail inside the existing global WeAgent
-sidebar. Authorization remains course-specific; there is no fake global
-teacher/student role switch.
+Education uses the existing global WeAgent sidebar as the only domain
+navigation. It does not add a second Education rail. A shared current-course
+selector lives in the Education page header. Authorization remains
+course-specific; there is no fake global teacher/student role switch.
 
 When a user belongs to both teacher and student courses, the active course
 determines the module set. The course selector shows the role beside each
@@ -179,24 +185,24 @@ orchestration.
 
 ### 4.2 Student domains
 
-1. **模拟考试**
+1. **教学空间**
+   - download and preview published courseware and materials;
+   - complete assignments and read released teacher feedback;
+   - review assignment-scoped weakness evidence and follow-up practice.
+2. **模拟考试**
    - select a course, scope, question count, duration, and difficulty mix;
    - generate from the published Question Bank and optionally validated Agent
      items;
    - persist the paper, attempt, answers, result, and source item versions.
-2. **作业弱点**
-   - explain weak knowledge points from submitted assignments and practice;
-   - show evidence, common error reasons, recommended review material, and a
-     bounded follow-up practice;
-   - never infer weakness from chat text alone.
 3. **课程思维导图**
    - generate a versioned tree from published course resources and lesson
      objectives;
    - every node can link to a course source;
    - editable JSON is the source, SVG/HTML is a rendering.
 
-Course lessons and assignments remain reachable within each domain; this rail
-reorganizes the product rather than deleting the current flow. Agent run
+Assignment weakness is a tab or aggregate inside student 教学空间, not a
+top-level domain. Course lessons and assignments remain reachable within each
+domain. Agent run
 progress, tool calls, provenance, and generated artifacts may appear in a
 collapsed “AI 生成记录” or “分析依据” area, but Conversation IDs, Sandbox IDs,
 provider implementation details, and raw reasoning are never primary page
@@ -374,6 +380,10 @@ UI distinguishes deterministic, teacher-confirmed, and AI-suggested values.
 - Repeated write calls with the same idempotency key return the original result.
 - Asset checksum de-duplicates bytes without merging ownership or visibility.
 - Invalid Agent schema is rejected and returned to the producing Agent once.
+- Courseware runs preflight the actual tool catalog and RunGrant before starting
+  a team. Missing `edu.courseware.create` registration fails early.
+- Valid courseware without a successful canonical write becomes a recoverable
+  draft and retries only the writer once; a second failure remains `partial`.
 - Deleted sandbox: adopted assets and versions still open; unadopted output is
   marked unavailable.
 - RAG unavailable: Knowledge Base files remain downloadable and are marked
@@ -393,7 +403,7 @@ UI distinguishes deterministic, teacher-confirmed, and AI-suggested values.
 
 ### Slice B — Role domains
 
-- Education domain rail and active-course role context.
+- one global role-aware domain sidebar and header current-course context.
 - teacher and student domain pages with real persisted data.
 - empty/loading/error states and responsive behavior.
 
@@ -410,6 +420,8 @@ UI distinguishes deterministic, teacher-confirmed, and AI-suggested values.
 - roster, course, lesson, asset, question, paper, insight, mock exam, weakness,
   and mind-map tools.
 - core runtime adapter and visible tool-call results.
+- product↔chat deep links, latest-run summary, collaboration history, durable
+  visible-artifact snapshots, sandbox TTL, and runtime rehydration.
 
 ### Slice E — Product UAT
 

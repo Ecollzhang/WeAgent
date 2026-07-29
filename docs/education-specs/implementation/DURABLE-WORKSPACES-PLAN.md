@@ -2,7 +2,9 @@
 
 > Date: 2026-07-29  
 > Branch: `feature/education`  
-> Design source: `docs/education-specs/2026-07-29-durable-workspaces-and-agent-tools-design.md`
+> Design sources:
+> `docs/education-specs/2026-07-29-durable-workspaces-and-agent-tools-design.md` and
+> `docs/education-specs/2026-07-29-unified-navigation-agent-chat-and-ppt-quality-design.md`
 
 ## Delivery contract
 
@@ -13,11 +15,11 @@ The phase is complete only when all of the following are true:
 
 - uploaded and adopted files remain available from the Education database after
   their source sandbox or local upload directory is removed;
-- the teacher domain rail exposes **教学空间**, **PPT 与课件**, and
-  **学生画像与评估** as independent course-driven product domains rather than
-  Agent workbench tabs;
-- the student domain rail exposes **模拟考试**, **作业弱点**, and
-  **课程思维导图**;
+- the single global sidebar exposes teacher **教学空间**, **PPT 与课件**, and
+  **学生画像与评估** or student **教学空间**, **模拟考试**, and
+  **课程思维导图**, with no second Education rail;
+- student assignment weakness is inside 教学空间, together with published
+  materials and assignment completion;
 - **PPT 与课件** selects a course and lesson, consumes an explicit lesson
   context projection, and manages editable SlideDocument versions and
   HTML/PPTX/PDF exports;
@@ -42,8 +44,9 @@ new collaboration console.
 
 ### R1 — Domain contract and navigation
 
-- rename the normal Education surface from “教学协作台/教师工作台” to an
-  Education domain rail;
+- move Education domains into the existing global sidebar and remove the
+  duplicate inner rail;
+- place the role-labelled current-course selector in the shared page header;
 - keep the three teacher routes independent and membership-driven;
 - make Agent run details secondary and collapsible;
 - add frontend contract tests for labels, routes, mixed-role courses, and the
@@ -83,8 +86,14 @@ new collaboration console.
 
 - let courseware and insight Agents call the same R2/R3 application services
   through scoped Education tools;
+- preflight the real tool catalog and required writer; retry only a failed
+  canonical write once and preserve a recoverable draft;
 - keep status, tool results, adopted versions, provenance, fallback, and retry
   visible in collapsed records;
+- show only the latest run in product pages, link bidirectionally to chat, and
+  route older runs through a compact collaboration-history drawer;
+- snapshot user-visible files before sandbox TTL cleanup and rehydrate continued
+  chats into a new runtime generation;
 - run backend/frontend regression, production build, teacher/student browser
   UAT, real Agent UAT, and sandbox-deletion persistence recovery;
 - update UAT evidence, commit verified slices atomically, then push
@@ -213,6 +222,7 @@ Add tests for:
 
 - active-course role resolution without a fake global role switch;
 - exact teacher/student rail labels;
+- one global sidebar, no inner Education rail, and a page-header course selector;
 - absence of “教学协作台” and Agent-workbench terminology in normal domain
   navigation;
 - mixed-role course selection;
@@ -227,8 +237,9 @@ Add tests for:
 
 Implement:
 
-- an Education module rail inside the existing global shell;
-- a role-labelled active-course selector;
+- role-aware Education entries directly in the existing global sidebar;
+- no second Education module rail;
+- a role-labelled active-course selector in the Education page header;
 - route guards driven by server membership;
 - responsive narrow-screen behavior.
 - domain labels and descriptions centered on course operations rather than
@@ -255,8 +266,9 @@ page into a generic collaboration console.
 
 Implement:
 
+- **教学空间** with published courseware/material download, assignment
+  completion, feedback, and assignment weakness;
 - **模拟考试** creation, completion, submission, and result;
-- **作业弱点** evidence and recommended follow-up practice;
 - **课程思维导图** generation, editing, versioning, and source navigation.
 
 Add a shared Help Center entry with role-aware illustrated teacher and student
@@ -295,11 +307,14 @@ controllers and tools. Initial tools:
 Implement:
 
 - tool catalog and schema endpoint;
+- courseware preflight against the actual registered catalog;
 - short-lived run grants;
 - invocation endpoint with idempotency and audit;
 - `EducationRuntimeClient` adapter in core;
 - Agent-facing tool results that point to durable Education objects, never
   arbitrary host paths.
+- writer-only repair retry and recoverable-draft persistence when the canonical
+  write is missing.
 
 Commit after security, runtime-client, and regression tests pass.
 
@@ -334,6 +349,17 @@ Run:
   the current product;
 - persistence recovery by removing only a disposable source sandbox/path and
   reopening the adopted asset.
+- chat recovery after sandbox removal by creating a new runtime generation from
+  persisted messages, attachments, and canonical references;
+- product↔chat deep links, latest-only product preview, and historical runs
+  reachable through collaboration history.
+
+### F2.1 Deferred visual-quality gate
+
+After the reliability and persistence slices, add four selectable courseware
+styles, rendered-slide screenshot inspection, visual QA, and one targeted
+problem-slide repair pass. Evaluate PptxGenJS as a replaceable Provider while
+retaining the current `python-pptx` baseline and SlideDocument source of truth.
 
 ### F3. Version control
 

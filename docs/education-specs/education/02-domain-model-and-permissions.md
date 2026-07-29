@@ -424,6 +424,10 @@ MVP 只做站内通知；通知失败不影响发布、提交或反馈事实。
 - `course_id`
 - `lesson_id / assignment_id / submission_id`
 - `requested_by`
+- `product_type`
+- `product_object_type / product_object_id`
+- `product_route`
+- `display_title`
 - `workflow_type`
 - `workflow_version_id`
 - `conversation_id`
@@ -435,6 +439,17 @@ MVP 只做站内通知；通知失败不影响发布、提交或反馈事实。
 - `contributors`
 - `approval_status`
 - `provider_summary`
+- `runtime_generation`
+- `created_at / updated_at`
+
+关联规则：
+
+- 一次独立业务任务对应一个 `conversation_id`；同一任务内的重试和定向修复不新建聊天。
+- `product_route` 是经过服务端生成并校验的返回目标；不得通过解析聊天标题或 Prompt 推导。
+- 业务页按 `product_type + product_object_id + created_at` 取最新一次运行，只内嵌最新产物。
+- 历史列表返回任务名、时间、状态、Agent 数量和 `conversation_id` 的授权跳转信息，不在
+  业务页重复展开旧产物。
+- `output_version_ids` 和 `artifact_ids` 只能引用持久对象，不能保存 sandbox path。
 - `error_summary`
 - `started_at / finished_at`
 

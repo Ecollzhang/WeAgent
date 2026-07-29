@@ -122,7 +122,7 @@
   `test_education_rag_resource_pipeline.py` 全部通过。
 - 状态：已解决。
 
-## EDU-AGENT-002：Product Agent 未写入正式对象仍可能显示完成（已解决）
+## EDU-AGENT-002：Product Agent 正式写入门已建立，但课件工具链仍不可靠（重新打开）
 
 - 发现时间：2026-07-29
 - 模块：Education Product Agent
@@ -131,12 +131,35 @@
   计划先于 worker 消息可见时还可能提前失败并撤销工具授权。
 - 根因：产品完成状态只参考会话终态，没有校验该产品要求的 Education 持久写工具调用；同步
   逻辑也没有为合法 moderator 计划与 worker 可见性之间的短暂窗口保留运行态。
-- 处理：为每类产品声明必需写工具，完成时校验审计调用；无写入则标记 `partial` 并给出可诊断
+- 已完成部分：为每类产品声明必需写工具，完成时校验审计调用；无写入则标记 `partial` 并给出可诊断
   原因。合法 moderator 计划存在时保持 `running`，等待 worker 出现；历史乐观完成记录在读取时
   校正。
-- 验证：`test_education_product_agent_runs.py` 覆盖持久写不变量、历史校正和 moderator 竞态；
-  真实课件 Agent 调用 `edu.courseware.create` 后完成并留下可编辑课件。
-- 状态：已解决。
+- 新证据：2026-07-29 产品实测出现“Agent 团队已结束，但缺少成功的
+  `edu.courseware.create` 工具调用”；运行容器中实际 MCP catalog 未包含所需 server，
+  并出现不支持的 `education_action` 调用。完成门正确阻止了假成功，但运行前没有发现
+  工具不可用，也没有保留可恢复草稿和定向重试。
+- 待处理：
+  1. 团队启动前预检实际 MCP/tool catalog、RunGrant 和必需 writer。
+  2. schema 错误返回原 Agent 修复一次。
+  3. 草稿有效但无 canonical 写入时保存 `recoverable_draft`，仅重试 writer 一次。
+  4. 第二次失败标记 `partial` 并提供“重试写入”，不重跑整队。
+- 验收：工具未注册时不启动完整团队；成功运行必须有 `edu.courseware.create` 成功审计和
+  可读取 `object_id/version_id`；失败草稿在 sandbox 回收后仍可恢复。
+- 状态：部分解决，P0 待修复。
+
+## EDU-RUNTIME-002：历史聊天和可见产物仍需摆脱 sandbox 生命周期
+
+- 发现时间：2026-07-29
+- 模块：核心 Conversation / Artifact / sandbox runtime
+- 等级：P1
+- 现象：数据库消息和正式 Education 对象可持久读取，但只存在 `/workspace` 的可见文件会随
+  容器丢失；当前运行容器没有稳定持久卷合同，长期保留容器也没有 TTL 治理。
+- 处理计划：运行结束前快照可见产物，Message/EducationAgentRun 保存持久引用；终态后按
+  idle TTL 回收。继续旧聊天时创建新 runtime generation，从数据库消息摘要、持久附件和
+  canonical refs 重新投影。
+- 验收：删除 sandbox 后旧聊天、Workflow、正式产物和已快照预览仍可打开；继续聊天不寻找
+  旧容器，也不泄露未授权临时文件。
+- 状态：待处理。
 
 ## EDU-TEST-001：开发 `.env` 污染 provider 单元测试（已解决）
 

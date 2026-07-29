@@ -54,7 +54,8 @@
 同一 SlideDocument：
 
 - reveal.js 渲染在线 HTML。
-- PptxGenJS 导出可编辑 PPTX。
+- 导出 Provider 生成可编辑 PPTX；当前实现基线是 `python-pptx`，PptxGenJS 是后续可替换
+  Provider，不改变 SlideDocument schema。
 
 ### 2.3 安全渲染
 
@@ -308,6 +309,10 @@ Artifact 类型沿用核心模型；Education 添加业务关联：
 
 发布前检查 Artifact 是否存在、可打开且可安全预览。
 
+用户可见的 Agent 文件必须在 sandbox 回收前写入 Artifact 或 EducationAsset，并记录
+checksum、MIME、大小、来源 manifest 与权限范围。Message、EducationAgentRun 和业务对象
+保存持久 ID/canonical reference；`/workspace/...` 仅是临时来源路径，不能用于历史预览。
+
 ## 13. 产物失败
 
 - HTML 失败：保留 SlideDocument，允许重新渲染或编辑。
@@ -315,3 +320,15 @@ Artifact 类型沿用核心模型；Education 添加业务关联：
 - DOCX 失败：教案仍可在系统内使用。
 - RAG 入库失败：资源标记 failed，不进入 Agent 检索范围。
 - 导出失败不能删除结构化真源。
+
+## 14. 课件主题与视觉验收
+
+课件质量增强阶段提供至少“清朗课堂、纸张批注、童趣绘本、深色聚焦”四种主题。
+主题只改变颜色、字体栈、字号、间距、版式和图像策略，不改写教学内容。
+
+每次生成先将全部页面渲染为图片，再检查裁切、溢出、重叠、占位符、破图、层级、字号、
+密度、对齐、对比度、主题一致性和素材 provenance。HTML、页面截图与 PPTX 的主要内容
+必须一致；PPTX 还需通过 PowerPoint/LibreOffice 打开和基础可编辑性验证。
+
+视觉 QA 失败时只重做问题页，最多自动修复一轮；仍失败则保留结构化版本并标明问题，
+不能把“文件可打开”写成“视觉质量通过”。

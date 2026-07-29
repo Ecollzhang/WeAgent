@@ -39,7 +39,7 @@
 - HTML、DOCX、PDF。
 - Tiptap 讲义。
 - SlideDocument。
-- reveal.js HTML 和 PptxGenJS PPTX。
+- reveal.js HTML 和可替换 PPTX Provider；当前基线为 `python-pptx`。
 
 ### 2.4 Agent 与工作流
 
@@ -77,7 +77,9 @@
 ## 3. V1：完整多模块系统
 
 - EducationAsset 数据库存储和 sandbox 删除恢复。
-- 角色感知的教师/学生三模块工作台。
+- 单一全局 Sidebar：教师为教学空间、PPT 与课件、学生画像与评估；学生为教学空间、
+  模拟考试、课程思维导图。
+- Education 页面顶部共享当前课程上下文；移除内侧领域栏。
 - 每课程一个题库、试卷库和知识库。
 - Education Tool Gateway 与 Agent 业务工具。
 - 多 Unit、多课时管理体验。
@@ -88,6 +90,20 @@
 - 完整模板库。
 - 分层作业。
 - 更完善的班级学情看板。
+- Education 业务页与聊天双向关联；业务页只显示最新运行，历史经“协作历史”进入聊天。
+- 可见产物快照、sandbox idle TTL 和旧聊天 runtime generation 重建。
+
+### 3.1 V1 课件可靠性门
+
+- 团队启动前预检 MCP/tool catalog、RunGrant 和 `edu.courseware.create` 必需节点。
+- schema 错误回到原 Agent 修复一次；缺少 canonical 写入时仅定向重试写入节点一次。
+- 第二次失败保留 `recoverable_draft/partial` 和“重试写入”，禁止以聊天完成代替业务完成。
+
+### 3.2 后续课件质量增强
+
+- 至少四种可选主题：清朗课堂、纸张批注、童趣绘本、深色聚焦。
+- 插图/图表能力、逐页渲染、规则检查、视觉模型/人工抽检和问题页自动修复一轮。
+- 评估 PptxGenJS 或其他 Provider，但保持 SlideDocument 真源和 provider 可替换边界。
 - 动态学习计划。
 - 间隔复习的规则版。
 - 作文逐句批注和版本对比增强。
@@ -198,6 +214,9 @@
 - 无引用或 snippet-only 引用。
 - 年级/文本类型错误。
 - provider 输出非 JSON。
+- 课件工具未注册时 preflight 失败且不启动完整 Agent 团队。
+- 缺少 `edu.courseware.create` 成功审计时不得完成，并只定向重试写入节点。
+- 工具返回 schema 错误时同一 Agent 修复一次；二次失败保存可恢复草稿。
 
 ### 7.5 Artifact 测试
 
@@ -205,12 +224,18 @@
 - PPTX 可由 PowerPoint/LibreOffice 打开。
 - DOCX 可打开和继续编辑。
 - 导出失败不损坏源版本。
+- 删除 sandbox 后，历史聊天、Workflow、正式版本和已快照预览仍可打开。
+- 继续旧聊天会创建新 runtime generation，并只恢复授权的持久上下文。
+- 质量增强阶段逐页截图检查裁切、溢出、重叠、破图、密度、对齐、对比度和主题一致性。
 
 ### 7.6 E2E
 
 - 两个标杆课程完整闭环。
 - 两个学生数据隔离。
 - Agent 节点失败后恢复。
+- 全局只出现一根主侧栏和一个教学空间；顶部课程切换后角色和领域正确恢复。
+- 学生从教学空间下载课件、完成作业并查看作业弱点。
+- 业务页最新运行与聊天历史双向跳转，历史产物不在业务页重复渲染。
 - SearchProvider 失败 fallback。
 - ContentFetcher 失败显示 snippet-only。
 - RAG 不可用时人工编辑。
@@ -253,6 +278,7 @@
 | 单个 Agent | 保留节点结果，从失败节点重试 |
 | provider | 按现有 provider 策略切换/失败 |
 | Socket 重连 | 从持久化 AgentRun/Message 恢复状态 |
+| sandbox 被回收 | 从数据库消息、附件和 canonical refs 创建新 runtime generation |
 
 任何降级都禁止自动发布不完整内容。
 
