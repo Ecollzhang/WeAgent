@@ -99,8 +99,23 @@ assertContains(
 )
 assertContains(
   'src/components/Sidebar/index.vue',
-  "label: '教学空间', route: '/education'",
-  'the sidebar must expose one membership-driven Education space'
+  'educationDomainNavItems',
+  'the global sidebar must expose membership-driven Education domains'
+)
+assertContains(
+  'src/components/Sidebar/index.vue',
+  'isNavActive',
+  'Education active state must use route metadata instead of a shared path prefix'
+)
+assertNotContains(
+  'src/components/education/EducationShell.vue',
+  'EducationModuleRail',
+  'Education must not render a second sidebar'
+)
+assertContains(
+  'src/components/education/EducationShell.vue',
+  'EducationCourseContext',
+  'the selected course belongs in the shared page header'
 )
 assertNotContains(
   'src/components/Sidebar/index.vue',

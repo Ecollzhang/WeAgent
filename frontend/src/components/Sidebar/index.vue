@@ -27,13 +27,13 @@
       <div class="nav-divider"></div>
 
       <!-- 领域功能 -->
-      <div v-if="!collapsed" class="nav-section-label">领域</div>
+      <div v-if="!collapsed" class="nav-section-label">{{ domainSectionLabel }}</div>
       <router-link
         v-for="item in domainNavItems"
         :key="item.key"
         :to="item.route"
         class="nav-item"
-        :class="{ active: $route.path.startsWith(item.activePath) }"
+        :class="{ active: isNavActive(item) }"
         :title="item.label"
       >
         <i v-if="item.iconClass" :class="item.iconClass"></i>
@@ -83,9 +83,7 @@ const DOMAIN_NAV = {
     { key: 'ui.sidebar.reviews', label: '代码审查', route: '/reviews', activePath: '/reviews', iconClass: 'el-icon-view' },
     { key: 'ui.sidebar.builds', label: '构建管理', route: '/builds', activePath: '/builds', iconClass: 'el-icon-s-tools' },
   ],
-  edu: [
-    { key: 'ui.sidebar.courses', label: '教学空间', route: '/education', activePath: '/education', iconClass: 'el-icon-reading' },
-  ],
+  edu: [],
   office: [
     { key: 'ui.sidebar.documents', label: '公文管理', route: '/documents', activePath: '/documents', iconClass: 'el-icon-document' },
     { key: 'ui.sidebar.meetings', label: '会议管理', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
@@ -113,6 +111,20 @@ export default {
     activeDomain() {
       return this.$store.getters['workspace/activeDomain']
     },
+    activeCourse() {
+      return this.$store.getters['education/activeCourse']
+    },
+    membershipRole() {
+      return this.activeCourse && this.activeCourse.membership_role
+        ? this.activeCourse.membership_role
+        : ''
+    },
+    domainSectionLabel() {
+      if (this.activeDomain !== 'edu') return '领域'
+      if (this.membershipRole === 'student') return '学习领域'
+      if (this.membershipRole === 'teacher') return '教师领域'
+      return '教育领域'
+    },
     commonNavItems() {
       const domain = this.activeDomain || 'rd'
       return COMMON_NAV.filter(item => {
@@ -123,14 +135,71 @@ export default {
     },
     domainNavItems() {
       const domain = this.activeDomain || 'rd'
+      if (domain === 'edu') return this.educationDomainNavItems
       const raw = DOMAIN_NAV[domain] || []
       const items = raw
       return items.filter(item => {
         return checkVisible(this.$store.state.grayscale, domain, item.key)
       })
     },
+    educationDomainNavItems() {
+      const course = this.activeCourse
+      const courseQuery = course ? { courseId: course.id } : {}
+      const teachingRoute = course ? `/education/courses/${course.id}` : '/education'
+      const teachingSpace = {
+        key: 'ui.sidebar.courses',
+        module: 'teaching-space',
+        label: '教学空间',
+        route: { path: teachingRoute, query: courseQuery },
+        activePath: '/education/courses',
+        iconClass: 'el-icon-reading',
+      }
+      if (!course || !this.membershipRole) return [teachingSpace]
+      if (this.membershipRole === 'student') {
+        return [
+          teachingSpace,
+          {
+            key: 'ui.sidebar.mock-exams',
+            module: 'mock-exams',
+            label: '模拟考试',
+            route: { path: '/education/student/mock-exams', query: courseQuery },
+            iconClass: 'el-icon-document-checked',
+          },
+          {
+            key: 'ui.sidebar.mind-maps',
+            module: 'mind-maps',
+            label: '课程思维导图',
+            route: { path: '/education/student/mind-maps', query: courseQuery },
+            iconClass: 'el-icon-share',
+          },
+        ]
+      }
+      return [
+        teachingSpace,
+        {
+          key: 'ui.sidebar.courseware',
+          module: 'courseware',
+          label: 'PPT 与课件',
+          route: { path: '/education/teacher/courseware', query: courseQuery },
+          iconClass: 'el-icon-picture-outline',
+        },
+        {
+          key: 'ui.sidebar.insights',
+          module: 'insights',
+          label: '学生画像与评估',
+          route: { path: '/education/teacher/insights', query: courseQuery },
+          iconClass: 'el-icon-pie-chart',
+        },
+      ]
+    },
   },
   methods: {
+    isNavActive(item) {
+      if (item.module) {
+        return this.$route.meta && this.$route.meta.educationModule === item.module
+      }
+      return Boolean(item.activePath && this.$route.path.startsWith(item.activePath))
+    },
     toggleCollapse() {
       this.collapsed = !this.collapsed
       localStorage.setItem('sidebar_collapsed', this.collapsed ? '1' : '0')
@@ -151,7 +220,7 @@ export default {
 
 <style scoped>
 .sidebar {
-  width: 150px;
+  width: 188px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -216,9 +285,10 @@ export default {
 }
 
 .nav-item.active {
-  background: rgba(64,128,255,0.15);
-  color: #4080ff;
+  background: linear-gradient(90deg, rgba(37, 132, 121, 0.16), rgba(64,128,255,0.08));
+  color: #217b72;
   font-weight: 600;
+  box-shadow: inset 3px 0 #258479;
 }
 
 .nav-section-label {

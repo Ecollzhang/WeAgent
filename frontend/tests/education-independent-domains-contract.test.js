@@ -9,12 +9,24 @@ function contains(relPath, fragment, message) {
   assert.ok(read(relPath).includes(fragment), `${message}: ${relPath}`)
 }
 
-const rail = read('src/components/education/EducationModuleRail.vue')
-assert.ok(rail.includes('Education 教育中心'), 'rail must use a product-domain name')
-assert.ok(rail.includes('教师领域'), 'teacher routes must be labelled as domains')
-assert.ok(rail.includes('学习领域'), 'student routes must be labelled as domains')
-assert.ok(!rail.includes('教学协作台'), 'normal navigation must not be an Agent console')
-assert.ok(!rail.includes('教师工作台'), 'normal navigation must not be a workbench tab set')
+const sidebar = read('src/components/Sidebar/index.vue')
+const shell = read('src/components/education/EducationShell.vue')
+assert.ok(sidebar.includes('教师领域'), 'teacher routes must be labelled as domains')
+assert.ok(sidebar.includes('学习领域'), 'student routes must be labelled as domains')
+assert.ok(sidebar.includes('PPT 与课件'), 'teacher courseware must live in the global sidebar')
+assert.ok(sidebar.includes('学生画像与评估'), 'teacher insight must live in the global sidebar')
+assert.ok(sidebar.includes('模拟考试'), 'student mock exams must live in the global sidebar')
+assert.ok(sidebar.includes('课程思维导图'), 'student mind maps must live in the global sidebar')
+assert.ok(!sidebar.includes('教学协作台'), 'normal navigation must not be an Agent console')
+assert.ok(!sidebar.includes('教师工作台'), 'normal navigation must not be a workbench tab set')
+assert.ok(
+  !shell.includes('EducationModuleRail'),
+  'Education pages must not mount a second product rail'
+)
+assert.ok(
+  shell.includes('EducationCourseContext'),
+  'the shared course selector must live in the Education page header'
+)
 
 contains(
   'src/api/education.js',
@@ -70,6 +82,20 @@ for (const page of [
   'src/views/education/MindMapCenter.vue',
 ]) {
   contains(page, 'EmbeddedAgentRecord', 'Agent detail must be secondary and collapsible')
+}
+
+for (const fragment of [
+  "{ key: 'materials', label: '课件与材料'",
+  "{ key: 'assignments', label: '完成作业'",
+  "{ key: 'weaknesses', label: '作业弱点'",
+  "activeTab === 'weaknesses'",
+  'student-published-assets',
+]) {
+  contains(
+    'src/views/education/CourseSpace.vue',
+    fragment,
+    'student teaching space must contain materials, assignments, and weakness'
+  )
 }
 
 contains('src/router/index.js', '/education/help', 'help center route must exist')

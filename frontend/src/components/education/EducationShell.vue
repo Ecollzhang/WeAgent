@@ -1,10 +1,9 @@
 <template>
   <div class="education-page">
     <AppSidebar />
-    <EducationModuleRail />
     <main class="education-main">
       <header class="education-header">
-        <div>
+        <div class="title-block">
           <button
             v-if="backTo"
             type="button"
@@ -18,6 +17,7 @@
           <h1>{{ title }}</h1>
           <p v-if="subtitle">{{ subtitle }}</p>
         </div>
+        <EducationCourseContext />
         <div class="header-actions">
           <slot name="actions"></slot>
         </div>
@@ -31,11 +31,11 @@
 
 <script>
 import AppSidebar from '../Sidebar/index.vue'
-import EducationModuleRail from './EducationModuleRail.vue'
+import EducationCourseContext from './EducationCourseContext.vue'
 
 export default {
   name: 'EducationShell',
-  components: { AppSidebar, EducationModuleRail },
+  components: { AppSidebar, EducationCourseContext },
   props: {
     title: { type: String, required: true },
     subtitle: { type: String, default: '' },
@@ -78,8 +78,9 @@ export default {
   border-bottom: 1px solid #e8edf3;
 }
 
-.education-header > div:first-child {
+.title-block {
   min-width: 0;
+  flex: 1;
 }
 
 .eyebrow {
@@ -128,10 +129,18 @@ p {
   cursor: pointer;
 }
 
+@media (max-width: 1280px) {
+  .education-header {
+    flex-wrap: wrap;
+  }
+  .title-block { flex: 1 1 300px; }
+  .header-actions { margin-left: auto; }
+}
+
 @media (max-width: 900px) {
   .education-page { padding: 0; gap: 0; }
   .education-main { border-radius: 0; }
-  .education-header { padding: 15px 18px; }
+  .education-header { padding: 15px 18px; align-items: stretch; }
   .education-content { padding: 18px; }
 }
 </style>

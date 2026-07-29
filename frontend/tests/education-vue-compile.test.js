@@ -7,7 +7,7 @@ const parser = require('@babel/parser')
 const root = path.resolve(__dirname, '..')
 const files = [
   'src/components/education/EducationShell.vue',
-  'src/components/education/EducationModuleRail.vue',
+  'src/components/education/EducationCourseContext.vue',
   'src/components/education/MindMapTree.vue',
   'src/components/education/CourseCard.vue',
   'src/components/education/SafeHtmlPreview.vue',

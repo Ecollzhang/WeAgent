@@ -61,12 +61,30 @@
         </button>
       </nav>
 
-      <section v-if="activeTab === 'lessons'" class="panel">
+      <section v-if="activeTab === 'lessons' || activeTab === 'materials'" class="panel">
         <div class="section-heading">
           <div>
-            <h2>{{ isTeacher ? '课时与教案' : '本课程学习内容' }}</h2>
-            <p>{{ isTeacher ? '按单元组织课时，编辑教案后发布稳定版本。' : '只展示教师已发布的课时和材料。' }}</p>
+            <h2>{{ isTeacher ? '课时与教案' : '课件与学习材料' }}</h2>
+            <p>{{ isTeacher ? '按单元组织课时，编辑教案后发布稳定版本。' : '下载教师发布的课件与材料，按课时进入学习。' }}</p>
           </div>
+        </div>
+        <div
+          v-if="!isTeacher && assets.length"
+          class="published-assets"
+          data-testid="student-published-assets"
+        >
+          <article v-for="asset in assets" :key="asset.id">
+            <span class="asset-icon"><i class="el-icon-document"></i></span>
+            <div>
+              <b>{{ asset.title }}</b>
+              <small>{{ asset.original_filename }} · {{ sizeLabel(asset.byte_size) }}</small>
+            </div>
+            <el-button
+              size="mini"
+              icon="el-icon-download"
+              @click="downloadPublishedAsset(asset)"
+            >下载</el-button>
+          </article>
         </div>
         <div v-if="flatLessons.length" class="lesson-list" data-testid="course-lesson-list">
           <button
@@ -98,6 +116,46 @@
             plain
             @click="openLessonDialog"
           >创建第一个课时</el-button>
+        </div>
+      </section>
+
+      <section v-if="activeTab === 'weaknesses' && !isTeacher" class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>作业弱点</h2>
+            <p>只根据已提交作业和考试证据定位错因，不根据聊天内容猜测能力。</p>
+          </div>
+          <el-button
+            icon="el-icon-refresh"
+            :loading="weaknessLoading"
+            @click="refreshStudentWeakness"
+          >刷新证据</el-button>
+        </div>
+        <div v-if="weaknessReady" class="weakness-summary" data-testid="student-weakness-summary">
+          <article
+            v-for="(item, index) in weaknessItems"
+            :key="item.knowledge_point"
+          >
+            <span>{{ String(index + 1).padStart(2, '0') }}</span>
+            <div>
+              <b>{{ item.knowledge_point }}</b>
+              <small>尝试 {{ item.attempted_count }} 次 · 错误 {{ item.wrong_count }} 次</small>
+            </div>
+            <strong>{{ Math.round(item.error_rate * 100) }}%</strong>
+          </article>
+          <div v-if="!weaknessItems.length" class="all-clear">
+            <i class="el-icon-circle-check"></i>
+            <span><b>当前没有错误聚集</b><small>继续完成作业，证据会自动更新。</small></span>
+          </div>
+        </div>
+        <div v-else class="small-empty">
+          <i class="el-icon-data-analysis"></i>
+          <p>完成至少一份作业或模拟考试后，这里会形成带证据的弱点分析。</p>
+          <el-button
+            type="primary"
+            plain
+            @click="$router.push({ path: '/education/student/mock-exams', query: { courseId } })"
+          >去完成模拟考试</el-button>
         </div>
       </section>
 
@@ -388,6 +446,7 @@ export default {
   data() {
     return {
       activeTab: 'lessons',
+      weaknessLoading: false,
       lessonDialog: false,
       assignmentDialog: false,
       invitationDialog: false,
@@ -413,12 +472,6 @@ export default {
         lesson_id: '',
         max_score: 100,
       },
-      tabs: [
-        { key: 'lessons', label: '课时', icon: 'el-icon-reading' },
-        { key: 'assignments', label: '作业', icon: 'el-icon-edit-outline' },
-        { key: 'people', label: '成员', icon: 'el-icon-user', teacherOnly: true },
-        { key: 'analytics', label: '学情', icon: 'el-icon-data-analysis', teacherOnly: true },
-      ],
     }
   },
   computed: {
@@ -431,10 +484,29 @@ export default {
     members() { return this.$store.getters['education/members'] || [] },
     analytics() { return this.$store.getters['education/analytics'] || {} },
     productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    assets() { return this.$store.getters['education/assets'] || [] },
+    weakness() { return this.$store.getters['education/weakness'] || {} },
+    weaknessReady() { return this.weakness.data_state === 'ready' },
+    weaknessItems() { return this.weakness.weaknesses || [] },
     rosterAgentRunning() {
       return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
     },
-    visibleTabs() { return this.tabs.filter(tab => !tab.teacherOnly || this.isTeacher) },
+    tabs() {
+      if (!this.isTeacher) {
+        return [
+          { key: 'materials', label: '课件与材料', icon: 'el-icon-reading' },
+          { key: 'assignments', label: '完成作业', icon: 'el-icon-edit-outline' },
+          { key: 'weaknesses', label: '作业弱点', icon: 'el-icon-data-analysis' },
+        ]
+      }
+      return [
+        { key: 'lessons', label: '课时', icon: 'el-icon-reading' },
+        { key: 'assignments', label: '作业', icon: 'el-icon-edit-outline' },
+        { key: 'people', label: '成员', icon: 'el-icon-user' },
+        { key: 'analytics', label: '学情', icon: 'el-icon-data-analysis' },
+      ]
+    },
+    visibleTabs() { return this.tabs },
     genreOptions() {
       if (this.course && this.course.subject_code === 'primary_chinese') {
         return [
@@ -491,6 +563,14 @@ export default {
           courseId: this.courseId,
           productCode: 'roster_import',
         })
+      } else {
+        this.activeTab = ['materials', 'assignments', 'weaknesses'].includes(this.$route.query.tab)
+          ? this.$route.query.tab
+          : 'materials'
+        await Promise.all([
+          this.$store.dispatch('education/fetchAssets', this.courseId),
+          this.$store.dispatch('education/fetchWeakness', this.courseId),
+        ])
       }
     } catch (error) {
       this.$message.error('无法访问该课程，请确认你仍是课程成员')
@@ -591,6 +671,31 @@ export default {
         this.$message.warning('自动复制失败，请手动选择邀请码复制')
       }
     },
+    async downloadPublishedAsset(asset) {
+      try {
+        const blob = await this.$store.dispatch('education/downloadAsset', asset)
+        const objectUrl = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = objectUrl
+        link.download = asset.original_filename || asset.title
+        link.click()
+        URL.revokeObjectURL(objectUrl)
+      } catch (error) {
+        this.$message.error('文件下载失败')
+      }
+    },
+    async refreshStudentWeakness() {
+      if (this.weaknessLoading) return
+      this.weaknessLoading = true
+      try {
+        await this.$store.dispatch('education/refreshWeakness', this.courseId)
+        this.$message.success('弱点证据已更新')
+      } catch (error) {
+        this.$message.error('弱点证据刷新失败')
+      } finally {
+        this.weaknessLoading = false
+      }
+    },
     async handleCreateAssignment() {
       try {
         await this.$store.dispatch('education/createAssignment', {
@@ -689,6 +794,12 @@ export default {
       if (value === undefined || value === null) return '—'
       return `${Math.round(value <= 1 ? value * 100 : value)}%`
     },
+    sizeLabel(value) {
+      const size = Number(value || 0)
+      if (size < 1024) return `${size} B`
+      if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+      return `${(size / 1024 / 1024).toFixed(1)} MB`
+    },
   },
 }
 </script>
@@ -741,6 +852,33 @@ export default {
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-grid-three { grid-template-columns: 1.2fr 1.2fr .8fr; }
 .small-empty .el-button { margin-top: 12px; }
+.published-assets { display: grid; gap: 9px; margin-bottom: 16px; }
+.published-assets article {
+  display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 11px;
+  padding: 12px 14px; border: 1px solid #dfe9e6; border-radius: 10px;
+  background: linear-gradient(100deg, #f7fbfa, #fff);
+}
+.asset-icon {
+  width: 36px; height: 36px; display: grid; place-items: center;
+  border-radius: 9px; background: #e4f3ef; color: #27887e;
+}
+.published-assets b, .published-assets small { display: block; }
+.published-assets small { margin-top: 4px; color: #83908f; font-size: 11px; }
+.weakness-summary { display: grid; gap: 10px; }
+.weakness-summary article {
+  display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 12px;
+  padding: 15px 17px; border: 1px solid #e4e8e6; border-radius: 11px; background: #fff;
+}
+.weakness-summary article > span {
+  width: 34px; height: 34px; display: grid; place-items: center;
+  border-radius: 50%; background: #f7e9e2; color: #a76149; font-weight: 700;
+}
+.weakness-summary b, .weakness-summary small { display: block; }
+.weakness-summary small { margin-top: 4px; color: #84918f; font-size: 11px; }
+.weakness-summary strong { color: #b4654d; font-size: 20px; }
+.all-clear { display: flex; align-items: center; gap: 12px; padding: 18px; color: #3d7f72; }
+.all-clear i { font-size: 26px; }
+.all-clear b, .all-clear small { display: block; }
 @media (max-width: 900px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid-three { grid-template-columns: 1fr; }

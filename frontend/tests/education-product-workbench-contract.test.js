@@ -9,31 +9,29 @@ function contains(relPath, fragment, message) {
   assert.ok(read(relPath).includes(fragment), `${message}: ${relPath}`)
 }
 
-const rail = 'src/components/education/EducationModuleRail.vue'
+const rail = 'src/components/Sidebar/index.vue'
 for (const label of [
   '教学空间',
   'PPT 与课件',
   '学生画像与评估',
   '模拟考试',
-  '作业弱点',
   '课程思维导图',
 ]) {
-  contains(rail, label, `role rail must expose ${label}`)
+  contains(rail, label, `global role navigation must expose ${label}`)
 }
 contains(
   rail,
   'membership_role',
-  'course membership, not a cosmetic role toggle, must drive the rail'
+  'course membership, not a cosmetic role toggle, must drive global navigation'
 )
 contains(
-  rail,
+  'src/components/education/EducationCourseContext.vue',
   'data-testid="education-course-selector"',
-  'mixed-role users need an observable course selector'
+  'mixed-role users need an observable header course selector'
 )
-contains(
-  'src/components/education/EducationShell.vue',
-  'EducationModuleRail',
-  'all Education pages must share the product rail'
+assert.ok(
+  !read('src/components/education/EducationShell.vue').includes('EducationModuleRail'),
+  'all Education pages must remove the duplicate product rail'
 )
 
 const routeContracts = [
