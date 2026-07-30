@@ -86,7 +86,10 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
     assert requests[1][1].endswith(
         "/api/conversations/conversation-1/runtime-preflight"
     )
-    assert requests[1][2]["params"] == {"required_tools": "education_action"}
+    assert requests[1][2]["params"] == {
+        "required_tools": "education_action",
+        "agent_ids": "_edu_1,_edu_3",
+    }
     assert "opaque-run-grant" not in requests[2][2]["json"]["content"]
     assert started["runtime_generation"] == 3
 

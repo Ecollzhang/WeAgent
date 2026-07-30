@@ -301,7 +301,10 @@ class CoreRuntimeClient:
             "GET",
             f"/api/conversations/{conversation['id']}/runtime-preflight",
             authorization,
-            params={"required_tools": "education_action"},
+            params={
+                "required_tools": "education_action",
+                "agent_ids": ",".join(agent_ids),
+            },
         )
         if not preflight.get("ready"):
             try:

@@ -177,11 +177,20 @@ def _template(code):
 def _expire_stale_pending_run(run):
     """Make interrupted background launches retryable after a service restart."""
     started = run.started_at or run.created_at
+    launch_timeout = max(
+        120,
+        int(
+            current_app.config.get(
+                "EDUCATION_AGENT_LAUNCH_TIMEOUT_SECONDS",
+                600,
+            )
+        ),
+    )
     if (
         run.status == "pending"
         and not run.conversation_id
         and started
-        and started < datetime.utcnow() - timedelta(minutes=2)
+        and started < datetime.utcnow() - timedelta(seconds=launch_timeout)
     ):
         run.status = "failed"
         run.error_summary = "Agent 启动过程被中断，请重新运行"

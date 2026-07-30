@@ -531,15 +531,29 @@ class DockerContainerManager:
             raise KeyError(f"Session '{session_id}' not found")
         return session.client.restart_agent(agent_id)
 
-    def preflight_tools(self, session_id: str, required_tools: list[str]) -> dict:
+    def preflight_tools(
+        self,
+        session_id: str,
+        required_tools: list[str],
+        agent_ids: Optional[list[str]] = None,
+    ) -> dict:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
+        requested_agent_ids = {
+            str(agent_id or "").strip()
+            for agent_id in (agent_ids or [])
+            if str(agent_id or "").strip()
+        }
         results = []
+        checked_agent_ids = []
         for config in session.agents_config or []:
             agent_id = str(config.get("agent_id") or "").strip()
             if not agent_id:
                 continue
+            if requested_agent_ids and agent_id not in requested_agent_ids:
+                continue
+            checked_agent_ids.append(agent_id)
             try:
                 result = session.client.preflight_agent_tools(
                     agent_id,
@@ -553,9 +567,18 @@ class DockerContainerManager:
                     "error": str(exc),
                 }
             results.append(result)
+        missing_agent_ids = sorted(
+            requested_agent_ids - set(checked_agent_ids)
+        )
         return {
-            "ready": bool(results) and all(item.get("ready") for item in results),
+            "ready": (
+                bool(results)
+                and not missing_agent_ids
+                and all(item.get("ready") for item in results)
+            ),
             "required_tools": sorted(set(required_tools)),
+            "checked_agent_ids": checked_agent_ids,
+            "missing_agent_ids": missing_agent_ids,
             "agents": results,
             "missing_tools": sorted({
                 tool

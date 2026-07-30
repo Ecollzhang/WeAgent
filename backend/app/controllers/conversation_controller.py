@@ -157,10 +157,16 @@ def runtime_preflight(conversation_id):
         for item in request.args.get('required_tools', '').split(',')
         if item.strip()
     ]
+    agent_ids = [
+        item.strip()
+        for item in request.args.get('agent_ids', '').split(',')
+        if item.strip()
+    ]
     result, error = conversation_service.runtime_preflight(
         conversation_id,
         user_id,
         required_tools,
+        agent_ids=agent_ids,
     )
     if error:
         return error_response(error, code=400)

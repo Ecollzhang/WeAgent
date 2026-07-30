@@ -805,7 +805,13 @@ class ConversationService:
         sandbox_event_bridge.mark_agent_stopped(conversation.id, agent_id)
         return result, None
 
-    def runtime_preflight(self, conversation_id, user_id, required_tools):
+    def runtime_preflight(
+        self,
+        conversation_id,
+        user_id,
+        required_tools,
+        agent_ids=None,
+    ):
         conversation, error = self.get_owned_conversation_or_error(
             conversation_id,
             user_id,
@@ -825,6 +831,7 @@ class ConversationService:
             result = get_manager().preflight_tools(
                 conversation.sandbox_session_id,
                 required,
+                agent_ids=agent_ids or None,
             )
         except Exception as exc:
             return None, str(exc)
