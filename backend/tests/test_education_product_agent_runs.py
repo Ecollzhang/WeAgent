@@ -196,7 +196,10 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
             "course_id": course["id"],
             "lesson_id": lesson["id"],
             "product_code": "courseware",
-            "options": {"requirements": "突出故事弧和读写迁移"},
+            "options": {
+                "requirements": "突出故事弧和读写迁移",
+                "theme_style": "paper_annotation",
+            },
         },
     )
 
@@ -238,8 +241,22 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
         started["prompt"]
     )
     assert "不得创建 .js" in started["prompt"]
+    assert '{"style":"paper_annotation"}' in started["prompt"]
     assert lesson["id"] not in started["prompt"]
     assert "不得自动发布" in started["prompt"]
+
+    invalid_theme = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "lesson_id": lesson["id"],
+            "product_code": "courseware",
+            "options": {"theme_style": "model_invented_css"},
+        },
+    )
+    assert invalid_theme.status_code == 400
+    assert "supported presentation style" in invalid_theme.get_json()["error"]
 
 
 def test_teacher_starts_agent_roster_import_with_structured_member_rows(

@@ -161,6 +161,8 @@ def export_pptx(source, fallback_title):
         from pptx.dml.color import RGBColor
         from pptx.enum.shapes import MSO_SHAPE
         from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+        from pptx.oxml.ns import qn
+        from pptx.oxml.xmlchemy import OxmlElement
         from pptx.util import Inches, Pt
     except ImportError as exc:
         raise ContentExportError("python-pptx adapter is unavailable") from exc
@@ -170,6 +172,18 @@ def export_pptx(source, fallback_title):
 
     def rgb(value):
         return RGBColor.from_string(str(value or "#000000").lstrip("#").upper())
+
+    def set_run_font(run, size, color, bold=False):
+        run.font.name = theme["font"]
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        run.font.color.rgb = rgb(color)
+        properties = run._r.get_or_add_rPr()
+        east_asian = properties.find(qn("a:ea"))
+        if east_asian is None:
+            east_asian = OxmlElement("a:ea")
+            properties.append(east_asian)
+        east_asian.set("typeface", theme["font"])
 
     def add_shape(slide, shape_type, left, top, width, height, color):
         shape = slide.shapes.add_shape(
@@ -213,10 +227,7 @@ def export_pptx(source, fallback_title):
         paragraph.alignment = align
         run = paragraph.add_run()
         run.text = str(text)
-        run.font.name = theme["font"]
-        run.font.size = Pt(size)
-        run.font.bold = bold
-        run.font.color.rgb = rgb(color)
+        set_run_font(run, size, color, bold)
         return box
 
     def decorate(slide, *, cover=False):
@@ -315,11 +326,10 @@ def export_pptx(source, fallback_title):
                 paragraph.level = 0
                 paragraph.space_after = Pt(11 if font_size >= 20 else 7)
                 paragraph.line_spacing = 1.12
-                paragraph.font.name = theme["font"]
-                paragraph.font.size = Pt(font_size)
-                paragraph.font.color.rgb = rgb(theme["text"])
                 if len(lines) > 2:
                     paragraph.text = f"•  {paragraph.text}"
+                for run in paragraph.runs:
+                    set_run_font(run, font_size, theme["text"])
 
     presentation = Presentation()
     presentation.slide_width = Inches(13.333)

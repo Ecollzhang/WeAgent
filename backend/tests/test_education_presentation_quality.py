@@ -89,6 +89,14 @@ def test_pptx_export_is_editable_readable_and_theme_specific(style):
 
     assert len(deck.slides) == 3
     assert deck.core_properties.subject == style
+    assert any(
+        run.font.name == "Noto Sans SC"
+        for shape in deck.slides[0].shapes
+        if shape.has_text_frame
+        for paragraph in shape.text_frame.paragraphs
+        for run in paragraph.runs
+        if run.text.strip()
+    )
 
     cover_sizes = [
         size

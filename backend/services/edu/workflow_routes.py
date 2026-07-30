@@ -777,6 +777,19 @@ def _product_options(payload, product_code=None):
         if not 5 <= duration <= 180:
             raise ValueError("duration_minutes must be between 5 and 180")
         normalized["duration_minutes"] = duration
+    if product_code == "courseware":
+        theme_style = str(
+            normalized.get("theme_style") or "clear_classroom"
+        ).strip()
+        allowed_styles = {
+            "clear_classroom",
+            "paper_annotation",
+            "storybook",
+            "dark_focus",
+        }
+        if theme_style not in allowed_styles:
+            raise ValueError("theme_style is not a supported presentation style")
+        normalized["theme_style"] = theme_style
     if product_code == "roster_import":
         members = normalized.get("members")
         if not isinstance(members, list) or not 1 <= len(members) <= 100:

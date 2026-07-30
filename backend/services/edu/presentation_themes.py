@@ -17,7 +17,7 @@ PRESENTATION_THEMES = {
         "accent": "#E99B4B",
         "text": "#203633",
         "muted": "#6B817C",
-        "font": "Microsoft YaHei",
+        "font": "Noto Sans SC",
     },
     "paper_annotation": {
         "label": "纸张批注",
@@ -28,7 +28,7 @@ PRESENTATION_THEMES = {
         "accent": "#C9563F",
         "text": "#312E29",
         "muted": "#766D62",
-        "font": "Microsoft YaHei",
+        "font": "Noto Sans SC",
     },
     "storybook": {
         "label": "童趣绘本",
@@ -40,7 +40,7 @@ PRESENTATION_THEMES = {
         "secondary": "#71BEB4",
         "text": "#29364C",
         "muted": "#72809A",
-        "font": "Microsoft YaHei",
+        "font": "Noto Sans SC",
     },
     "dark_focus": {
         "label": "深色聚焦",
@@ -51,7 +51,7 @@ PRESENTATION_THEMES = {
         "accent": "#FBBF24",
         "text": "#F8FAFC",
         "muted": "#CBD5E1",
-        "font": "Microsoft YaHei",
+        "font": "Noto Sans SC",
     },
 }
 
