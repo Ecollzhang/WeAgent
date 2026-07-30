@@ -13,7 +13,10 @@ from app.services.agent_service import agent_service
 from app.services.builtin_tool_definitions import get_builtin_tool_definition
 from app.services.capability_projection_service import build_capability_projection
 from app.services.capability_service import capability_service
-from app.services.conversation_service import _trusted_education_runtime_env
+from app.services.conversation_service import (
+    _trusted_education_runtime_env,
+    _validate_education_runtime_grant,
+)
 
 
 def test_education_action_is_a_real_bounded_builtin_tool_definition():
@@ -75,6 +78,55 @@ def test_education_runtime_context_rejects_malformed_or_conflicting_grants():
         _trusted_education_runtime_env(malformed, kb_domain="edu")
     with pytest.raises(ValueError, match="conflicting"):
         _trusted_education_runtime_env(conflicting, kb_domain="edu")
+
+
+def test_education_runtime_grant_requires_live_actor_scoped_verification(
+    monkeypatch,
+    core_app,
+):
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"valid": True}
+
+    def verify(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.requests.post",
+        verify,
+    )
+    with core_app.app_context():
+        assert _validate_education_runtime_grant("A" * 48, "teacher") is True
+
+    assert calls[0][0].endswith("/api/edu/tool-grants/verify-runtime")
+    assert calls[0][1]["headers"] == {"X-Education-Run-Grant": "A" * 48}
+    assert calls[0][1]["json"] == {"actor_user_id": "teacher"}
+    assert calls[0][1]["timeout"] == (2, 5)
+
+
+def test_forged_education_runtime_grant_does_not_enable_server_credentials(
+    monkeypatch,
+    core_app,
+):
+    class Response:
+        status_code = 403
+
+        @staticmethod
+        def json():
+            return {"valid": False}
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.requests.post",
+        lambda *_args, **_kwargs: Response(),
+    )
+    with core_app.app_context():
+        assert _validate_education_runtime_grant("A" * 48, "teacher") is False
 
 
 def test_sandbox_education_action_uses_only_server_projected_scope(monkeypatch):

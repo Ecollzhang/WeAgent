@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta
 
 from flask import current_app
+import requests
 
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -51,6 +52,27 @@ def _trusted_education_runtime_env(agent_configs, kb_domain=''):
             'http://host.docker.internal:5102',
         ).rstrip('/'),
     }
+
+
+def _validate_education_runtime_grant(token, actor_user_id):
+    """Confirm the opaque runtime grant belongs to the authenticated actor."""
+    base_url = str(
+        current_app.config.get(
+            'EDUCATION_RUNTIME_VALIDATION_URL',
+            'http://127.0.0.1:5102',
+        )
+    ).rstrip('/')
+    try:
+        response = requests.post(
+            f'{base_url}/api/edu/tool-grants/verify-runtime',
+            headers={'X-Education-Run-Grant': str(token or '')},
+            json={'actor_user_id': str(actor_user_id or '')},
+            timeout=(2, 5),
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return False
+    return response.status_code == 200 and payload.get('valid') is True
 
 
 def _trusted_rag_scope(conversation, user_id, kb_domain=''):
@@ -183,6 +205,8 @@ class ConversationService:
         data = conversation.to_dict()
         data.pop('sandbox_snapshot_path', None)
         data.pop('sandbox_snapshot_sha256', None)
+        data.pop('sandbox_server_fallback', None)
+        data.pop('sandbox_agent_adapters', None)
         data['sandbox_runtime'] = {
             'status': conversation.sandbox_status,
             'generation': conversation.sandbox_generation or 1,
@@ -206,6 +230,20 @@ class ConversationService:
             owner_id=owner_id,
             workspace_id=workspace_id,
         )
+        conversation.kb_domain = (
+            str(kb_domain or '').strip()
+            if str(kb_domain or '').strip() in {'rd', 'edu', 'office'}
+            else ''
+        )
+        allowed_adapters = {'claude', 'codex', 'opencode'}
+        conversation.sandbox_agent_adapters = {
+            str(agent_id): adapter
+            for agent_id, config in (agent_configs or {}).items()
+            if isinstance(config, dict)
+            for adapter in [str(config.get('adapter_name') or '').strip()]
+            if adapter in allowed_adapters
+        }
+        db.session.commit()
 
         # Add owner as participant with display info
         info = _participant_display_info('user', owner_id)
@@ -286,8 +324,16 @@ class ConversationService:
     def _create_single_agent_sandbox(self, conversation, participant, user_id, kb_domain=''):
         return self._create_agent_sandbox(conversation, [participant], user_id, kb_domain=kb_domain)
 
-    def _create_agent_sandbox(self, conversation, participants, user_id, kb_domain='',
-                              agent_configs=None):
+    def _create_agent_sandbox(
+        self,
+        conversation,
+        participants,
+        user_id,
+        kb_domain='',
+        agent_configs=None,
+        allow_server_fallback=False,
+        rehydrating=False,
+    ):
         try:
             education_runtime_env = _trusted_education_runtime_env(
                 agent_configs,
@@ -295,9 +341,20 @@ class ConversationService:
             )
         except ValueError as exc:
             return str(exc)
+        if education_runtime_env:
+            valid = _validate_education_runtime_grant(
+                education_runtime_env['EDUCATION_RUN_GRANT'],
+                user_id,
+            )
+            if not valid:
+                return 'Education runtime authorization is invalid'
+            allow_server_fallback = True
+            conversation.sandbox_server_fallback = True
+        elif not rehydrating:
+            conversation.sandbox_server_fallback = False
         env_vars, error = settings_service.get_container_env_vars(
             user_id,
-            allow_server_fallback=bool(education_runtime_env),
+            allow_server_fallback=bool(allow_server_fallback),
         )
         if error:
             return error
@@ -523,7 +580,23 @@ class ConversationService:
             item for item in conversation.participants
             if item.participant_type == 'agent'
         ]
-        error = self._create_agent_sandbox(conversation, participants, user_id)
+        saved_adapters = {
+            str(agent_id): {'adapter_name': adapter}
+            for agent_id, adapter in (
+                conversation.sandbox_agent_adapters or {}
+            ).items()
+        }
+        error = self._create_agent_sandbox(
+            conversation,
+            participants,
+            user_id,
+            kb_domain=conversation.kb_domain or '',
+            agent_configs=saved_adapters,
+            allow_server_fallback=bool(
+                conversation.sandbox_server_fallback
+            ),
+            rehydrating=True,
+        )
         if error:
             conversation.sandbox_status = 'error'
             db.session.commit()

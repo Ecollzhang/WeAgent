@@ -18,6 +18,9 @@ class Conversation(BaseModel):
                                nullable=False, default='pending')
     workspace_id = db.Column(db.String(36), db.ForeignKey('workspaces.id',
                                 ondelete='SET NULL'), nullable=True)
+    kb_domain = db.Column(db.String(20), nullable=False, default='')
+    sandbox_server_fallback = db.Column(db.Boolean, nullable=False, default=False)
+    sandbox_agent_adapters = db.Column(db.JSON, nullable=False, default=dict)
     last_active_at = db.Column(db.DateTime, nullable=True)
     stopped_at = db.Column(db.DateTime, nullable=True)
     sandbox_generation = db.Column(db.Integer, nullable=False, default=1)

@@ -10,6 +10,7 @@ from .tool_gateway import (
     catalog_for_role,
     invoke_tool,
     issue_tool_grant,
+    resolve_grant,
 )
 from .tool_models import EducationToolCall, EducationToolGrant
 
@@ -21,6 +22,29 @@ def _error(error):
     return jsonify(
         {"error": error.message, "error_code": error.error_code}
     ), error.status_code
+
+
+@education_tool_api.post("/tool-grants/verify-runtime")
+def verify_runtime_grant():
+    """Verify one opaque grant for the core runtime without exposing its scope."""
+    token = str(
+        request.headers.get("X-Education-Run-Grant") or ""
+    ).strip()
+    actor_user_id = str(
+        (request.get_json(silent=True) or {}).get("actor_user_id") or ""
+    ).strip()
+    try:
+        grant = resolve_grant(token)
+    except ToolGatewayError:
+        db.session.rollback()
+        return jsonify({"valid": False}), 403
+    if (
+        not actor_user_id
+        or grant.actor_user_id != actor_user_id
+        or "builtin:education_actions" not in (grant.capability_ids or [])
+    ):
+        return jsonify({"valid": False}), 403
+    return jsonify({"valid": True})
 
 
 @education_tool_api.get("/tools/catalog")

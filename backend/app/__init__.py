@@ -117,6 +117,12 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_at DATETIME DEFAULT NULL'))
             if 'workspace_id' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(36) DEFAULT NULL'))
+            if 'kb_domain' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_domain VARCHAR(20) NOT NULL DEFAULT ""'))
+            if 'sandbox_server_fallback' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_server_fallback BOOLEAN NOT NULL DEFAULT 0'))
+            if 'sandbox_agent_adapters' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_agent_adapters JSON DEFAULT NULL'))
             conn.commit()
 
     # workspaces table — sub_role column

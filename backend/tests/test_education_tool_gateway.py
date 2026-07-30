@@ -90,6 +90,47 @@ def invoke(client, token, tool_name, arguments=None, idempotency_key=None):
     )
 
 
+def test_runtime_grant_verification_is_opaque_and_actor_scoped(app):
+    client = app.test_client()
+    teacher, _student, course = setup_course(client, app)
+    issued = client.post(
+        "/api/edu/tool-grants",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "allowed_tools": ["edu.course.context.get"],
+            "agent_run_id": "runtime-verification",
+            "capability_ids": ["builtin:education_actions"],
+        },
+    )
+    assert issued.status_code == 201
+    grant = issued.get_json()
+
+    valid = client.post(
+        "/api/edu/tool-grants/verify-runtime",
+        headers={"X-Education-Run-Grant": grant["token"]},
+        json={"actor_user_id": "teacher"},
+    )
+    assert valid.status_code == 200
+    assert valid.get_json() == {"valid": True}
+
+    wrong_actor = client.post(
+        "/api/edu/tool-grants/verify-runtime",
+        headers={"X-Education-Run-Grant": grant["token"]},
+        json={"actor_user_id": "student"},
+    )
+    assert wrong_actor.status_code == 403
+    assert grant["token"] not in wrong_actor.get_data(as_text=True)
+
+    forged = client.post(
+        "/api/edu/tool-grants/verify-runtime",
+        headers={"X-Education-Run-Grant": "A" * 48},
+        json={"actor_user_id": "teacher"},
+    )
+    assert forged.status_code == 403
+    assert grant["token"] not in forged.get_data(as_text=True)
+
+
 def question_payload():
     return {
         "title": "Emotion inference",

@@ -81,6 +81,9 @@ def lifecycle_app():
             id="conversation-1",
             owner_id=user.id,
             title="Durable education chat",
+            kb_domain="edu",
+            sandbox_server_fallback=True,
+            sandbox_agent_adapters={"agent-1": "codex"},
             sandbox_session_id="conversation-1",
             sandbox_status="running",
             sandbox_generation=1,
@@ -156,6 +159,7 @@ def test_expired_runtime_is_snapshotted_and_stopped_without_deleting_chat(
 
 def test_stopped_runtime_rehydrates_snapshot_as_a_new_generation(lifecycle_app):
     manager = FakeManager()
+    captured = {}
     with lifecycle_app.app_context():
         conversation = Conversation.query.get("conversation-1")
         conversation_service.snapshot_sandbox(conversation, manager=manager)
@@ -165,6 +169,7 @@ def test_stopped_runtime_rehydrates_snapshot_as_a_new_generation(lifecycle_app):
         db.session.commit()
 
         def fake_create(target, participants, user_id, **kwargs):
+            captured.update(kwargs)
             manager.session = SimpleNamespace(
                 session_id=target.id,
                 container_id="container-2",
@@ -198,3 +203,9 @@ def test_stopped_runtime_rehydrates_snapshot_as_a_new_generation(lifecycle_app):
         assert conversation.stopped_at is None
         assert manager.restored[0][0] == "conversation-1"
         assert manager.restored[0][1] == _workspace_zip()
+        assert captured == {
+            "kb_domain": "edu",
+            "agent_configs": {"agent-1": {"adapter_name": "codex"}},
+            "allow_server_fallback": True,
+            "rehydrating": True,
+        }

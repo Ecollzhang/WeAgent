@@ -54,6 +54,10 @@ class Config:
         'EDUCATION_SERVICE_URL',
         'http://host.docker.internal:5102',
     )
+    EDUCATION_RUNTIME_VALIDATION_URL = os.getenv(
+        'EDUCATION_RUNTIME_VALIDATION_URL',
+        'http://127.0.0.1:5102',
+    )
 
 
 class DevelopmentConfig(Config):
