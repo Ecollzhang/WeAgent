@@ -56,7 +56,10 @@ def create_conversation():
 @jwt_required()
 def get_conversation(conversation_id):
     """Get conversation detail."""
-    result, error = conversation_service.get_conversation_detail(conversation_id)
+    result, error = conversation_service.get_conversation_detail(
+        conversation_id,
+        get_jwt_identity(),
+    )
 
     if error:
         return error_response(error, code=404)

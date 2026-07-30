@@ -47,7 +47,10 @@ def send_message():
     )
 
     if error:
-        return error_response(error, code=400)
+        return error_response(
+            error,
+            code=404 if error == 'Conversation not found' else 400,
+        )
 
     return success_response(result, message='Message sent', code=201)
 
@@ -60,7 +63,10 @@ def get_messages(conversation_id):
     per_page = request.args.get('per_page', 50, type=int)
 
     result, error = message_service.get_conversation_messages(
-        conversation_id, page=page, per_page=per_page
+        conversation_id,
+        get_jwt_identity(),
+        page=page,
+        per_page=per_page,
     )
 
     if error:
@@ -73,7 +79,7 @@ def get_messages(conversation_id):
 @jwt_required()
 def toggle_pin(message_id):
     """Toggle pin status of a message."""
-    result, error = message_service.toggle_pin(message_id)
+    result, error = message_service.toggle_pin(message_id, get_jwt_identity())
 
     if error:
         return error_response(error, code=404)
@@ -85,10 +91,13 @@ def toggle_pin(message_id):
 @jwt_required()
 def get_pinned(conversation_id):
     """Get pinned messages for a conversation."""
-    result, error = message_service.get_pinned_messages(conversation_id)
+    result, error = message_service.get_pinned_messages(
+        conversation_id,
+        get_jwt_identity(),
+    )
 
     if error:
-        return error_response(error, code=400)
+        return error_response(error, code=404)
 
     return success_response(result)
 
@@ -102,7 +111,11 @@ def poll_messages(conversation_id):
         after (str, optional): message ID — only return messages newer than this.
     """
     after = request.args.get('after')
-    result, error = message_service.poll_messages(conversation_id, after=after)
+    result, error = message_service.poll_messages(
+        conversation_id,
+        get_jwt_identity(),
+        after=after,
+    )
     if error:
         return error_response(error, code=404)
     return success_response(result)
@@ -125,9 +138,12 @@ def stream_messages(conversation_id):
         return error_response('Missing token', code=401)
 
     try:
-        decode_token(token)
+        token_payload = decode_token(token)
     except Exception:
         return error_response('Invalid token', code=401)
+    user_id = token_payload.get('sub')
+    if not message_service.can_access_conversation(conversation_id, user_id):
+        return error_response('Conversation not found', code=404)
 
     after = request.args.get('after')
 
@@ -137,7 +153,11 @@ def stream_messages(conversation_id):
         last_after = after
 
         # Phase 1: catch-up — send any messages already in DB
-        result, error = message_service.poll_messages(conversation_id, after=last_after)
+        result, error = message_service.poll_messages(
+            conversation_id,
+            user_id,
+            after=last_after,
+        )
         if not error and result and result.get('items'):
             for msg in result['items']:
                 yield _format_sse(msg)

@@ -353,7 +353,10 @@ class SandboxStage0BaselineTest(unittest.TestCase):
         self.db.session.add_all([user, conversation, message])
         self.db.session.commit()
 
-        result, error = message_service.get_conversation_messages("conversation-1")
+        result, error = message_service.get_conversation_messages(
+            "conversation-1",
+            user.id,
+        )
 
         self.assertIsNone(error)
         elements = result["items"][0]["elements"]

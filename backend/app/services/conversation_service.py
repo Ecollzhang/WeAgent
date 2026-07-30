@@ -614,12 +614,25 @@ class ConversationService:
             result.append(conv_data)
         return result, None
 
-    def get_conversation_detail(self, conversation_id):
+    def get_conversation_detail(self, conversation_id, user_id):
         """Get conversation detail."""
         conversation = conversation_repo.get_by_id(conversation_id)
-        if not conversation:
+        if not conversation or not self.user_can_access(conversation, user_id):
             return None, 'Conversation not found'
         return self._conv_to_dict(conversation), None
+
+    @staticmethod
+    def user_can_access(conversation, user_id):
+        """Return whether a user is an explicit participant of a conversation."""
+        if not conversation or not user_id:
+            return False
+        if conversation.owner_id == user_id:
+            return True
+        return any(
+            participant.participant_type == 'user'
+            and participant.participant_id == user_id
+            for participant in conversation.participants
+        )
 
     def get_owned_conversation_or_error(self, conversation_id, user_id):
         conversation = conversation_repo.get_by_id(conversation_id)

@@ -274,12 +274,35 @@ def _parse_markdown_table_row(line):
 class MessageService:
     """Message business logic."""
 
+    @staticmethod
+    def _conversation_for_user(conversation_id, user_id):
+        conversation = conversation_repo.get_by_id(conversation_id)
+        if not conversation or not user_id:
+            return None
+        if conversation.owner_id == user_id:
+            return conversation
+        if any(
+            participant.participant_type == 'user'
+            and participant.participant_id == user_id
+            for participant in conversation.participants
+        ):
+            return conversation
+        return None
+
+    def can_access_conversation(self, conversation_id, user_id):
+        return self._conversation_for_user(conversation_id, user_id) is not None
+
     def send_message(self, conversation_id, sender_type, sender_id, content,
                      message_type='text', parent_message_id=None, artifact_id=None,
                      target_agent_ids=None, agent_configs=None, workflow=None):
         """Send a message in a conversation."""
         conversation = conversation_repo.get_by_id(conversation_id)
         if not conversation:
+            return None, 'Conversation not found'
+        if (
+            sender_type == 'user'
+            and not self._conversation_for_user(conversation_id, sender_id)
+        ):
             return None, 'Conversation not found'
 
         agent_participants = [p for p in conversation.participants if p.participant_type == 'agent']
@@ -2413,9 +2436,11 @@ class MessageService:
             'sender_name': self._sender_name_for_message(msg),
         }, room=msg.conversation_id)
 
-    def get_conversation_messages(self, conversation_id, page=1, per_page=50):
+    def get_conversation_messages(
+        self, conversation_id, user_id, page=1, per_page=50
+    ):
         """Get paginated messages for a conversation."""
-        conversation = conversation_repo.get_by_id(conversation_id)
+        conversation = self._conversation_for_user(conversation_id, user_id)
         if not conversation:
             return None, 'Conversation not found'
 
@@ -2435,9 +2460,9 @@ class MessageService:
             'pages': pagination.pages,
         }, None
 
-    def poll_messages(self, conversation_id, after=None):
+    def poll_messages(self, conversation_id, user_id, after=None):
         """Get messages newer than a reference message ID (by created_at)."""
-        conversation = conversation_repo.get_by_id(conversation_id)
+        conversation = self._conversation_for_user(conversation_id, user_id)
         if not conversation:
             return None, 'Conversation not found'
 
@@ -2445,7 +2470,7 @@ class MessageService:
 
         if after:
             ref = Message.query.get(after)
-            if ref:
+            if ref and ref.conversation_id == conversation_id:
                 query = query.filter(Message.created_at > ref.created_at)
 
         messages = query.order_by(
@@ -2459,15 +2484,23 @@ class MessageService:
 
         return {'items': items}, None
 
-    def toggle_pin(self, message_id):
+    def toggle_pin(self, message_id, user_id):
         """Toggle pin status of a message."""
+        candidate = message_repo.get_by_id(message_id)
+        if (
+            not candidate
+            or not self._conversation_for_user(candidate.conversation_id, user_id)
+        ):
+            return None, 'Message not found'
         message = message_repo.toggle_pin(message_id)
         if not message:
             return None, 'Message not found'
         return {'id': message.id, 'is_pinned': message.is_pinned}, None
 
-    def get_pinned_messages(self, conversation_id):
+    def get_pinned_messages(self, conversation_id, user_id):
         """Get pinned messages for a conversation."""
+        if not self._conversation_for_user(conversation_id, user_id):
+            return None, 'Conversation not found'
         messages = message_repo.get_pinned_messages(conversation_id)
         return [msg.to_dict() for msg in messages], None
 
