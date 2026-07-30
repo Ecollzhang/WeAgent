@@ -109,3 +109,62 @@
 - 删除 sandbox 后旧聊天、Workflow、正式产物和已快照预览仍可打开；继续聊天创建新
   runtime generation。
 - 多风格阶段至少四种风格通过逐页截图视觉检查和 PowerPoint/LibreOffice 打开验证。
+
+## 10. 2026-07-30 成品验收（替代第 9 节待验收状态）
+
+结论：统一导航、真实多用户教学闭环、业务页与聊天双向关联、强制 Agent 正式写入、
+sandbox 快照恢复以及可编辑课件输出均已通过。第 9 节列出的本阶段合同不再处于“待验收”
+状态。
+
+### 10.1 真实多用户与浏览器
+
+- 教师全局领域固定为“教学空间 / PPT 与课件 / 学生画像与评估”；学生固定为
+  “教学空间 / 模拟考试 / 课程思维导图”。课程内不再重复领域导航。
+- 学生教学空间已真实完成“课件与材料 / 完成作业 / 作业弱点”：提交后状态为已完成，
+  编辑器锁定，教师释放的反馈可读；作业弱点只从正式评分和反馈中的弱项、改进项、下一步
+  生成，并保留 submission、version、feedback 证据引用。
+- 教师画像显示最高分、最低分、平均分、中位数、完成率、成绩分布和趋势；本次真实课程
+  的正式成绩为 85 分，完成率 100%，弱点建议可回溯至教师反馈。
+- 业务页“返回本次聊天”会直接加载并选中指定会话；聊天顶部可返回业务对象。
+  即使该会话不在当前工作空间列表，前端也会通过对象 ACL 获取并恢复它。
+- 历史上被 `js|json` 前缀正则误识别的 `slide_document.js` 卡片会在读取时安全修复为
+  `slide_document.json`；新消息从源头只生成正确 JSON 文件卡。
+
+### 10.2 真实模型、Agent、工具与课件
+
+- 真实 Product Agent 运行完成 3 个固定 DAG 节点：课程设计师、课件制作师、教学审校员；
+  运行状态依次为 pending、running、completed，各 Agent 输出、进度和文件预览均可见。
+- `edu.courseware.create` 只能由 `_edu_2` 为课件产品调用；错误角色调用会被拒绝并审计。
+  服务端只接受受信任的固定 finalizer，不执行模型提供的任意 finalizer。
+- 课件制作 Agent 先写私有 `slide_document.json` 与 `preview.html`，服务端执行结构校验和
+  逐页视觉 QA；本次第 3 页因文本密度告警被拒绝，定向修复后再次校验并正式写入。
+- 正式源课件为 8 页、`paper_annotation` 风格，支持 `minimal_academic`、
+  `vibrant_classroom`、`modern_dark`、`paper_annotation` 四种主题；可导出
+  PPTX、DOCX、PDF、HTML、JSON。PPTX 含系统封面共 9 页。
+- 实际导出的 PPTX 已渲染为逐页图片并执行 `slides_test.py`；无越界、无重叠告警，
+  montage 人工视觉检查通过，层级、留白、表格和中英文字体可读。
+
+### 10.3 sandbox 回收与恢复
+
+- 对真实 Agent 会话按容器标签精确确认后停止原容器；外部快照的完整性校验通过。
+- 再次预检时 runtime generation 从 1 增加为 2，新容器恢复
+  `slide_document.json`（7827 bytes）与 `preview.html`（9641 bytes）。
+- 旧聊天、工作流、正式 Education 内容和持久快照不依赖旧容器；恢复后的
+  `education_action` 对 `_edu_1/_edu_2/_edu_9` 预检为 ready。
+
+### 10.4 自动化证据
+
+- 后端全量：`410 passed`。
+- 前端合同与 Vue 编译：14 个测试文件全部通过。
+- 前端生产构建：成功；仅保留项目已有的 bundle/图片体积建议警告。
+- Python 编译检查：`app`、`services`、`scripts` 全部通过。
+- `git diff --check`：通过。
+
+### 10.5 验收入口
+
+- Web：`http://127.0.0.1:5182`
+- Core API：`http://127.0.0.1:5002`
+- Education API：`http://127.0.0.1:5102`
+- 最终 UAT 课程：`高中英语读写成品验收 07302201b79b0`
+
+验收日志和文档不保存 `.env` 密钥、JWT、邀请令牌或测试密码。

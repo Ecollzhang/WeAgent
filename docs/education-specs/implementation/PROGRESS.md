@@ -100,3 +100,21 @@
   明确返回 HTML/JSON 无损 fallback，不伪造演示文稿。
 - 补齐 `/api/edu/resources/search` 执行入口：课程 membership 生成服务端 scope，
   客户端伪造 user/domain/course 范围无效；未配置外部 SearchProvider 时回退课程 RAG。
+
+## 2026-07-30 成品 Goal 收口
+
+- 完成角色感知单一全局导航：教师三领域、学生三领域、顶部课程上下文，移除 Education
+  内部重复领域栏。
+- 完成学生教学空间闭环：课件与材料、作业提交/恢复/只读终态、教师反馈、基于正式证据的
+  作业弱点；模拟考试与课程思维导图保持同级独立领域。
+- 完成业务产品运行与聊天双向关联：业务页展示最新运行和协作历史，聊天展示固定工作流、
+  每个 Agent 的输出与产物预览，并能返回业务页面。
+- 固化服务端 Product DAG 与角色绑定工具写入；课件采用大产物文件协议、严格 schema、
+  逐页视觉 QA、最多两次定向修复和 canonical `edu.courseware.create` 写入。
+- 完成四套 PPT 主题、HTML/PPTX/DOCX/PDF/JSON 导出、版本时间、实际 PPTX 渲染和视觉检查。
+- 完成 sandbox 外部快照、TTL、generation 恢复、路径归一化、工具预检和会话对象 ACL；
+  真实运行验证 generation 1 → 2 与课件文件恢复。
+- 修复产品页返回聊天未自动选中会话、历史 JSON 卡片显示为 JS、学生已评分状态未恢复、
+  释放反馈未显示、作业弱点忽略正式反馈等验收缺口。
+- 真实模型 UAT、教师/学生浏览器 UAT、sandbox 回收恢复、PPTX 打开渲染全部通过。
+- 最终回归：后端 `410 passed`，前端 14 个测试文件通过，生产构建和 Python 编译通过。
