@@ -160,6 +160,10 @@ def test_student_starts_scoped_mock_exam_agent_run(education_app):
     assert "edu.mock_exam.create" in started["prompt"]
     assert "question_count=6" in started["prompt"]
     assert "不得传 course_id" in started["prompt"]
+    assert '<tool_call>{"name":"education_action"' in started["prompt"]
+    assert "Action-specific fields MUST be nested under args.arguments" in (
+        started["prompt"]
+    )
     assert len(started["education_run_grant"]) >= 40
     assert started["education_run_grant"] not in started["prompt"]
 
@@ -225,25 +229,36 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
         started["title"],
     )
     assert started["agent_ids"] == ["_edu_1", "_edu_2", "_edu_9"]
+    assert started["workflow"]["execution_mode"] == "server_defined"
     assert "edu.courseware.create" in started["prompt"]
     assert "slide_document" in started["prompt"]
-    assert "mcp__weagent_tools__education_action" in started["prompt"]
-    assert "MCP server `weagent_tools`" in started["prompt"]
-    assert "tool `education_action`" in started["prompt"]
-    assert '"name":"education_action"' in started["prompt"]
-    assert '"args":{"action":"edu.courseware.create","arguments":{' in (
-        started["prompt"]
-    )
-    assert "Action-specific fields MUST be nested under args.arguments" in (
-        started["prompt"]
-    )
+    assert "Education large-artifact finalizer protocol" in started["prompt"]
+    assert "slide_document.json and preview.html" in started["prompt"]
+    assert "trusted server workflow" in started["prompt"]
+    assert "<tool_call>" not in started["prompt"]
     assert "lesson_id is injected from the lesson-scoped Agent run" in (
         started["prompt"]
     )
     assert "不得创建 .js" in started["prompt"]
     assert '{"style":"paper_annotation"}' in started["prompt"]
+    assert (
+        "text, bullets, heading, subheading, quote, key-point, question, "
+        "tip, image, table, timeline, comparison, vocabulary, activity"
+    ) in started["prompt"]
+    assert "Do not use instruction, list, title, paragraph" in started["prompt"]
+    assert "Each block permits only type, content, emphasis, source_ref" in (
+        started["prompt"]
+    )
     assert lesson["id"] not in started["prompt"]
     assert "不得自动发布" in started["prompt"]
+    finalizer_node = next(
+        node
+        for node in started["workflow"]["nodes"]
+        if node["agent_id"] == "_edu_2"
+    )
+    assert finalizer_node["finalizer"] == {
+        "type": "education_courseware_from_agent_files"
+    }
 
     invalid_theme = client.post(
         "/api/edu/product-agent-runs",
@@ -542,6 +557,72 @@ def test_product_run_without_required_durable_tool_write_is_partial(education_ap
     assert run["status"] == "partial"
     assert "edu.mind_map.create" in run["error_summary"]
     assert "未写入" in run["error_summary"]
+
+
+def test_product_run_skips_shared_artifact_repair_and_requires_designated_writer(
+    education_app,
+):
+    from services.edu.tool_models import EducationToolCall, EducationToolGrant
+
+    runtime = FakeProductRuntime()
+
+    def forbidden_workspace_read(**_kwargs):
+        raise AssertionError("product workflows must not inspect collaboration drafts")
+
+    runtime.get_workspace_json = forbidden_workspace_read
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, lesson, teacher, _, _ = seed_course(education_app)
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "lesson_id": lesson["id"],
+            "product_code": "courseware",
+            "options": {"requirements": "make a concise deck"},
+        },
+    ).get_json()
+    with education_app.app_context():
+        grant = EducationToolGrant.query.filter_by(
+            agent_run_id=created["id"]
+        ).one()
+        db.session.add(
+            EducationToolCall(
+                grant_id=grant.id,
+                course_id=course["id"],
+                actor_user_id="teacher",
+                agent_id="_edu_1",
+                tool_name="edu.courseware.create",
+                idempotency_key="historical-wrong-agent-write",
+                input_hash="test",
+                sanitized_input={},
+                status="completed",
+                result_json={"content": {"id": "wrong-agent-content"}},
+            )
+        )
+        db.session.commit()
+    runtime.snapshot = {
+        "status": "done",
+        "agent_runs": [
+            {
+                "agent_id": agent_id,
+                "status": "done",
+                "content": '{"summary":"collaboration complete"}',
+            }
+            for agent_id in ("_edu_1", "_edu_2", "_edu_9")
+        ],
+    }
+
+    refreshed = client.get(
+        f"/api/edu/product-agent-runs/{created['id']}",
+        headers=teacher,
+    )
+
+    assert refreshed.status_code == 200
+    run = refreshed.get_json()
+    assert run["status"] == "partial"
+    assert "edu.courseware.create" in run["error_summary"]
 
 
 def test_invalid_courseware_write_keeps_an_editable_recoverable_draft(

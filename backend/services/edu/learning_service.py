@@ -8,7 +8,7 @@ from datetime import datetime
 from statistics import median
 
 from .access import active_membership
-from .content_models import Assignment, LearningEvent, Lesson, Submission
+from .content_models import Assignment, Feedback, LearningEvent, Lesson, Submission
 from .extensions import db
 from .knowledge_models import (
     AssessmentAnswerVersion,
@@ -470,6 +470,95 @@ def _weakness_projection(evidence):
     return weaknesses, recommendations
 
 
+def _feedback_text_items(value):
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        items = []
+        for row in value:
+            items.extend(_feedback_text_items(row))
+        return items
+    if isinstance(value, dict):
+        items = []
+        for row in value.values():
+            items.extend(_feedback_text_items(row))
+        return items
+    return []
+
+
+def _assignment_feedback_evidence(course_id, student_user_id):
+    assignments = Assignment.query.filter_by(
+        course_id=course_id,
+        status="published",
+    ).all()
+    assignments_by_id = {row.id: row for row in assignments}
+    if not assignments_by_id:
+        return []
+    submissions = Submission.query.filter(
+        Submission.assignment_id.in_(list(assignments_by_id)),
+        Submission.student_user_id == student_user_id,
+        Submission.status == "graded",
+    ).all()
+    evidence = []
+    for submission in submissions:
+        assignment = assignments_by_id[submission.assignment_id]
+        feedback = (
+            Feedback.query.filter_by(
+                submission_version_id=submission.current_version_id,
+                status="released",
+            )
+            .order_by(Feedback.released_at.desc())
+            .first()
+        )
+        feedback_json = feedback.feedback_json if feedback else {}
+        points = []
+        for key in ("weaknesses", "improvements", "next_steps"):
+            points.extend(_feedback_text_items((feedback_json or {}).get(key)))
+        points = list(dict.fromkeys(point for point in points if point))
+        normalized_score = _normalized_score(
+            submission.final_score,
+            assignment.max_score,
+        )
+        if not points:
+            points = [assignment.title]
+        for point in points:
+            evidence.append(
+                {
+                    "source_type": "assignment_feedback",
+                    "submission_id": submission.id,
+                    "assignment_id": assignment.id,
+                    "assignment_title": assignment.title,
+                    "feedback_id": feedback.id if feedback else None,
+                    "item_version_id": submission.current_version_id,
+                    "knowledge_points": [point],
+                    "correct": (
+                        normalized_score >= 80
+                        if not feedback
+                        or not any(
+                            _feedback_text_items((feedback_json or {}).get(key))
+                            for key in ("weaknesses", "improvements", "next_steps")
+                        )
+                        else False
+                    ),
+                    "score": submission.final_score,
+                    "max_score": assignment.max_score,
+                    "explanation": point,
+                    "submitted_at": (
+                        submission.submitted_at.isoformat()
+                        if submission.submitted_at
+                        else None
+                    ),
+                    "graded_at": (
+                        submission.graded_at.isoformat()
+                        if submission.graded_at
+                        else None
+                    ),
+                }
+            )
+    return evidence
+
+
 def create_weakness_snapshot(course_id, actor):
     _student(course_id, actor)
     attempts = (
@@ -485,6 +574,7 @@ def create_weakness_snapshot(course_id, actor):
     for attempt in attempts:
         for row in attempt.evidence_json or []:
             evidence.append({**row, "attempt_id": attempt.id})
+    evidence.extend(_assignment_feedback_evidence(course_id, actor))
     weaknesses, recommendations = _weakness_projection(evidence)
     snapshot = WeaknessAnalysisSnapshot(
         course_id=course_id,
@@ -494,17 +584,7 @@ def create_weakness_snapshot(course_id, actor):
         weaknesses=weaknesses,
         recommendations=recommendations,
         source_fingerprint=_checksum(
-            [
-                {
-                    "attempt_id": attempt.id,
-                    "updated_at": (
-                        attempt.updated_at.isoformat()
-                        if attempt.updated_at
-                        else None
-                    ),
-                }
-                for attempt in attempts
-            ]
+            evidence
         ),
     )
     db.session.add(snapshot)
@@ -763,7 +843,13 @@ def refresh_student_insights(course_id, actor):
             for attempt in attempts
             for row in (attempt.evidence_json or [])
         ]
-        weaknesses, recommendations = _weakness_projection(item_evidence)
+        assignment_feedback_evidence = _assignment_feedback_evidence(
+            course_id,
+            membership.user_id,
+        )
+        weaknesses, recommendations = _weakness_projection(
+            item_evidence + assignment_feedback_evidence
+        )
         objective = [
             row for row in item_evidence if row.get("correct") is not None
         ]
@@ -859,7 +945,12 @@ def refresh_student_insights(course_id, actor):
             data_state=data_state,
             summary_json={
                 "accuracy": accuracy,
-                "evidence_count": len(item_evidence),
+                "evidence_count": (
+                    len(item_evidence) + len(assignment_feedback_evidence)
+                ),
+                "assignment_feedback_evidence_count": len(
+                    assignment_feedback_evidence
+                ),
                 "attempt_count": len(attempts),
                 "official_score_count": len(official_scores),
                 "official_average_score": (

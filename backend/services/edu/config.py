@@ -39,5 +39,5 @@ class Config:
         os.getenv('EDUCATION_MAX_UPLOAD_BYTES', str(25 * 1024 * 1024))
     )
     EDUCATION_TOOL_GRANT_TTL_SECONDS = int(
-        os.getenv('EDUCATION_TOOL_GRANT_TTL_SECONDS', '900')
+        os.getenv('EDUCATION_TOOL_GRANT_TTL_SECONDS', '1800')
     )

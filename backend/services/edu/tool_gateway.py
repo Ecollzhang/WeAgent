@@ -1071,21 +1071,20 @@ def _courseware_create(grant, arguments):
             )
         raw_theme["style"] = requested_style
         visual_quality = inspect_slide_document(source)
-        if visual_quality["status"] == "failed":
+        if visual_quality["status"] != "passed":
             blocking = [
                 {
                     "slide": slide["number"],
                     "codes": [
                         finding["code"]
                         for finding in slide["findings"]
-                        if finding["severity"] == "error"
                     ],
                 }
                 for slide in visual_quality["slides"]
-                if slide["status"] == "failed"
+                if slide["status"] != "passed"
             ]
             raise ToolGatewayError(
-                "slide_document visual QA failed; repair the listed pages and "
+                "slide_document visual QA did not pass; repair the listed pages and "
                 f"call the tool again: {json.dumps(blocking, ensure_ascii=False)}",
                 400,
                 "courseware_visual_quality_failed",
@@ -1274,6 +1273,37 @@ DISPATCH = {
     "edu.mind_map.create": _mind_map,
 }
 
+PRODUCT_WRITE_AGENT = {
+    ("product.roster_import", "edu.course.members.import"): "_edu_1",
+    ("product.courseware", "edu.courseware.create"): "_edu_2",
+    ("product.student_insight", "edu.student_insight.refresh"): "_edu_4",
+    ("product.mock_exam", "edu.mock_exam.create"): "_edu_6",
+    ("product.weakness_analysis", "edu.weakness.analyze"): "_edu_6",
+    ("product.course_mind_map", "edu.mind_map.create"): "_edu_7",
+}
+
+
+def _validate_product_write_agent(grant, tool_name, agent_id):
+    """Bind every durable product write to the workflow's designated Agent."""
+    if not grant.agent_run_id:
+        return
+    from .workflow_models import EducationAgentRun
+
+    run = EducationAgentRun.query.filter_by(
+        id=grant.agent_run_id,
+        course_id=grant.course_id,
+        requested_by=grant.actor_user_id,
+    ).first()
+    if not run:
+        return
+    expected = PRODUCT_WRITE_AGENT.get((run.workflow_code, tool_name))
+    if expected and str(agent_id or "").strip() != expected:
+        raise ToolGatewayError(
+            f"{tool_name} is assigned to {expected} for this product workflow",
+            403,
+            "agent_not_authorized_for_tool",
+        )
+
 
 def _error_parts(error):
     if isinstance(error, ToolGatewayError):
@@ -1369,6 +1399,7 @@ def invoke_tool(
     db.session.commit()
 
     try:
+        _validate_product_write_agent(grant, tool_name, agent_id)
         result = DISPATCH[tool_name](grant, arguments)
         db.session.flush()
         call = EducationToolCall.query.get(call.id)

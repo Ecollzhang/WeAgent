@@ -3,6 +3,7 @@ import queue
 import uuid
 import json
 import re
+import hashlib
 from flask import current_app
 from sqlalchemy.orm.attributes import flag_modified
 from app import db, socketio
@@ -102,7 +103,7 @@ def _ensure_structured_elements(msg):
     session_id = session_id or msg.conversation_id
 
     elements = list(msg.elements or [])
-    changed = False
+    changed = _repair_legacy_json_file_elements(elements, raw)
 
     for event in events:
         if not isinstance(event, dict):
@@ -178,6 +179,35 @@ def _ensure_structured_elements(msg):
         flag_modified(msg, 'elements')
         db.session.add(msg)
         db.session.commit()
+
+
+def _repair_legacy_json_file_elements(elements, raw):
+    """Repair file cards created by the historical ``js|json`` regex prefix bug."""
+    changed = False
+    for element in elements:
+        if not isinstance(element, dict) or element.get('type') != 'file':
+            continue
+        data = element.get('data')
+        if not isinstance(data, dict):
+            continue
+        path = str(data.get('path') or '')
+        if not path.lower().endswith('.js'):
+            continue
+        json_path = f'{path}on'
+        if json_path not in raw:
+            continue
+        if re.search(rf'{re.escape(path)}(?!on)(?![\w])', raw, re.IGNORECASE):
+            continue
+        data['path'] = json_path
+        for field in ('url', 'name'):
+            value = data.get(field)
+            if isinstance(value, str) and value.lower().endswith('.js'):
+                data[field] = f'{value}on'
+        content = element.get('content')
+        if isinstance(content, str) and content.lower().endswith('.js'):
+            element['content'] = f'{content}on'
+        changed = True
+    return changed
 
 
 def _append_element_once(elements, element):
@@ -435,8 +465,14 @@ class MessageService:
                 self._dispatch_single_agent_round(conversation, agent_participants[0],
                                                   user_content, user_message_id)
             else:
-                self._dispatch_multi_agent_round(conversation, agent_participants,
-                                                 user_content, user_message_id, agent_configs)
+                self._dispatch_multi_agent_round(
+                    conversation,
+                    agent_participants,
+                    user_content,
+                    user_message_id,
+                    agent_configs,
+                    workflow,
+                )
 
     @staticmethod
     def _apply_session_agent_configs(user_content, agent_configs, agent_participants):
@@ -525,9 +561,136 @@ class MessageService:
         return {
             'id': workflow.get('id') or '',
             'name': workflow.get('name') or '未命名工作流',
+            'execution_mode': workflow.get('execution_mode') or 'moderator_planned',
             'nodes': workflow.get('nodes') if isinstance(workflow.get('nodes'), list) else [],
             'edges': workflow.get('edges') if isinstance(workflow.get('edges'), list) else [],
             'parallel_groups': workflow.get('parallel_groups') if isinstance(workflow.get('parallel_groups'), list) else [],
+        }
+
+    @staticmethod
+    def _server_defined_workflow_plan(workflow, workers):
+        """Compile a trusted workflow graph without asking a model to redesign it."""
+        if (
+            not isinstance(workflow, dict)
+            or workflow.get('execution_mode') != 'server_defined'
+        ):
+            return None
+        worker_map = {
+            str(worker.participant_id): worker
+            for worker in (workers or [])
+        }
+        raw_nodes = workflow.get('nodes')
+        raw_edges = workflow.get('edges')
+        if not isinstance(raw_nodes, list) or not raw_nodes:
+            return None
+        if not isinstance(raw_edges, list):
+            return None
+
+        nodes = []
+        node_ids = set()
+        for raw in raw_nodes:
+            if not isinstance(raw, dict) or raw.get('type') != 'agent_task':
+                return None
+            node_id = str(raw.get('id') or '').strip()
+            agent_id = str(raw.get('agent_id') or '').strip()
+            if (
+                not node_id
+                or node_id in node_ids
+                or agent_id not in worker_map
+            ):
+                return None
+            node_ids.add(node_id)
+            finalizer = raw.get('finalizer')
+            if finalizer is not None:
+                if (
+                    finalizer
+                    != {'type': 'education_courseware_from_agent_files'}
+                    or agent_id != '_edu_2'
+                ):
+                    return None
+            nodes.append(
+                {
+                    'id': node_id,
+                    'agent_id': agent_id,
+                    'agent_role': str(raw.get('agent_role') or '').strip(),
+                    'finalizer': finalizer,
+                }
+            )
+
+        incoming = {node['id']: [] for node in nodes}
+        outgoing = {node['id']: [] for node in nodes}
+        for raw in raw_edges:
+            if not isinstance(raw, dict):
+                return None
+            source = str(raw.get('from') or '').strip()
+            target = str(raw.get('to') or '').strip()
+            if (
+                source not in node_ids
+                or target not in node_ids
+                or source == target
+                or target in outgoing[source]
+            ):
+                return None
+            outgoing[source].append(target)
+            incoming[target].append(source)
+
+        remaining = {node['id']: len(incoming[node['id']]) for node in nodes}
+        layers = []
+        completed = set()
+        while len(completed) < len(nodes):
+            layer = [
+                node['id']
+                for node in nodes
+                if node['id'] not in completed and remaining[node['id']] == 0
+            ]
+            if not layer:
+                return None
+            layers.append(layer)
+            completed.update(layer)
+            for source in layer:
+                for target in outgoing[source]:
+                    remaining[target] -= 1
+
+        tasks = []
+        for node in nodes:
+            worker = worker_map[node['agent_id']]
+            worker_name = (
+                getattr(worker, 'participant_name', None)
+                or node['agent_role']
+                or node['agent_id']
+            )
+            tasks.append(
+                {
+                    'task_id': node['id'],
+                    'agent_id': node['agent_id'],
+                    'title': f'{worker_name}执行固定工作流节点',
+                    'instruction': (
+                        f'执行服务端已定义的 {node["agent_role"] or worker_name} 节点。'
+                        '严格只完成用户原始任务中分配给该角色的职责，遵守其中的'
+                        '工具调用、结构化输出、持久化和校验协议；不得重新规划节点、'
+                        '跳过必需业务写入或把沙箱文件当作最终产品。'
+                    ),
+                    'depends_on': list(incoming[node['id']]),
+                    'can_parallel': len(layers) > 1,
+                    **(
+                        {'finalizer': node['finalizer']}
+                        if node.get('finalizer')
+                        else {}
+                    ),
+                }
+            )
+        return {
+            'type': 'plan',
+            'source': 'server_defined_workflow',
+            'workflow_name': str(workflow.get('name') or '固定工作流'),
+            'summary': (
+                f'已按服务端固定工作流“{workflow.get("name") or "未命名工作流"}”'
+                f'编排 {len(tasks)} 个 Agent 节点；模型不会改写节点或依赖关系。'
+            ),
+            'selected_agents': [node['agent_id'] for node in nodes],
+            'tasks': tasks,
+            'parallel_groups': layers,
+            'summary_required': True,
         }
 
     @staticmethod
@@ -714,8 +877,15 @@ class MessageService:
         except Exception as e:
             self._mark_agent_message_failed(agent_msg.id, run.id, str(e))
 
-    def _dispatch_multi_agent_round(self, conversation, agent_participants,
-                                    user_content, user_message_id=None, agent_configs=None):
+    def _dispatch_multi_agent_round(
+        self,
+        conversation,
+        agent_participants,
+        user_content,
+        user_message_id=None,
+        agent_configs=None,
+        workflow=None,
+    ):
         if not conversation.sandbox_session_id:
             self._emit_system_error(conversation.id, '该会话没有可用的沙箱容器。')
             return
@@ -761,6 +931,50 @@ class MessageService:
 
         try:
             from app.sandbox import get_manager
+            fixed_plan = self._server_defined_workflow_plan(
+                self._selected_workflow_meta(workflow),
+                enabled_workers,
+            )
+            if (
+                isinstance(workflow, dict)
+                and workflow.get('execution_mode') == 'server_defined'
+                and not fixed_plan
+            ):
+                self._mark_agent_message_failed(
+                    moderator_msg.id,
+                    moderator_run.id,
+                    '服务端固定工作流无效或引用了不可用的 Agent。',
+                )
+                return
+            if fixed_plan:
+                self._replace_message_with_moderator_summary(
+                    moderator_msg.id,
+                    fixed_plan,
+                )
+                self._emit_run_plan(
+                    conversation.id,
+                    round_id,
+                    moderator_msg.id,
+                    fixed_plan,
+                )
+                self._execute_worker_plan(
+                    conversation,
+                    round_id,
+                    user_message_id,
+                    user_content,
+                    fixed_plan,
+                    enabled_workers,
+                )
+                if fixed_plan.get('summary_required') is True:
+                    self._execute_moderator_summary(
+                        conversation,
+                        moderator,
+                        round_id,
+                        user_message_id,
+                        user_content,
+                        fixed_plan,
+                    )
+                return
             plan_prompt = self._build_moderator_plan_prompt(user_content, enabled_workers, disabled_workers)
             result = get_manager().send_message(
                 conversation.sandbox_session_id,
@@ -1697,6 +1911,94 @@ class MessageService:
                 thread.join()
             task_results.update(group_results)
 
+    @staticmethod
+    def _execute_trusted_task_finalizer(
+        manager,
+        session_id,
+        agent_id,
+        finalizer,
+    ):
+        """Validate and adopt a bounded Agent file contract.
+
+        This is intentionally a one-item allowlist. Workflow JSON cannot name
+        arbitrary files, tools, actions, or idempotency keys.
+        """
+        if (
+            finalizer != {'type': 'education_courseware_from_agent_files'}
+            or agent_id != '_edu_2'
+        ):
+            return {
+                'status': 'error',
+                'error': 'Untrusted server-defined workflow finalizer.',
+            }
+        try:
+            source_bytes, _ = manager.get_agent_raw_file(
+                session_id,
+                agent_id,
+                'slide_document.json',
+            )
+            html_bytes, _ = manager.get_agent_raw_file(
+                session_id,
+                agent_id,
+                'preview.html',
+            )
+            if len(source_bytes) > 2_000_000 or len(html_bytes) > 4_000_000:
+                raise ValueError('courseware finalizer files exceed the size limit')
+            source = json.loads(source_bytes.decode('utf-8'))
+            html = html_bytes.decode('utf-8')
+            if not isinstance(source, dict):
+                raise ValueError('slide_document.json root must be an object')
+            if len(html.strip()) < 80 or '<html' not in html.lower():
+                raise ValueError('preview.html must contain a complete HTML document')
+        except Exception as error:
+            return {
+                'status': 'error',
+                'error': f'Courseware files are not adoptable: {error}',
+            }
+
+        response = manager.execute_tool(
+            session_id,
+            agent_id,
+            'education_action',
+            {
+                'action': 'edu.courseware.create',
+                'arguments': {
+                    'kind': 'slide_document',
+                    'schema_name': 'weagent.education.slide-document',
+                    'source_json': source,
+                    'rendered_html': html,
+                    'change_summary': 'Agent courseware draft',
+                },
+                'idempotency_key': (
+                    'product-courseware-slide-'
+                    + hashlib.sha256(
+                        source_bytes + b'\0' + html_bytes
+                    ).hexdigest()[:16]
+                ),
+            },
+        )
+        envelope = (
+            response.get('result')
+            if isinstance(response, dict) and response.get('status') == 'ok'
+            else None
+        )
+        if not isinstance(envelope, dict) or envelope.get('status') != 'ok':
+            error = (
+                envelope.get('error')
+                if isinstance(envelope, dict)
+                else (response or {}).get('error')
+                if isinstance(response, dict)
+                else response
+            )
+            return {
+                'status': 'error',
+                'error': str(error or 'Education courseware adoption failed')[:1000],
+            }
+        return {
+            'status': 'ok',
+            'result': envelope.get('result'),
+        }
+
     def _run_worker_task(self, app, conversation_id, round_id, user_message_id,
                          user_content, task, participant_id, result_bucket):
         with app.app_context():
@@ -1723,7 +2025,8 @@ class MessageService:
             )
             try:
                 from app.sandbox import get_manager
-                result = get_manager().send_message(
+                manager = get_manager()
+                result = manager.send_message(
                     conversation.sandbox_session_id,
                     participant.participant_id,
                     prompt,
@@ -1738,10 +2041,68 @@ class MessageService:
                     result_bucket[task['task_id']] = {'status': 'error', 'reply': error}
                 else:
                     reply = result.get('reply', '')
+                    finalizer_result = None
+                    finalizer = task.get('finalizer')
+                    if finalizer:
+                        for repair_number in range(0, 3):
+                            finalizer_result = self._execute_trusted_task_finalizer(
+                                manager,
+                                conversation.sandbox_session_id,
+                                participant.participant_id,
+                                finalizer,
+                            )
+                            if finalizer_result.get('status') == 'ok':
+                                break
+                            if repair_number >= 2:
+                                break
+                            repair_prompt = (
+                                '系统已校验你生成的课件文件，但尚不能采纳。'
+                                f'校验错误：{finalizer_result.get("error")}\n'
+                                '请只修复并覆盖你私有目录中的 '
+                                'slide_document.json 与 preview.html。'
+                                'slide_document 必须使用任务指定的 canonical schema；'
+                                'preview 必须是完整 HTML。不要创建新文件，不要调用业务工具；'
+                                '系统会在修复后重新校验并采纳。'
+                            )
+                            repair = manager.send_message(
+                                conversation.sandbox_session_id,
+                                participant.participant_id,
+                                repair_prompt,
+                            )
+                            if repair.get('status') == 'error':
+                                finalizer_result = {
+                                    'status': 'error',
+                                    'error': repair.get('error')
+                                    or 'Agent courseware repair failed',
+                                }
+                                break
+                            reply = repair.get('reply') or reply
+                        if finalizer_result.get('status') != 'ok':
+                            error = finalizer_result.get('error') or (
+                                'Agent courseware finalizer failed'
+                            )
+                            self._mark_agent_message_failed(
+                                agent_msg.id,
+                                run.id,
+                                error,
+                            )
+                            result_bucket[task['task_id']] = {
+                                'status': 'error',
+                                'reply': error,
+                            }
+                            return
                     self._mark_agent_message_done_if_active(
                         agent_msg.id, run.id, participant.participant_id, reply
                     )
-                    result_bucket[task['task_id']] = {'status': 'done', 'reply': reply}
+                    result_bucket[task['task_id']] = {
+                        'status': 'done',
+                        'reply': reply,
+                        **(
+                            {'finalizer_result': finalizer_result}
+                            if finalizer_result
+                            else {}
+                        ),
+                    }
             except Exception as e:
                 error = str(e)
                 self._mark_agent_message_failed(agent_msg.id, run.id, error)
@@ -1850,8 +2211,15 @@ class MessageService:
         except Exception as e:
             self._mark_agent_message_failed(summary_msg.id, run.id, str(e))
 
-    def _dispatch_multi_agent_round(self, conversation, agent_participants,
-                                    user_content, user_message_id=None, agent_configs=None):
+    def _dispatch_multi_agent_round(
+        self,
+        conversation,
+        agent_participants,
+        user_content,
+        user_message_id=None,
+        agent_configs=None,
+        workflow=None,
+    ):
         if not conversation.sandbox_session_id:
             self._emit_system_error(conversation.id, '该会话没有可用的沙箱容器。')
             return
@@ -1933,8 +2301,15 @@ class MessageService:
                 self._format_moderator_retry_error(str(e), 1),
             )
 
-    def _dispatch_multi_agent_round(self, conversation, agent_participants,
-                                    user_content, user_message_id=None, agent_configs=None):
+    def _dispatch_multi_agent_round(
+        self,
+        conversation,
+        agent_participants,
+        user_content,
+        user_message_id=None,
+        agent_configs=None,
+        workflow=None,
+    ):
         if not conversation.sandbox_session_id:
             self._emit_system_error(conversation.id, '该会话没有可用的沙箱容器。')
             return
@@ -1961,6 +2336,50 @@ class MessageService:
 
         try:
             from app.sandbox import get_manager
+            fixed_plan = self._server_defined_workflow_plan(
+                self._selected_workflow_meta(workflow),
+                enabled_workers,
+            )
+            if (
+                isinstance(workflow, dict)
+                and workflow.get('execution_mode') == 'server_defined'
+                and not fixed_plan
+            ):
+                self._mark_agent_message_failed(
+                    moderator_msg.id,
+                    moderator_run.id,
+                    '服务端固定工作流无效或引用了不可用的 Agent。',
+                )
+                return
+            if fixed_plan:
+                self._replace_message_with_moderator_summary(
+                    moderator_msg.id,
+                    fixed_plan,
+                )
+                self._emit_run_plan(
+                    conversation.id,
+                    round_id,
+                    moderator_msg.id,
+                    fixed_plan,
+                )
+                self._execute_worker_plan(
+                    conversation,
+                    round_id,
+                    user_message_id,
+                    user_content,
+                    fixed_plan,
+                    enabled_workers,
+                )
+                if fixed_plan.get('summary_required') is True:
+                    self._execute_moderator_summary(
+                        conversation,
+                        moderator,
+                        round_id,
+                        user_message_id,
+                        user_content,
+                        fixed_plan,
+                    )
+                return
             plan_prompt = self._build_moderator_plan_prompt(user_content, enabled_workers, disabled_workers)
             reply = ''
             plan = None
@@ -2360,7 +2779,7 @@ class MessageService:
         if not text:
             return '任务已完成'
         file_matches = re.findall(
-            r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|js|json|py|pdf|csv|xml|vue|ts)',
+            r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|json|js|py|pdf|csv|xml|vue|ts)(?![\w])',
             text,
             flags=re.IGNORECASE,
         )

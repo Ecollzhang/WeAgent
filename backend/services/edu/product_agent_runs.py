@@ -11,16 +11,48 @@ import json
 
 def education_action_protocol(*, courseware_kind=None, lesson_scoped=False):
     """Return the one strict provider-neutral Education tool-call contract."""
+    if courseware_kind == "slide_document":
+        lines = [
+            "[Education large-artifact finalizer protocol]",
+            "This courseware workflow does not use provider-native tools or "
+            "text tool blocks for the large slide payload.",
+            "The courseware_maker MUST write exactly two complete UTF-8 files "
+            "in its private workspace: slide_document.json and preview.html.",
+            "slide_document.json is the complete canonical source_json object. "
+            "preview.html is a complete safe HTML document that renders it.",
+            "After the Agent finishes, the trusted server workflow reads only "
+            "those two allowlisted files and invokes edu.courseware.create as "
+            "the designated courseware Agent with a stable idempotency key.",
+            "If deterministic schema or visual QA fails, the server sends the "
+            "exact validation error back to the same Agent for a bounded repair.",
+            "Do not invoke MCP, education_action, bash, run_command, "
+            "read_mcp_resource, or any invented filesystem server.",
+            "The slide_document root permits only title, theme, slides. Each "
+            "slide permits only id, title, layout, blocks, speaker_notes.",
+            "Each block permits only type, content, emphasis, source_ref, "
+            "asset_id, alt_text.",
+            "block.type permits only: text, bullets, heading, subheading, "
+            "quote, key-point, question, tip, image, table, timeline, "
+            "comparison, vocabulary, activity.",
+            "Do not use instruction, list, title, paragraph, level, style, or "
+            "other invented block fields.",
+            "Plain text block content is a string. bullets content is an array "
+            "of plain strings without numbering or bullet prefixes.",
+        ]
+        if lesson_scoped:
+            lines.append(
+                "lesson_id is injected from the lesson-scoped Agent run; omit "
+                "lesson_id and do not guess or copy an internal identifier."
+            )
+        return "\n".join(lines)
     lines = [
         "【education_action 严格调用协议】",
-        "该工具由 MCP server `weagent_tools` 暴露，tool `education_action`；"
-        "Provider 原生别名是 `mcp__weagent_tools__education_action`。",
-        "Codex 原生 MCP 中必须调用完整工具名 "
-        "mcp__weagent_tools__education_action；不得把 education_action、bash、"
-        "run_command、read_mcp_resource 或虚构的 education/filesystem server 当作"
-        "原生工具。若 Provider 确实不支持该原生 MCP 工具，才输出下面所示、"
-        "name=education_action 的单个 literal <tool_call> 块，交给 WeAgent 文本"
-        "工具循环执行。",
+        "本产品工作流统一使用 WeAgent 文本工具循环。只输出下面所示、"
+        "name=education_action 的单个 literal <tool_call> 块；系统会执行并把"
+        "结构化结果送回下一回合。",
+        "不要调用 Provider 原生 MCP、mcp__weagent_tools__education_action、"
+        "bash、run_command、read_mcp_resource、rag_search 或虚构的 "
+        "education/filesystem server；不要用自然语言假装工具已经成功。",
         "Action-specific fields MUST be nested under args.arguments; "
         "never place kind, source_json, questions, members, tree, title, "
         "question_count or other business fields directly under args.",
@@ -58,6 +90,23 @@ def education_action_protocol(*, courseware_kind=None, lesson_scoped=False):
                 '"slides":[]},'
                 '"rendered_html":"<!doctype html>..."},"idempotency_key":'
                 '"product-courseware-slide-v1"}}</tool_call>',
+                "slide_document 根对象只允许 title、theme、slides；每个 slide "
+                "只允许 id、title、layout、blocks、speaker_notes。",
+                "每个 block 只允许 type、content、emphasis、source_ref、"
+                "asset_id、alt_text；不允许 level、style 或其他自创字段。",
+                "block.type 只允许：text, bullets, heading, subheading, quote, "
+                "key-point, question, tip, image, table, timeline, comparison, "
+                "vocabulary, activity。",
+                "不允许 instruction、list、title、paragraph。普通文字块的 "
+                "content 使用字符串；bullets 的 content 使用纯文本字符串数组，"
+                "数组项不要自带项目符号。",
+                "最小合法 block 示例："
+                '{"type":"heading","content":"A Choice That Changed the Story"}；'
+                '{"type":"bullets","content":["定位转折点","引用文本证据"]}；'
+                '{"type":"activity","content":"同伴互评：证据—推断—表达"}。',
+                "工具若返回 invalid_slide_document 或 visual_quality_failed，"
+                "只按错误信息修正 source_json，使用递增 repair 序号的新 "
+                "idempotency_key 重新调用；不得猜测另一套 schema。",
             ]
         )
     if lesson_scoped:
@@ -155,9 +204,21 @@ def product_template(product_code):
         "name": contract["name"],
         "nodes": [
             {
-                "id": f"step-{index}",
-                "type": "agent_task",
-                "agent_role": role,
+                **{
+                    "id": f"step-{index}",
+                    "type": "agent_task",
+                    "agent_role": role,
+                },
+                **(
+                    {
+                        "finalizer": {
+                            "type": "education_courseware_from_agent_files"
+                        }
+                    }
+                    if product_code == "courseware"
+                    and role == "courseware_maker"
+                    else {}
+                ),
             }
             for index, role in enumerate(contract["agent_roles"], 1)
         ],
@@ -264,18 +325,16 @@ def build_product_prompt(product_code, course, options, lesson=None):
             "形成课件 brief；不得改写课时教学目标的语义。"
             "\n【课件制作师】生成 canonical slide_document：根对象包含 title、theme、"
             "slides；每页包含 id、title、layout、blocks、speaker_notes，blocks "
-            "使用可渲染的 type/content。生成完整安全 HTML 预览，然后调用 "
-            "edu.courseware.create，kind=slide_document，schema_name="
-            "weagent.education.slide-document；课时作用域由服务端注入，"
-            "source_json 使用完整 slide_document，rendered_html 使用预览 HTML，"
-            "idempotency_key=product-courseware-slide-v1。不得自动发布。"
+            "使用可渲染的 type/content。必须把完整 JSON 写入私有目录的 "
+            "slide_document.json，把完整安全 HTML 写入同目录的 preview.html。"
+            "不得直接调用业务工具；固定工作流终结器会以课件制作师身份校验并调用 "
+            "edu.courseware.create。课时作用域由服务端注入。不得自动发布。"
             f"\n本次指定风格为 {theme_style}；source_json.theme 必须严格写成"
             f'{{"style":"{theme_style}"}}。只允许 clear_classroom、'
             "paper_annotation、storybook、dark_focus 四种风格，不得输出任意 CSS "
             "或自定义色值。每页正文不超过 560 字、列表不超过 10 项、内容块不超过 "
-            "8 个；视觉校验失败时根据工具返回的问题页修复，并以同一 "
-            "任务前缀加递增 repair 序号的新 idempotency_key 再次调用 "
-            "edu.courseware.create；不得用不同参数复用已失败的 key。"
+            "8 个；结构或视觉校验失败时，系统会把具体问题页和错误码定向返回，"
+            "只修复并覆盖上述两个文件，等待固定工作流重新校验。"
             "\n【教学审校员】检查目标—活动—评价一致性、年级适配、答案泄露和"
             "页面可读性；发现问题时要求课件制作师修复后再写入，不能另建冲突版本。"
         )

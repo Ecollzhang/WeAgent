@@ -79,8 +79,15 @@ def issue_grant(client, headers, course_id, tools):
     return response.get_json()
 
 
-def invoke(client, token, tool_name, arguments=None, idempotency_key=None):
-    payload = {"arguments": arguments or {}, "agent_id": "_edu_1"}
+def invoke(
+    client,
+    token,
+    tool_name,
+    arguments=None,
+    idempotency_key=None,
+    agent_id="_edu_1",
+):
+    payload = {"arguments": arguments or {}, "agent_id": agent_id}
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
     return client.post(
@@ -88,6 +95,91 @@ def invoke(client, token, tool_name, arguments=None, idempotency_key=None):
         headers={"X-Education-Run-Grant": token},
         json=payload,
     )
+
+
+def test_product_write_is_bound_to_its_designated_agent_and_audited(app):
+    from services.edu.tool_models import EducationToolCall, EducationToolGrant
+    from services.edu.workflow_models import EducationAgentRun
+
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Evidence and Voice",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    with app.app_context():
+        db.session.add(
+            EducationAgentRun(
+                id="role-bound-courseware-run",
+                course_id=course["id"],
+                lesson_id=lesson["id"],
+                requested_by="teacher",
+                workflow_code="product.courseware",
+                workflow_name="Agent courseware",
+                status="running",
+                nodes=[],
+                input_payload={},
+                output={},
+            )
+        )
+        db.session.commit()
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        ["edu.courseware.create"],
+    )
+    with app.app_context():
+        stored_grant = EducationToolGrant.query.get(grant["id"])
+        stored_grant.agent_run_id = "role-bound-courseware-run"
+        db.session.commit()
+
+    wrong_agent = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "kind": "slide_document",
+            "schema_name": "weagent.education.slide-document",
+            "source_json": {},
+            "rendered_html": "",
+        },
+        "wrong-courseware-agent",
+        agent_id="_edu_1",
+    )
+    designated_agent = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "kind": "slide_document",
+            "schema_name": "weagent.education.slide-document",
+            "source_json": {},
+            "rendered_html": "",
+        },
+        "designated-courseware-agent",
+        agent_id="_edu_2",
+    )
+
+    assert wrong_agent.status_code == 403
+    assert wrong_agent.get_json()["error_code"] == "agent_not_authorized_for_tool"
+    assert designated_agent.status_code == 400
+    assert designated_agent.get_json()["error_code"] == "invalid_slide_document"
+    with app.app_context():
+        rejected = EducationToolCall.query.filter_by(
+            grant_id=grant["id"],
+            idempotency_key="wrong-courseware-agent",
+        ).one()
+        assert rejected.agent_id == "_edu_1"
+        assert rejected.status == "failed"
+        assert rejected.error_code == "agent_not_authorized_for_tool"
 
 
 def test_runtime_grant_verification_is_opaque_and_actor_scoped(app):
@@ -313,7 +405,7 @@ def test_lesson_scoped_run_injects_lesson_into_courseware_write(app):
                 course_id=course["id"],
                 lesson_id=lesson["id"],
                 requested_by="teacher",
-                workflow_code="product.courseware",
+                workflow_code="teacher.preparation",
                 workflow_name="Agent courseware",
                 status="running",
                 nodes=[],
@@ -489,6 +581,63 @@ def test_courseware_tool_returns_page_level_visual_errors_for_agent_repair(app):
     assert response.get_json()["error_code"] == "courseware_visual_quality_failed"
     assert "dense-slide" not in response.get_json()["error"]
     assert "slide_text_too_dense" in response.get_json()["error"]
+
+
+def test_courseware_tool_requires_warning_free_visual_qa_before_adoption(app):
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Concise classroom deck",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        ["edu.courseware.create"],
+    )
+
+    response = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "lesson_id": lesson["id"],
+            "kind": "slide_document",
+            "schema_name": "weagent.education.slide-document",
+            "source_json": {
+                "title": "Concise classroom deck",
+                "theme": {"style": "paper_annotation"},
+                "slides": [{
+                    "id": "warning-slide",
+                    "title": "Evidence",
+                    "layout": "content",
+                    "blocks": [{
+                        "type": "text",
+                        "content": "evidence " * 52,
+                    }],
+                    "speaker_notes": "Shorten this page.",
+                }],
+            },
+            "rendered_html": (
+                "<!doctype html><html><body><main>"
+                + ("preview " * 20)
+                + "</main></body></html>"
+            ),
+        },
+        "courseware-warning-repair-v1",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error_code"] == "courseware_visual_quality_failed"
+    assert "slide_text_dense" in response.get_json()["error"]
 
 
 def test_idempotency_key_reuse_with_different_input_is_rejected(app):

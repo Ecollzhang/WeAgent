@@ -227,6 +227,77 @@ def test_weakness_and_teacher_insight_are_derived_from_attempt_evidence(app):
     ).status_code == 404
 
 
+def test_weakness_includes_released_assignment_feedback_evidence(app):
+    client = app.test_client()
+    teacher, student, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Narrative turning points",
+            "learning_domain": "integrated",
+            "theme_code": "school_life",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Explain the turning point",
+            "kind": "writing",
+            "instruction_json": {"prompt": "Use two details from the passage."},
+            "evaluation_json": {"rubric": {"evidence": 10}},
+            "max_score": 10,
+        },
+    ).get_json()
+    assert client.post(
+        f"/api/edu/assignments/{assignment['id']}/publish",
+        headers=teacher,
+    ).status_code == 200
+    submission = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student,
+        json={"answer_json": {"writing": "The character changed after the letter."}},
+    ).get_json()["submission"]
+    assert client.post(
+        f"/api/edu/submissions/{submission['id']}/feedback",
+        headers=teacher,
+        json={
+            "feedback_json": {
+                "strengths": ["The turning point is identified."],
+                "weaknesses": ["Textual evidence is not explained."],
+                "next_steps": ["Connect each quotation to the character change."],
+            },
+            "score": 7,
+        },
+    ).status_code == 201
+
+    response = client.post(
+        f"/api/edu/courses/{course['id']}/weakness-analysis",
+        headers=student,
+    )
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["data_state"] == "ready"
+    assert {
+        row["knowledge_point"] for row in payload["weaknesses"]
+    } == {
+        "Textual evidence is not explained.",
+        "Connect each quotation to the character change.",
+    }
+    assert all(
+        row["source_type"] == "assignment_feedback"
+        for row in payload["evidence"]
+    )
+    assert all(
+        row["submission_id"] == submission["id"]
+        for row in payload["evidence"]
+    )
+
+
 def test_student_mind_map_is_versioned_editable_and_source_linked(app):
     client = app.test_client()
     teacher, student, course = setup_course(client, app)

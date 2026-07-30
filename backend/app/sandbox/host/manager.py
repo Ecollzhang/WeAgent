@@ -453,6 +453,19 @@ class DockerContainerManager:
         self._sync_skill_drafts_from_result(session_id, result)
         return result
 
+    def execute_tool(
+        self,
+        session_id: str,
+        agent_id: str,
+        tool_name: str,
+        args: dict,
+    ) -> dict:
+        """Execute one projected tool as the designated sandbox Agent."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.execute_tool(agent_id, tool_name, args)
+
     def send_chain(self, session_id: str, messages: list[dict]) -> list[dict]:
         """Chain messages across agents."""
         session = self.get_session(session_id)
@@ -1603,8 +1616,11 @@ print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=
                                         workspace_name: str = "") -> str:
         workspace_name = workspace_name or agent_id
         root = posixpath.normpath(f"/workspace/agents/{workspace_name}")
-        normalized = "/" + str(path or "").replace("\\", "/").lstrip("/")
-        normalized = posixpath.normpath(normalized)
+        raw_path = str(path or "").replace("\\", "/")
+        if raw_path.startswith("/"):
+            normalized = posixpath.normpath(raw_path)
+        else:
+            normalized = posixpath.normpath(posixpath.join(root, raw_path))
         if normalized == root or normalized.startswith(root + "/"):
             return normalized
         raise ValueError("Path must stay inside the agent workspace directory")

@@ -65,6 +65,14 @@ REQUIRED_PRODUCT_WRITE_TOOL = {
     "product.weakness_analysis": "edu.weakness.analyze",
     "product.course_mind_map": "edu.mind_map.create",
 }
+REQUIRED_PRODUCT_WRITE_AGENT = {
+    "product.roster_import": "_edu_1",
+    "product.courseware": "_edu_2",
+    "product.student_insight": "_edu_4",
+    "product.mock_exam": "_edu_6",
+    "product.weakness_analysis": "_edu_6",
+    "product.course_mind_map": "_edu_7",
+}
 
 
 def _tool_calls_by_agent(run):
@@ -106,6 +114,7 @@ def _missing_required_product_write(run):
     adopted = EducationToolCall.query.filter_by(
         grant_id=run.tool_grant_id,
         tool_name=required,
+        agent_id=REQUIRED_PRODUCT_WRITE_AGENT.get(run.workflow_code),
         status="completed",
     ).first()
     return None if adopted else required
@@ -227,11 +236,20 @@ def _workflow_payload(template, nodes):
     return {
         "id": template["code"],
         "name": template["name"],
+        "execution_mode": "server_defined",
         "nodes": [
             {
                 key: value
                 for key, value in node.items()
-                if key in {"id", "type", "agent_role", "agent_id", "gate"}
+                if key
+                in {
+                    "id",
+                    "type",
+                    "agent_role",
+                    "agent_id",
+                    "gate",
+                    "finalizer",
+                }
             }
             for node in nodes
         ],
@@ -368,7 +386,11 @@ def _sync_run(run, authorization):
                 if status == "done":
                     node["status"] = "done"
                     node["output"] = _extract_json(core.get("content"))
-                    artifact_path = ROLE_ARTIFACTS.get(node.get("agent_role"))
+                    artifact_path = (
+                        None
+                        if str(run.workflow_code or "").startswith("product.")
+                        else ROLE_ARTIFACTS.get(node.get("agent_role"))
+                    )
                     if artifact_path and run.sandbox_session_id:
                         try:
                             node["output"] = runtime.get_workspace_json(

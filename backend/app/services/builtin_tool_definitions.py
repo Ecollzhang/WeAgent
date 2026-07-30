@@ -553,6 +553,11 @@ BUILTIN_TOOL_DEFINITIONS = [
                 "不得传 course_id、actor_user_id、user_id、role 或任何令牌；"
                 "不得把沙箱路径当作持久化结果。工具只能执行本次运行授权列出的"
                 "动作，授权过期、成员身份变化或越权动作都会被拒绝并审计。"
+                "edu.courseware.create 的 slide_document block.type 只允许 "
+                "text、bullets、heading、subheading、quote、key-point、question、"
+                "tip、image、table、timeline、comparison、vocabulary、activity；"
+                "block 只允许 type、content、emphasis、source_ref、asset_id、"
+                "alt_text 字段。"
             ),
             (
                 '{"name":"education_action","args":{"action":'

@@ -5,7 +5,7 @@ import re
 CODE_FENCE_RE = re.compile(r'```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```')
 IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'}
 WORKSPACE_FILE_RE = re.compile(
-    r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|js|json|py|pdf|csv|xml|vue)',
+    r'/?workspace/[^\s`\'")\]，。；;]+?\.(?:png|jpe?g|gif|webp|svg|bmp|md|txt|html?|css|json|js|py|pdf|csv|xml|vue)(?![\w])',
     re.IGNORECASE,
 )
 

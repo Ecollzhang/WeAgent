@@ -212,7 +212,11 @@ def _validate_slide_document(payload):
                 )
             ):
                 raise CoreRuntimeError(
-                    f"{block_path} must use a supported type and renderable content"
+                    f"{block_path} must use only type/content/emphasis/source_ref/"
+                    "asset_id/alt_text, one supported type "
+                    "(text, bullets, heading, subheading, quote, key-point, "
+                    "question, tip, image, table, timeline, comparison, "
+                    "vocabulary, activity), and renderable content"
                 )
 
 

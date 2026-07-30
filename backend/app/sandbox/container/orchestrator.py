@@ -776,10 +776,10 @@ class Orchestrator:
         try:
             max_rounds = max(
                 1,
-                min(int(os.environ.get("WEAGENT_TOOL_LOOP_MAX_ROUNDS", "4")), 10),
+                min(int(os.environ.get("WEAGENT_TOOL_LOOP_MAX_ROUNDS", "8")), 10),
             )
         except ValueError:
-            max_rounds = 4
+            max_rounds = 8
 
         reply = initial_reply
         all_results = []
@@ -946,7 +946,25 @@ class Orchestrator:
         )
 
     def _with_tool_instructions(self, agent_id: str, message: str) -> str:
-        return f"{message}\n\n{self._role_boundary_prompt(agent_id, self.agents.get(agent_id).role if agent_id in self.agents else agent_id)}" + self._tool_instructions(agent_id)
+        role = (
+            self.agents.get(agent_id).role
+            if agent_id in self.agents
+            else agent_id
+        )
+        base = f"{message}\n\n{self._role_boundary_prompt(agent_id, role)}"
+        if "[Education large-artifact finalizer protocol]" in str(message or ""):
+            return (
+                base
+                + "\n\n===== TRUSTED LARGE-ARTIFACT HANDOFF =====\n"
+                "Do not emit tool calls and do not invoke MCP or shell tools. "
+                "The task-specific finalizer protocol overrides generic tool "
+                "instructions for this turn. Produce only your assigned role "
+                "output. The courseware maker must write complete "
+                "slide_document.json and preview.html files in its private "
+                "workspace; the server performs validation and business adoption.\n"
+                "=============================================="
+            )
+        return base + self._tool_instructions(agent_id)
 
     # ---- Session ----
 

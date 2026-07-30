@@ -70,6 +70,50 @@ def test_send_to_agent_stops_tool_loop_at_configured_limit():
     assert agent.send_with_context.call_count == 3
 
 
+def test_tool_loop_default_allows_bounded_schema_repair_rounds():
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    agent = MagicMock()
+    agent.role = "courseware maker"
+    agent.send_with_context.side_effect = [
+        '<tool_call>{"name":"education_action","args":{"action":"read","arguments":{}}}</tool_call>',
+        '<tool_call>{"name":"education_action","args":{"action":"write","arguments":{"invalid":true}}}</tool_call>',
+        '<tool_call>{"name":"education_action","args":{"action":"schema","arguments":{}}}</tool_call>',
+        '<tool_call>{"name":"education_action","args":{"action":"write","arguments":{"still_invalid":true}}}</tool_call>',
+        '<tool_call>{"name":"education_action","args":{"action":"write","arguments":{"valid":true}}}</tool_call>',
+        "Canonical courseware was persisted.",
+    ]
+    orchestrator.agents = {"maker": agent}
+    orchestrator.capability_projection = {"session_id": "session-1"}
+    orchestrator.tools = MagicMock()
+    orchestrator.tools.call_from_agent.side_effect = [
+        {"course": "context"},
+        RuntimeError("invalid_slide_document: unsupported block type"),
+        {"courseware_id": "deck-1"},
+    ]
+
+    # ToolRegistry normally returns a structured failed result rather than
+    # raising. Keep this test focused on the number of permitted repair rounds.
+    orchestrator.tools.call_from_agent.side_effect = [
+        {"course": "context"},
+        {"status": "error", "error": "invalid_slide_document"},
+        {"allowed_types": ["text", "bullets"]},
+        {"status": "error", "error": "visual_quality_failed"},
+        {"courseware_id": "deck-1"},
+    ]
+
+    with patch.dict("os.environ", {}, clear=False):
+        reply, results, error = orchestrator._complete_tool_calls(
+            agent,
+            "maker",
+            agent.send_with_context("start"),
+            run_id="run-1",
+        )
+
+    assert error is None
+    assert reply == "Canonical courseware was persisted."
+    assert len(results) == 5
+
+
 def test_rag_tool_result_json_is_projected_as_structured_card():
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.capability_projection = {"session_id": "session-1"}
@@ -88,3 +132,21 @@ def test_rag_tool_result_json_is_projected_as_structured_card():
     assert results[0]["tool"] == "rag_search"
     push_card.assert_called_once()
     assert push_card.call_args.args[2]["total"] == 1
+def test_large_artifact_protocol_suppresses_generic_tool_instructions():
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.agents = {
+        "_edu_2": type("Agent", (), {"role": "Courseware maker"})()
+    }
+    orchestrator._role_boundary_prompt = lambda *_args: "ROLE_BOUNDARY"
+    orchestrator._tool_instructions = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("generic tool instructions must be suppressed")
+    )
+
+    prompt = orchestrator._with_tool_instructions(
+        "_edu_2",
+        "[Education large-artifact finalizer protocol]\nCreate the deck.",
+    )
+
+    assert "ROLE_BOUNDARY" in prompt
+    assert "Do not emit tool calls" in prompt
+    assert "slide_document.json" in prompt
