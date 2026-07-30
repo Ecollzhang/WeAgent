@@ -165,6 +165,8 @@ for (const fragment of [
   'EducationChatContext',
   'educationContext',
   'loadEducationContext',
+  'getConversation(conversationId)',
+  "commit('conversation/ADD_CONVERSATION', conversation)",
 ]) {
   contains(
     'src/views/Dashboard.vue',

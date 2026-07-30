@@ -408,6 +408,7 @@ import { getCategories, getAgents } from '../api/agent'
 import { getEducationConversationContext } from '../api/education'
 import { sendMessage as apiSendMessage } from '../api/message'
 import {
+  getConversation,
   stopConversationAgent,
   getConversationAttachments,
   uploadConversationAttachment,
@@ -584,7 +585,7 @@ export default {
       this.$store.dispatch('conversation/fetchConversations', wsId),
       this.$store.dispatch('agent/fetchAgents'),
     ])
-    this.selectConversationFromRoute()
+    await this.selectConversationFromRoute()
   },
     beforeDestroy() {
       if (this.currentConversation?.id) {
@@ -618,20 +619,31 @@ export default {
       this.newConversation.type = ids.length > 1 ? 'group' : 'single'
     },
     '$route.query.conversation_id'() {
-      this.selectConversationFromRoute()
+      void this.selectConversationFromRoute()
     },
     activeWorkspaceId(newId, oldId) {
       if (newId && newId !== oldId) {
         this.$store.commit('conversation/SET_CURRENT_CONVERSATION', null)
         this.$store.dispatch('conversation/fetchConversations', newId)
+          .then(() => this.selectConversationFromRoute())
       }
     },
   },
   methods: {
-    selectConversationFromRoute() {
+    async selectConversationFromRoute() {
       const conversationId = this.$route.query.conversation_id
       if (!conversationId) return
-      const conversation = this.conversations.find(item => item.id === conversationId)
+      let conversation = this.conversations.find(item => item.id === conversationId)
+      if (!conversation) {
+        try {
+          const response = await getConversation(conversationId)
+          if (response?.code !== 200 || !response.data) return
+          conversation = response.data
+          this.$store.commit('conversation/ADD_CONVERSATION', conversation)
+        } catch (error) {
+          return
+        }
+      }
       if (!conversation) return
       if (this.currentConversation?.id === conversationId) {
         this.loadEducationContext(conversationId)

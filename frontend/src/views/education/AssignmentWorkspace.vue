@@ -5,7 +5,7 @@
     :back-to="`/education/courses/${courseId}`"
   >
     <template #actions>
-      <el-tag v-if="assignment">{{ statusLabel(assignment.status) }}</el-tag>
+      <el-tag v-if="assignment">{{ workspaceStatusLabel }}</el-tag>
       <el-button
         v-if="isTeacher && assignment && assignment.status === 'draft'"
         data-testid="publish-assignment"
@@ -118,6 +118,8 @@ export default {
     return {
       answer: '',
       selectedSubmission: null,
+      ownSubmissionRecord: null,
+      releasedFeedback: [],
       feedback: { content: '', next_step: '' },
     }
   },
@@ -141,16 +143,33 @@ export default {
       return typeof value === 'string' ? value : (value && (value.text || value.instructions)) || ''
     },
     ownSubmission() {
-      return this.submissions[0] || this.assignment.submission || this.assignment.current_submission || null
+      return this.ownSubmissionRecord
+        || this.submissions[0]
+        || this.assignment.submission
+        || this.assignment.current_submission
+        || null
+    },
+    workspaceStatusLabel() {
+      if (!this.isTeacher && this.ownSubmission) {
+        return this.submissionStatus(this.ownSubmission.status)
+      }
+      return this.statusLabel(this.assignment.status)
     },
     submissionLocked() {
-      return this.ownSubmission && ['submitted', 'reviewed', 'graded'].includes(this.ownSubmission.status)
+      return this.ownSubmission
+        && ['submitted', 'revised', 'reviewed', 'graded'].includes(this.ownSubmission.status)
     },
     studentFeedback() {
-      const released = this.$store.state.education.feedback || []
+      const released = this.releasedFeedback.length
+        ? this.releasedFeedback
+        : (this.$store.state.education.feedback || [])
       const latest = released[released.length - 1]
-      if (latest && latest.feedback_json) return latest.feedback_json
-      return this.ownSubmission && (this.ownSubmission.feedback || this.assignment.feedback)
+      if (latest && latest.feedback_json) {
+        return this.normalizeStudentFeedback(latest.feedback_json)
+      }
+      return this.normalizeStudentFeedback(
+        this.ownSubmission && (this.ownSubmission.feedback || this.assignment.feedback)
+      )
     },
     draftKey() {
       return `education_submission_draft:${this.assignmentId}`
@@ -173,14 +192,7 @@ export default {
         const submissions = await this.$store.dispatch('education/fetchSubmissions', this.assignmentId)
         if (submissions.length) this.selectSubmission(submissions[0])
       } else {
-        const recovery = await this.$store.dispatch(
-          'education/fetchMySubmission',
-          this.assignmentId
-        )
-        const submission = recovery.submission
-        if (submission) {
-          await this.$store.dispatch('education/fetchFeedback', submission.id)
-        }
+        const recovery = await this.loadStudentSubmissionState()
         const latestVersion = recovery.versions && recovery.versions[recovery.versions.length - 1]
         const content = (recovery.draft && recovery.draft.answer_json)
           || (latestVersion && latestVersion.answer_json)
@@ -201,7 +213,13 @@ export default {
       return ({ draft: '草稿', published: '进行中', closed: '已截止', archived: '已归档' })[value] || value
     },
     submissionStatus(value) {
-      return ({ draft: '草稿', submitted: '待复核', reviewed: '已反馈' })[value] || value
+      return ({
+        draft: '草稿',
+        submitted: '待复核',
+        revised: '已重新提交',
+        reviewed: '已反馈',
+        graded: '已完成',
+      })[value] || value
     },
     initials(value) {
       return String(value || '学').slice(0, 2).toUpperCase()
@@ -211,12 +229,51 @@ export default {
       const existing = submission.feedback || {}
       this.feedback = { content: existing.content || '', next_step: existing.next_step || '' }
     },
+    normalizeStudentFeedback(value) {
+      if (!value || typeof value !== 'object') return null
+      const lines = []
+      if (value.content || value.comment) {
+        lines.push(value.content || value.comment)
+      }
+      const sections = [
+        ['做得好', value.strengths],
+        ['需要加强', value.weaknesses || value.improvements],
+        ['建议', value.suggestions],
+      ]
+      sections.forEach(([label, items]) => {
+        const values = Array.isArray(items) ? items : (items ? [items] : [])
+        if (values.length) lines.push(`${label}：${values.join('；')}`)
+      })
+      const nextSteps = Array.isArray(value.next_steps)
+        ? value.next_steps
+        : (value.next_step ? [value.next_step] : [])
+      return {
+        ...value,
+        content: lines.join('\n') || '教师已发布本次学习反馈。',
+        next_step: nextSteps.join('；'),
+      }
+    },
+    async loadStudentSubmissionState() {
+      const recovery = await this.$store.dispatch(
+        'education/fetchMySubmission',
+        this.assignmentId
+      )
+      this.ownSubmissionRecord = recovery.submission || null
+      this.releasedFeedback = this.ownSubmissionRecord
+        ? await this.$store.dispatch(
+          'education/fetchFeedback',
+          this.ownSubmissionRecord.id
+        )
+        : []
+      return recovery
+    },
     async handleSaveSubmission() {
       try {
-        await this.$store.dispatch('education/saveSubmissionDraft', {
+        const recovery = await this.$store.dispatch('education/saveSubmissionDraft', {
           assignmentId: this.assignmentId,
           answerJson: { text: this.answer },
         })
+        this.ownSubmissionRecord = recovery.submission || this.ownSubmissionRecord
         localStorage.removeItem(this.draftKey)
         this.$message.success('草稿已保存，可在其他设备继续')
       } catch (error) {
@@ -237,6 +294,7 @@ export default {
         })
         localStorage.removeItem(this.draftKey)
         this.$message.success('作业已提交')
+        await this.loadStudentSubmissionState()
         await this.$store.dispatch('education/fetchAssignment', {
           assignmentId: this.assignmentId,
           courseId: this.courseId,

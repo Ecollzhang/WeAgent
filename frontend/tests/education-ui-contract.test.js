@@ -383,6 +383,21 @@ assertContains(
   "'education/saveSubmissionDraft'",
   'the editor must save a server draft before final submission'
 )
+assertContains(
+  'src/views/education/AssignmentWorkspace.vue',
+  'ownSubmissionRecord',
+  'student submission state must be retained after draft recovery'
+)
+assertContains(
+  'src/views/education/AssignmentWorkspace.vue',
+  'loadStudentSubmissionState',
+  'student submission and released feedback must be refreshed together'
+)
+assertContains(
+  'src/views/education/AssignmentWorkspace.vue',
+  'next_steps',
+  'structured released feedback must render its next-step list for students'
+)
 
 assertContains(
   'src/components/education/SafeHtmlPreview.vue',
