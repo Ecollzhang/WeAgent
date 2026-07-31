@@ -221,9 +221,90 @@ class ConversationService:
         data['participants_info'] = _enrich_participants(conversation.participants)
         return data
 
+    @staticmethod
+    def _resolve_owned_workspace(
+        owner_id,
+        workspace_id=None,
+        kb_domain='',
+        workspace_context=None,
+    ):
+        from app.models.workspace import Workspace
+
+        context = workspace_context if isinstance(workspace_context, dict) else {}
+        domain = str(context.get('domain') or kb_domain or '').strip()
+        role = str(context.get('role') or '').strip()
+        if domain not in {'rd', 'edu', 'office'}:
+            domain = ''
+        if role not in {'teacher', 'student'}:
+            role = ''
+
+        if workspace_id:
+            workspace = Workspace.query.filter_by(
+                id=workspace_id,
+                user_id=owner_id,
+                status='active',
+            ).first()
+            if not workspace:
+                raise ValueError('Workspace not found')
+            if domain and workspace.domain != domain:
+                raise ValueError('Workspace domain does not match conversation')
+            return workspace.id
+
+        if not domain:
+            return None
+        query = Workspace.query.filter_by(
+            user_id=owner_id,
+            domain=domain,
+            status='active',
+        )
+        workspace = None
+        if domain == 'edu' and role:
+            workspace = query.filter_by(sub_role=role).order_by(
+                Workspace.sort_order,
+                Workspace.created_at,
+            ).first()
+        if not workspace:
+            workspace = query.order_by(
+                Workspace.sort_order,
+                Workspace.created_at,
+            ).first()
+        if not workspace:
+            role_labels = {'teacher': '教师', 'student': '学生'}
+            workspace = Workspace(
+                id=str(uuid.uuid4()),
+                user_id=owner_id,
+                domain=domain,
+                sub_role=role if domain == 'edu' else '',
+                name=(
+                    f"{role_labels.get(role, '')}教育空间"
+                    if domain == 'edu'
+                    else f"{domain.upper()} 工作空间"
+                ),
+                description=(
+                    "由 Education 产品任务自动创建的持久会话空间"
+                    if domain == 'edu'
+                    else "系统自动创建的领域工作空间"
+                ),
+                icon='education' if domain == 'edu' else 'default',
+                status='active',
+            )
+            db.session.add(workspace)
+            db.session.flush()
+        return workspace.id if workspace else None
+
     def create_conversation(self, title, conv_type, owner_id, participant_ids,
-                            workspace_id=None, kb_domain='', agent_configs=None):
+                            workspace_id=None, workspace_context=None,
+                            kb_domain='', agent_configs=None):
         """Create a new conversation with participants, optionally in a workspace."""
+        try:
+            workspace_id = self._resolve_owned_workspace(
+                owner_id,
+                workspace_id=workspace_id,
+                kb_domain=kb_domain,
+                workspace_context=workspace_context,
+            )
+        except ValueError as exc:
+            return None, str(exc)
         conversation = conversation_repo.create(
             title=title,
             type=conv_type,

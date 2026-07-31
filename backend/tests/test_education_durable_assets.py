@@ -4,6 +4,8 @@ from io import BytesIO
 import pytest
 from flask_jwt_extended import create_access_token
 from sqlalchemy import inspect, text
+from sqlalchemy.dialects import mysql
+from sqlalchemy.exc import DataError
 
 from services.edu.extensions import db
 
@@ -125,6 +127,64 @@ def test_database_asset_upload_download_and_course_visibility(app):
     student_download = client.get(asset["download_url"], headers=student)
     assert student_download.status_code == 200
     assert student_download.data == "A durable text".encode()
+
+
+def test_asset_binary_column_uses_mysql_longblob():
+    from services.edu.asset_models import EducationAsset
+
+    compiled = EducationAsset.__table__.c.blob_bytes.type.compile(
+        dialect=mysql.dialect()
+    )
+
+    assert compiled.upper() == "LONGBLOB"
+
+
+def test_asset_upload_maps_database_capacity_error_to_stable_business_error(
+    app, monkeypatch
+):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    course = create_course(client, teacher)
+
+    def fail_with_database_capacity_error(**_kwargs):
+        raise DataError(
+            "INSERT INTO edu_assets",
+            {},
+            RuntimeError("Data too long for column 'blob_bytes'"),
+        )
+
+    monkeypatch.setattr(
+        "services.edu.asset_routes.create_database_asset",
+        fail_with_database_capacity_error,
+    )
+
+    response = client.post(
+        f"/api/edu/courses/{course['id']}/assets",
+        headers=teacher,
+        data={"file": (BytesIO(b"x" * 70000), "normal-size.html")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 422
+    assert response.get_json() == {
+        "error": "asset storage could not persist the uploaded file",
+        "error_code": "asset_storage_capacity_exceeded",
+    }
+
+
+def test_agent_asset_write_maps_database_capacity_error_to_stable_business_error():
+    from services.edu.tool_gateway import _error_parts
+
+    error = DataError(
+        "INSERT INTO edu_assets",
+        {},
+        RuntimeError("Data too long for column 'blob_bytes'"),
+    )
+    message, status_code, error_code = _error_parts(error)
+
+    assert "storage" in message.lower()
+    assert status_code == 422
+    assert error_code == "asset_storage_capacity_exceeded"
 
 
 def test_material_upload_is_database_owned_and_survives_source_path_loss(app):

@@ -41,6 +41,7 @@ def create_conversation():
         owner_id=user_id,
         participant_ids=data['participant_ids'],
         workspace_id=data.get('workspace_id'),
+        workspace_context=data.get('workspace_context') or {},
         kb_domain=data.get('kb_domain') or '',
         agent_configs=data.get('agent_configs') or {},
     )

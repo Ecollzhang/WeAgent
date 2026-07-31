@@ -324,7 +324,8 @@ class MessageService:
 
     def send_message(self, conversation_id, sender_type, sender_id, content,
                      message_type='text', parent_message_id=None, artifact_id=None,
-                     target_agent_ids=None, agent_configs=None, workflow=None):
+                     target_agent_ids=None, agent_configs=None, workflow=None,
+                     execution_context=None):
         """Send a message in a conversation."""
         conversation = conversation_repo.get_by_id(conversation_id)
         if not conversation:
@@ -371,6 +372,8 @@ class MessageService:
             workflow_meta = self._selected_workflow_meta(workflow)
             if workflow_meta:
                 message_meta['selected_workflow'] = workflow_meta
+            if execution_context and conversation.kb_domain == 'edu':
+                message_meta['execution_context_applied'] = True
         if not message_meta:
             message_meta = None
 
@@ -402,10 +405,15 @@ class MessageService:
             has_agent = any(p.participant_type == 'agent'
                             for p in conversation.participants)
             if has_agent:
+                dispatch_content = (
+                    str(execution_context)
+                    if execution_context and conversation.kb_domain == 'edu'
+                    else content
+                )
                 app = current_app._get_current_object()
                 thread = threading.Thread(
                     target=self._dispatch_agent_sandbox,
-                    args=(app, conversation_id, content, message.id, target_agent_ids, agent_configs, workflow),
+                    args=(app, conversation_id, dispatch_content, message.id, target_agent_ids, agent_configs, workflow),
                     daemon=True,
                 )
                 thread.start()

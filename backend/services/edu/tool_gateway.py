@@ -13,9 +13,15 @@ from datetime import datetime, timedelta
 
 from flask import current_app
 from sqlalchemy import or_
+from sqlalchemy.exc import DataError
 
 from .access import active_membership
-from .asset_service import AssetServiceError, asset_to_dict, create_database_asset
+from .asset_service import (
+    AssetServiceError,
+    asset_storage_capacity_error,
+    asset_to_dict,
+    create_database_asset,
+)
 from .content_models import (
     CourseUnit,
     EducationContent,
@@ -1310,6 +1316,9 @@ def _error_parts(error):
         return error.message, error.status_code, error.error_code
     if isinstance(error, (KnowledgeServiceError, LearningServiceError, AssetServiceError)):
         return error.message, error.status_code, error.error_code
+    if isinstance(error, DataError):
+        mapped = asset_storage_capacity_error()
+        return mapped.message, mapped.status_code, mapped.error_code
     return str(error), 500, "tool_execution_failed"
 
 
@@ -1407,6 +1416,30 @@ def invoke_tool(
         call.result_summary = _summary(result)
         call.status = "completed"
         call.completed_at = datetime.utcnow()
+        if grant.agent_run_id:
+            from .workflow_models import (
+                EducationAgentRun,
+                adopted_object_from_tool_result,
+            )
+
+            run = EducationAgentRun.query.filter_by(id=grant.agent_run_id).first()
+            adopted_object = (
+                adopted_object_from_tool_result(
+                    workflow_code=run.workflow_code,
+                    tool_name=tool_name,
+                    result=result,
+                    course_id=run.course_id,
+                    lesson_id=run.lesson_id,
+                    tool_call_id=call.id,
+                )
+                if run
+                else None
+            )
+            if run and adopted_object:
+                run.output = {
+                    **(run.output or {}),
+                    "adopted_object": adopted_object,
+                }
         db.session.commit()
         return call, result, False
     except Exception as error:

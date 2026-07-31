@@ -245,6 +245,7 @@
 <script>
 import { downloadCourseAsset } from '../../api/education'
 import EducationShell from '../../components/education/EducationShell.vue'
+import { educationErrorMessage } from '../../utils/educationErrors'
 
 const EmptyLibrary = {
   functional: true,
@@ -431,7 +432,7 @@ export default {
         this.activeTab = 'resources'
         this.$message.success('资料已持久保存，等待进入检索索引')
       } catch (error) {
-        this.$message.error('资料上传失败')
+        this.$message.error(educationErrorMessage(error, '资料上传失败'))
       } finally {
         this.uploading = false
       }

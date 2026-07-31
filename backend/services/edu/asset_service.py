@@ -28,6 +28,14 @@ class AssetServiceError(Exception):
     error_code: str = "invalid_asset"
 
 
+def asset_storage_capacity_error():
+    return AssetServiceError(
+        "asset storage could not persist the uploaded file",
+        422,
+        "asset_storage_capacity_exceeded",
+    )
+
+
 def asset_to_dict(asset):
     return {
         "id": asset.id,
@@ -161,4 +169,3 @@ def adopt_legacy_material(material, actor_user_id, *, max_bytes):
     )
     material.asset_id = asset.id
     return asset
-

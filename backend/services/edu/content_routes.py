@@ -8,11 +8,13 @@ from io import BytesIO
 
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy.exc import DataError
 from werkzeug.utils import secure_filename
 
 from .asset_models import EducationAsset
 from .asset_service import (
     AssetServiceError,
+    asset_storage_capacity_error,
     create_database_asset,
     validate_asset_access,
 )
@@ -437,6 +439,12 @@ def upload_material(lesson_id):
         )
     except AssetServiceError as error:
         db.session.rollback()
+        return jsonify(
+            {"error": error.message, "error_code": error.error_code}
+        ), error.status_code
+    except DataError:
+        db.session.rollback()
+        error = asset_storage_capacity_error()
         return jsonify(
             {"error": error.message, "error_code": error.error_code}
         ), error.status_code

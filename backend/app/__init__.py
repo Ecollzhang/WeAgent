@@ -415,18 +415,26 @@ def _seed_default_workspaces():
                 ), {'id': ws_id, 'uid': user_id, 'domain': domain, 'name': name, 'desc': desc, 'now': now})
                 conn.commit()
 
-    # 将 workspace_id 为空的已有会话关联到用户的研发空间（逐条处理，兼容 SQLite）
+    # 将旧会话按其可信领域回填到对应工作空间（逐条处理，兼容 SQLite）。
     with db.engine.connect() as conn:
         result = conn.execute(
-            _text("SELECT c.id, c.owner_id FROM conversations c WHERE c.workspace_id IS NULL")
+            _text(
+                "SELECT c.id, c.owner_id, c.kb_domain "
+                "FROM conversations c WHERE c.workspace_id IS NULL"
+            )
         )
-        orphan_convs = [(row[0], row[1]) for row in result]
+        orphan_convs = [(row[0], row[1], row[2]) for row in result]
 
-    for conv_id, owner_id in orphan_convs:
+    for conv_id, owner_id, kb_domain in orphan_convs:
+        target_domain = kb_domain if kb_domain in {'rd', 'edu', 'office'} else 'rd'
         with db.engine.connect() as conn:
             ws = conn.execute(
-                _text("SELECT w.id FROM workspaces w WHERE w.user_id = :uid AND w.domain = 'rd' LIMIT 1"),
-                {'uid': owner_id}
+                _text(
+                    "SELECT w.id FROM workspaces w "
+                    "WHERE w.user_id = :uid AND w.domain = :domain "
+                    "AND w.status = 'active' LIMIT 1"
+                ),
+                {'uid': owner_id, 'domain': target_domain}
             ).fetchone()
             if ws:
                 conn.execute(

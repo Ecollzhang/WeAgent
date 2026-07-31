@@ -13,12 +13,11 @@
       <button type="button" @click="openConversation(run)">
         <i class="el-icon-chat-dot-round"></i> 返回本次聊天
       </button>
-      <button
-        v-if="run.business_route"
-        type="button"
-        @click="previewLatestArtifact"
-      >
+      <button v-if="adoptedObject" type="button" @click="previewLatestArtifact">
         <i class="el-icon-view"></i> 预览最新产物
+      </button>
+      <button v-if="run.business_route" type="button" @click="openBusinessPage">
+        <i class="el-icon-link"></i> 返回业务页面
       </button>
       <button type="button" @click="historyExpanded = !historyExpanded">
         <i class="el-icon-time"></i> 协作历史 {{ historyRuns.length }}
@@ -74,17 +73,23 @@ export default {
       const runs = this.$store.getters['education/productAgentRuns'] || []
       return runs.length ? runs : [this.run]
     },
+    adoptedObject() {
+      return (this.run && this.run.output && this.run.output.adopted_object) || null
+    },
     statusLabel() {
       const labels = {
-        pending: '等待中', running: '进行中', completed: '已完成',
-        failed: '需要处理', cancelled: '已取消',
+        pending: '等待中',
+        running: '进行中',
+        completed: '已完成',
+        failed: '需要处理',
+        cancelled: '已取消',
       }
       return labels[this.run && this.run.status] || '已记录'
     },
     statusText() {
       if (!this.run) return ''
       if (this.run.status === 'completed') return '产物已写入 Education，可展开复核来源与工具调用。'
-      if (this.run.status === 'failed') return '保留已有产物和失败信息，可展开查看。'
+      if (this.run.status === 'failed') return '已保留现有产物和失败信息，可展开查看。'
       return '后台 Agent 正在通过受控 Education 工具处理。'
     },
     statusType() {
@@ -102,17 +107,26 @@ export default {
       })
     },
     previewLatestArtifact() {
-      this.$emit('preview', this.run)
-      if (this.run.business_route && this.$route.fullPath !== this.run.business_route) {
-        this.$router.push(this.run.business_route)
-      }
+      if (!this.adoptedObject) return
+      this.$emit('preview', { run: this.run, adoptedObject: this.adoptedObject })
+    },
+    openBusinessPage() {
+      if (!this.run || !this.run.business_route) return
+      const route = this.run.business_route
+      const target = typeof route === 'string'
+        ? route
+        : this.$router.resolve(route).route.fullPath
+      if (this.$route.fullPath !== target) this.$router.push(route)
     },
     formatDate(value) {
       if (!value) return '时间待记录'
       const date = new Date(value)
       if (Number.isNaN(date.getTime())) return String(value)
       return date.toLocaleString('zh-CN', {
-        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
       })
     },
   },
@@ -130,7 +144,8 @@ export default {
 .record-summary:hover { transform: translateY(-1px); border-color: #a8cbc4; }
 .record-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: #e7f2ef; color: #2e7e73; }
 .record-summary b, .record-summary small { display: block; }
-.record-summary b { font-size: 11px; }.record-summary small { margin-top: 3px; color: #8b9a97; font-size: 9px; }
+.record-summary b { font-size: 11px; }
+.record-summary small { margin-top: 3px; color: #8b9a97; font-size: 9px; }
 .record-actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 2px 0; }
 .record-actions button {
   border: 0; border-radius: 8px; padding: 6px 9px; background: #eef6f4;

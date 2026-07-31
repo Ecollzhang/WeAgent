@@ -29,6 +29,7 @@
     <template v-else-if="course">
       <EmbeddedAgentRecord
         :run="productAgentRun"
+        @preview="previewAdoptedArtifact"
         title="AI 分析记录"
         @terminal="handleAgentTerminal"
         @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
@@ -172,6 +173,30 @@
         >{{ recommendation.action }}</p>
       </div>
     </el-drawer>
+
+    <el-dialog
+      title="最新学情分析产物"
+      :visible.sync="adoptedPreviewDialog"
+      width="760px"
+      data-testid="student-insight-adopted-preview"
+    >
+      <div class="insight-product-summary">
+        <div><span>最高分</span><b>{{ scoreMetric('highest_score') }}</b></div>
+        <div><span>最低分</span><b>{{ scoreMetric('lowest_score') }}</b></div>
+        <div><span>平均分</span><b>{{ scoreMetric('average_score') }}</b></div>
+        <div><span>完成率</span><b>{{ percent(overview.completion_rate) }}</b></div>
+      </div>
+      <div class="insight-product-list">
+        <article v-for="row in studentRows" :key="row.user_id">
+          <b>{{ row.display_name || row.user_id }}</b>
+          <span v-if="row.insight && row.insight.data_state === 'ready'">
+            正式均分 {{ scoreValue(row.insight.summary.official_average_score) }}；
+            {{ (row.insight.recommendations || []).map(item => item.action).join('；') || '当前没有额外建议' }}
+          </span>
+          <span v-else>数据不足，需继续积累正式作业或模拟考试证据。</span>
+        </article>
+      </div>
+    </el-dialog>
   </EducationShell>
 </template>
 
@@ -190,6 +215,7 @@ export default {
       refreshing: false,
       evidenceDrawer: false,
       selectedRow: null,
+      adoptedPreviewDialog: false,
     }
   },
   computed: {
@@ -283,6 +309,10 @@ export default {
     },
     closeAgentRun() {
       this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
+    },
+    previewAdoptedArtifact({ adoptedObject }) {
+      if (!adoptedObject || adoptedObject.object_type !== 'student_insight_report') return
+      this.adoptedPreviewDialog = true
     },
     openEvidence(row) {
       this.selectedRow = row
@@ -380,6 +410,21 @@ export default {
 .evidence-row b, .evidence-row small { display: block; }.evidence-row b { color: #3c504c; font-size: 12px; }.evidence-row small { margin-top: 3px; color: #9aa6a3; font-size: 9px; }
 .evidence-row p, .recommendation { margin: 7px 0 0; color: #71817d; font-size: 10px; line-height: 1.6; }
 .recommendation { padding: 10px; border-radius: 8px; background: #f4f8f7; }
+.insight-product-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.insight-product-summary div { padding: 14px; border-radius: 10px; background: #eef6f4; }
+.insight-product-summary span, .insight-product-summary b { display: block; }
+.insight-product-summary span { color: #7b8d89; font-size: 10px; }
+.insight-product-summary b { margin-top: 6px; color: #2e746b; font-size: 20px; }
+.insight-product-list { display: grid; gap: 8px; max-height: 440px; overflow: auto; }
+.insight-product-list article { padding: 12px 14px; border: 1px solid #e1eae7; border-radius: 10px; }
+.insight-product-list b, .insight-product-list span { display: block; }
+.insight-product-list b { color: #344b46; font-size: 12px; }
+.insight-product-list span { margin-top: 5px; color: #71837f; font-size: 11px; line-height: 1.6; }
 @media (max-width: 860px) {
   .official-metrics { grid-template-columns: repeat(2, 1fr); }
   .analytics-charts { grid-template-columns: 1fr; }

@@ -4,12 +4,14 @@ from io import BytesIO
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy.exc import DataError
 
 from .access import active_membership
 from .asset_models import EducationAsset
 from .asset_service import (
     ASSET_VISIBILITY,
     AssetServiceError,
+    asset_storage_capacity_error,
     adopt_legacy_material,
     asset_to_dict,
     create_database_asset,
@@ -60,6 +62,9 @@ def upload_asset(course_id):
     except AssetServiceError as error:
         db.session.rollback()
         return _asset_error(error)
+    except DataError:
+        db.session.rollback()
+        return _asset_error(asset_storage_capacity_error())
     return jsonify(asset_to_dict(asset)), 201
 
 

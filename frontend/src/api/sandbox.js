@@ -151,6 +151,17 @@ export function getSessionRawFileUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/raw?path=${encodeURIComponent(path)}`
 }
 
+// Raw sandbox files are protected by the same bearer-token boundary as the
+// rest of the API.  Use this helper for previews; a plain fetch/iframe request
+// cannot attach the token and will receive "Missing Authorization Header".
+export function readSessionRawFile(sessionId, path, responseType = 'text') {
+  return request.get(`/sandbox/sessions/${sessionId}/files/raw`, {
+    params: { path },
+    responseType,
+    transformResponse: responseType === 'text' ? [data => data] : undefined,
+  })
+}
+
 export function getSessionDownloadUrl(sessionId, path) {
   return `/api/sandbox/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`
 }

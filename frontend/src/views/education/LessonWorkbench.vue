@@ -352,6 +352,7 @@ import LessonPlanEditor from '../../components/education/LessonPlanEditor.vue'
 import RichMaterialEditor from '../../components/education/RichMaterialEditor.vue'
 import SafeHtmlPreview from '../../components/education/SafeHtmlPreview.vue'
 import { downloadLessonMaterial } from '../../api/education'
+import { educationErrorMessage } from '../../utils/educationErrors'
 const {
   formatVersionTime,
   normalizeActivities,
@@ -887,8 +888,7 @@ export default {
         })
         this.$message.success('材料已上传，将在发布课时后对学生可见')
       } catch (error) {
-        const detail = error.response && error.response.data && error.response.data.error
-        this.$message.error(detail || '材料上传失败')
+        this.$message.error(educationErrorMessage(error, '材料上传失败'))
       } finally {
         event.target.value = ''
       }

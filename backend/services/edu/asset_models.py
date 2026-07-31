@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+from sqlalchemy.dialects.mysql import LONGBLOB
+
 from .extensions import db
 from .models import TimestampMixin, new_id
 
@@ -36,7 +38,10 @@ class EducationAsset(TimestampMixin, db.Model):
         index=True,
     )
     storage_backend = db.Column(db.String(30), nullable=False, default="database")
-    blob_bytes = db.Column(db.LargeBinary, nullable=False)
+    blob_bytes = db.Column(
+        db.LargeBinary().with_variant(LONGBLOB(), "mysql"),
+        nullable=False,
+    )
     source_agent_run_id = db.Column(db.String(100), nullable=True, index=True)
     source_sandbox_path = db.Column(db.String(1000), nullable=True)
     status = db.Column(db.String(20), nullable=False, default="active", index=True)
@@ -45,4 +50,3 @@ class EducationAsset(TimestampMixin, db.Model):
     def archive(self):
         self.status = "archived"
         self.archived_at = datetime.utcnow()
-

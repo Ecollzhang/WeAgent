@@ -94,6 +94,55 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
     assert started["runtime_generation"] == 3
 
 
+def test_education_runtime_keeps_visible_intent_separate_from_execution_context(
+    monkeypatch,
+):
+    requests = []
+
+    def fake_request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        if url.endswith("/api/conversations"):
+            return FakeResponse(
+                {
+                    "code": 201,
+                    "data": {
+                        "id": "conversation-1",
+                        "sandbox_session_id": "sandbox-1",
+                    },
+                },
+                201,
+            )
+        if url.endswith("/runtime-preflight"):
+            return FakeResponse(
+                {"code": 200, "data": {"ready": True}}
+            )
+        return FakeResponse({"code": 201, "data": {"id": "message-1"}}, 201)
+
+    monkeypatch.setattr("services.edu.runtime_client.requests.request", fake_request)
+    client = CoreRuntimeClient(base_url="http://core")
+
+    client.start_workflow(
+        authorization="Bearer token",
+        title="Courseware run",
+        prompt="INTERNAL TOOL AND SCHEMA CONTRACT",
+        visible_prompt="根据当前教案生成 PPT，使用纸张批注风格。",
+        workspace_role="teacher",
+        agent_ids=["_edu_1", "_edu_2"],
+        workflow={"id": "courseware"},
+        education_run_grant="opaque-run-grant-1234567890",
+    )
+
+    conversation_payload = requests[0][2]["json"]
+    message_payload = requests[2][2]["json"]
+    assert conversation_payload["workspace_context"] == {
+        "domain": "edu",
+        "role": "teacher",
+    }
+    assert message_payload["content"] == "根据当前教案生成 PPT，使用纸张批注风格。"
+    assert message_payload["execution_context"] == "INTERNAL TOOL AND SCHEMA CONTRACT"
+    assert "INTERNAL TOOL" not in message_payload["content"]
+
+
 def test_education_runtime_aborts_before_message_when_tool_preflight_fails(
     monkeypatch,
 ):

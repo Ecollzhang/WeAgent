@@ -90,6 +90,8 @@ class FakeProductRuntime:
         authorization,
         title,
         prompt,
+        visible_prompt=None,
+        workspace_role=None,
         agent_ids,
         workflow,
         education_run_grant=None,
@@ -100,6 +102,8 @@ class FakeProductRuntime:
                 "authorization": authorization,
                 "title": title,
                 "prompt": prompt,
+                "visible_prompt": visible_prompt,
+                "workspace_role": workspace_role,
                 "agent_ids": agent_ids,
                 "workflow": workflow,
                 "education_run_grant": education_run_grant,
@@ -164,6 +168,9 @@ def test_student_starts_scoped_mock_exam_agent_run(education_app):
     assert "Action-specific fields MUST be nested under args.arguments" in (
         started["prompt"]
     )
+    assert started["workspace_role"] == "student"
+    assert "edu.mock_exam.create" not in started["visible_prompt"]
+    assert "模拟考试" in started["visible_prompt"]
     assert len(started["education_run_grant"]) >= 40
     assert started["education_run_grant"] not in started["prompt"]
 
@@ -223,6 +230,9 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
         "teaching_reviewer",
     ]
     started = runtime.started[0]
+    assert started["workspace_role"] == "teacher"
+    assert "根据当前教案生成 PPT" in started["visible_prompt"]
+    assert "edu.courseware.create" not in started["visible_prompt"]
     assert re.fullmatch(
         r"高中英语阅读与写作｜Education·校园生活叙事阅读"
         r"（Agent 课件制作）｜\d{4}-\d{2}-\d{2} \d{2}:\d{2}",
@@ -513,6 +523,10 @@ def test_student_agent_tool_write_is_visible_on_product_run(education_app):
     )
     assert note_node["tool_calls"][0]["tool_name"] == "edu.mind_map.create"
     assert note_node["tool_calls"][0]["status"] == "completed"
+    assert run["output"]["adopted_object"]["object_type"] == "course_mind_map"
+    assert run["output"]["adopted_object"]["object_id"]
+    assert run["output"]["adopted_object"]["version_id"]
+    assert run["output"]["adopted_object"]["preview_kind"] == "mind_map"
     assert "education_run_grant" not in str(run)
     assert raw_grant not in str(run)
 

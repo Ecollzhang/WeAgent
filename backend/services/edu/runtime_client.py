@@ -277,6 +277,8 @@ class CoreRuntimeClient:
         authorization,
         title,
         prompt,
+        visible_prompt=None,
+        workspace_role=None,
         agent_ids,
         workflow,
         education_run_grant=None,
@@ -298,6 +300,14 @@ class CoreRuntimeClient:
                 "type": "group",
                 "participant_ids": [f"agent_{agent_id}" for agent_id in agent_ids],
                 "kb_domain": "edu",
+                "workspace_context": {
+                    "domain": "edu",
+                    "role": (
+                        str(workspace_role or "").strip()
+                        if str(workspace_role or "").strip() in {"teacher", "student"}
+                        else ""
+                    ),
+                },
                 "agent_configs": agent_configs,
             },
         )
@@ -330,7 +340,8 @@ class CoreRuntimeClient:
             authorization,
             json={
                 "conversation_id": conversation["id"],
-                "content": prompt,
+                "content": str(visible_prompt or prompt),
+                "execution_context": prompt if visible_prompt else None,
                 "workflow": workflow,
             },
         )

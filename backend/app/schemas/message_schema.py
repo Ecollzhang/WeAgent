@@ -8,6 +8,7 @@ class SendMessageSchema(Schema):
 
     conversation_id = fields.String(required=True)
     content = fields.String(required=True)
+    execution_context = fields.String(required=False, allow_none=True)
     message_type = fields.String(validate=validate.OneOf(
         ['text', 'code', 'image', 'file', 'artifact_card', 'diff_card']
     ), load_default='text')

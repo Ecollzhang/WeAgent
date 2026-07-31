@@ -14,6 +14,7 @@ from .routes import teacher_course_or_none
 from .subject_packs import AGENT_ROLES, SUBJECT_PACKS, WORKFLOW_TEMPLATES
 from .content_models import Lesson
 from .product_agent_runs import (
+    build_visible_product_intent,
     build_product_prompt,
     education_action_protocol,
     product_template,
@@ -447,6 +448,9 @@ def _sync_run(run, authorization):
         _revoke_tool_grant(run)
     else:
         run.status = "running"
+    adopted_object = (run.output or {}).get("adopted_object")
+    if adopted_object:
+        outputs["adopted_object"] = adopted_object
     run.nodes = nodes
     run.output = outputs
     if run.status == "partial":
@@ -486,6 +490,8 @@ def _start_core_run(
     authorization,
     title,
     prompt,
+    visible_prompt,
+    workspace_role,
     agent_ids,
     workflow,
     education_run_grant,
@@ -500,6 +506,8 @@ def _start_core_run(
                 authorization=authorization,
                 title=title,
                 prompt=prompt,
+                visible_prompt=visible_prompt,
+                workspace_role=workspace_role,
                 agent_ids=agent_ids,
                 workflow=workflow,
                 education_run_grant=education_run_grant,
@@ -769,6 +777,11 @@ def start_workflow_run():
         request.headers.get("Authorization", ""),
         f"{course.title} · {lesson.title} · Agent 教案协作",
         prompt,
+        (
+            f"请为课时“{lesson.title}”协作生成可编辑教案和结构化习题。"
+            + (f"补充要求：{requirements}" if requirements else "")
+        ),
+        "teacher",
         agent_ids,
         workflow,
         raw_tool_grant,
@@ -886,6 +899,11 @@ def start_product_agent_run():
         options,
         lesson=lesson,
     )
+    visible_prompt = build_visible_product_intent(
+        product_code,
+        options,
+        lesson=lesson,
+    )
     workflow = _workflow_payload(template, nodes)
     run = EducationAgentRun(
         course_id=course_id,
@@ -936,6 +954,8 @@ def start_product_agent_run():
         request.headers.get("Authorization", ""),
         conversation_title,
         prompt,
+        visible_prompt,
+        membership.role,
         agent_ids,
         workflow,
         raw_tool_grant,

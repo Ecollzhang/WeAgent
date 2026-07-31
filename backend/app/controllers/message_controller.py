@@ -38,6 +38,7 @@ def send_message():
         sender_type='user',
         sender_id=user_id,
         content=data['content'],
+        execution_context=data.get('execution_context'),
         message_type=data.get('message_type', 'text'),
         parent_message_id=data.get('parent_message_id'),
         artifact_id=data.get('artifact_id'),

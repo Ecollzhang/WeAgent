@@ -10,6 +10,24 @@ def migrate_existing_education_schema():
     inspector = inspect(db.engine)
     tables = set(inspector.get_table_names())
     changes = []
+    if "edu_assets" in tables and db.engine.dialect.name == "mysql":
+        blob_column = next(
+            (
+                column
+                for column in inspector.get_columns("edu_assets")
+                if column["name"] == "blob_bytes"
+            ),
+            None,
+        )
+        if blob_column and "LONGBLOB" not in str(blob_column["type"]).upper():
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_assets "
+                        "MODIFY blob_bytes LONGBLOB NOT NULL"
+                    )
+                )
+            changes.append("edu_assets.blob_bytes_longblob")
     if "edu_materials" in tables:
         columns = {
             column["name"] for column in inspector.get_columns("edu_materials")

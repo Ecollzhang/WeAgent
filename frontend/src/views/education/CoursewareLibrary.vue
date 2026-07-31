@@ -38,6 +38,7 @@
     <template v-else-if="course">
       <EmbeddedAgentRecord
         :run="productAgentRun"
+        @preview="previewAdoptedArtifact"
         @terminal="handleAgentTerminal"
         @poll-error="$message.error('Agent 运行状态暂时无法刷新')"
         @recover-draft="openRecoverableDraft"
@@ -320,6 +321,10 @@
             :key="slide.id"
             class="visual-qa-slide"
           >
+            <SafeHtmlPreview
+              class="visual-qa-slide-preview"
+              :html="renderVisualQaSlide(slide)"
+            />
             <div>
               <span>{{ String(slide.number).padStart(2, '0') }}</span>
               <b>{{ slide.title }}</b>
@@ -338,6 +343,26 @@
         </template>
       </div>
     </el-dialog>
+
+    <el-dialog
+      title="最新课件产物预览"
+      :visible.sync="adoptedPreviewDialog"
+      width="92%"
+      top="4vh"
+      data-testid="courseware-adopted-preview"
+    >
+      <div v-if="adoptedPreviewEntry" class="adopted-preview-heading">
+        <div>
+          <b>{{ adoptedPreviewEntry.lesson.title }}</b>
+          <span>v{{ adoptedPreviewEntry.version.version_number }} · {{ dateLabel(adoptedPreviewEntry.version.created_at) }}</span>
+        </div>
+        <el-button type="primary" plain @click="openGeneratedEditor(adoptedPreviewEntry)">打开编辑</el-button>
+      </div>
+      <SafeHtmlPreview
+        v-if="adoptedPreviewEntry"
+        :html="renderCoursewarePreview(adoptedPreviewEntry)"
+      />
+    </el-dialog>
   </EducationShell>
 </template>
 
@@ -353,7 +378,9 @@ import {
 } from '../../api/education'
 import EducationShell from '../../components/education/EducationShell.vue'
 import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
+import SafeHtmlPreview from '../../components/education/SafeHtmlPreview.vue'
 import SlideDocumentEditor from '../../components/education/SlideDocumentEditor.vue'
+import { educationErrorMessage } from '../../utils/educationErrors'
 const { formatVersionTime } = require('../../utils/educationContent')
 const {
   PRESENTATION_THEMES,
@@ -369,7 +396,7 @@ const COURSEWARE_THEME_ORDER = [
 
 export default {
   name: 'CoursewareLibrary',
-  components: { EducationShell, EmbeddedAgentRecord, SlideDocumentEditor },
+  components: { EducationShell, EmbeddedAgentRecord, SafeHtmlPreview, SlideDocumentEditor },
   data() {
     return {
       roleError: false,
@@ -379,9 +406,12 @@ export default {
       editorDialog: false,
       editorSaving: false,
       editingEntry: null,
+      adoptedPreviewDialog: false,
+      adoptedPreviewEntry: null,
       visualQaDialog: false,
       visualQaLoading: false,
       visualQaReport: null,
+      visualQaEntry: null,
       loadingGenerated: false,
       contextLoading: false,
       selectedLessonId: '',
@@ -490,7 +520,7 @@ export default {
         })
         this.$message.success('课件已保存到课程文件柜')
       } catch (error) {
-        this.$message.error('上传失败，请检查文件类型和大小')
+        this.$message.error(educationErrorMessage(error, '上传失败，请检查文件类型和大小'))
       } finally {
         this.uploading = false
       }
@@ -577,6 +607,37 @@ export default {
     closeAgentRun() {
       this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
     },
+    async previewAdoptedArtifact({ adoptedObject }) {
+      if (!adoptedObject || adoptedObject.object_type !== 'courseware') return
+      let entry = this.generatedContents.find(item => item.content.id === adoptedObject.object_id)
+      if (!entry) {
+        await this.loadGeneratedContents()
+        entry = this.generatedContents.find(item => item.content.id === adoptedObject.object_id)
+      }
+      if (!entry) {
+        this.$message.warning('该课件产物暂时无法读取，请返回聊天查看生成记录。')
+        return
+      }
+      if (adoptedObject.version_id && entry.version.id !== adoptedObject.version_id) {
+        try {
+          const response = await getContentVersions(entry.content.id)
+          const payload = response && response.data !== undefined && response.code !== undefined
+            ? response.data
+            : response
+          const versions = Array.isArray(payload) ? payload : (payload && payload.items) || []
+          const adoptedVersion = versions.find(version => version.id === adoptedObject.version_id)
+          if (adoptedVersion) entry = { ...entry, version: adoptedVersion }
+        } catch (error) {
+          // Fall back to the latest persisted version already loaded on this page.
+        }
+      }
+      this.adoptedPreviewEntry = entry
+      this.adoptedPreviewDialog = true
+    },
+    renderCoursewarePreview(entry) {
+      const source = entry && entry.version && entry.version.source_json
+      return source ? renderSlideDocumentHtml(source) : ''
+    },
     async loadGeneratedContents() {
       this.loadingGenerated = true
       try {
@@ -641,6 +702,7 @@ export default {
       this.visualQaDialog = true
       this.visualQaLoading = true
       this.visualQaReport = null
+      this.visualQaEntry = entry
       try {
         const response = await getContentVisualQa(entry.content.id)
         this.visualQaReport = response
@@ -661,6 +723,19 @@ export default {
         warning: '有改进建议',
         failed: '需要修复',
       }[status] || '待检查'
+    },
+    renderVisualQaSlide(slide) {
+      const source = this.visualQaEntry && this.visualQaEntry.version
+        && this.visualQaEntry.version.source_json
+      if (!source || !Array.isArray(source.slides)) return ''
+      const slideSource = source.slides.find(item => item.id === slide.id)
+        || source.slides[(Number(slide.number) || 1) - 1]
+      if (!slideSource) return ''
+      return renderSlideDocumentHtml({
+        title: source.title,
+        theme: source.theme,
+        slides: [slideSource],
+      })
     },
     openRecoverableDraft(draft) {
       const lesson = this.lessons.find(item => item.id === this.agentForm.lesson_id)
@@ -804,6 +879,19 @@ export default {
   border: 1px solid #e2eae8;
   border-radius: 10px;
 }
+.visual-qa-slide-preview { grid-column: 1 / -1; width: 100%; }
+.visual-qa-slide-preview ::v-deep .preview-frame { height: 360px; }
+.adopted-preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.adopted-preview-heading b,
+.adopted-preview-heading span { display: block; }
+.adopted-preview-heading b { color: #284943; font-size: 16px; }
+.adopted-preview-heading span { margin-top: 4px; color: #7b8c88; font-size: 12px; }
 .visual-qa-slide > div { display: flex; gap: 10px; align-items: center; }
 .visual-qa-slide > div span { color: #559087; font: 700 10px Georgia, serif; }
 .visual-qa-slide > div b { color: #354844; font-size: 12px; }

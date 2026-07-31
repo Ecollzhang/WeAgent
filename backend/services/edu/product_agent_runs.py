@@ -195,6 +195,28 @@ def product_workflow(product_code):
     return PRODUCT_AGENT_WORKFLOWS.get(str(product_code or "").strip())
 
 
+def build_visible_product_intent(product_code, options, lesson=None):
+    safe_options = _safe_options(options)
+    requirements = str(safe_options.get("requirements") or "").strip()
+    labels = {
+        "roster_import": "导入并核对课程成员名单",
+        "courseware": "根据当前教案生成 PPT",
+        "student_insight": "根据课程正式成绩与学习证据生成学情分析",
+        "mock_exam": "根据当前课程生成一套模拟考试",
+        "weakness_analysis": "分析我的作业弱点并给出改进建议",
+        "course_mind_map": "根据当前课程生成思维导图",
+    }
+    summary = labels.get(product_code, "完成当前 Education 任务")
+    if lesson and product_code == "courseware":
+        summary += f"：{lesson.title}"
+    if requirements:
+        summary += f"。补充要求：{requirements}"
+    theme = str(safe_options.get("theme_style") or "").strip()
+    if product_code == "courseware" and theme:
+        summary += f"。课件风格：{theme}"
+    return summary
+
+
 def product_template(product_code):
     contract = product_workflow(product_code)
     if not contract:

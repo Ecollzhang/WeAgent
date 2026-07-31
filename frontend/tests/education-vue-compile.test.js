@@ -6,6 +6,8 @@ const parser = require('@babel/parser')
 
 const root = path.resolve(__dirname, '..')
 const files = [
+  'src/components/ArtifactWorkbench/index.vue',
+  'src/components/MessageBubble/index.vue',
   'src/components/education/EducationShell.vue',
   'src/components/education/EducationCourseContext.vue',
   'src/components/education/MindMapTree.vue',

@@ -25,6 +25,82 @@ def product_business_route(product_code, course_id, lesson_id=None):
     return {"path": routes.get(product_code, f"/education/courses/{course_id}"), "query": query}
 
 
+PRODUCT_ADOPTED_OBJECTS = {
+    "product.roster_import": (
+        "edu.course.members.import",
+        "course_roster",
+        "roster",
+    ),
+    "product.courseware": (
+        "edu.courseware.create",
+        "courseware",
+        "slide_document",
+    ),
+    "product.student_insight": (
+        "edu.student_insight.refresh",
+        "student_insight_report",
+        "student_insight",
+    ),
+    "product.mock_exam": (
+        "edu.mock_exam.create",
+        "mock_exam",
+        "mock_exam",
+    ),
+    "product.weakness_analysis": (
+        "edu.weakness.analyze",
+        "weakness_analysis",
+        "weakness_analysis",
+    ),
+    "product.course_mind_map": (
+        "edu.mind_map.create",
+        "course_mind_map",
+        "mind_map",
+    ),
+}
+
+
+def adopted_object_from_tool_result(
+    *,
+    workflow_code,
+    tool_name,
+    result,
+    course_id,
+    lesson_id=None,
+    tool_call_id=None,
+):
+    contract = PRODUCT_ADOPTED_OBJECTS.get(str(workflow_code or ""))
+    if not contract or contract[0] != tool_name:
+        return None
+    product_code = str(workflow_code).split(".", 1)[1]
+    payload = result if isinstance(result, dict) else {}
+    if product_code == "courseware":
+        content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+        version = payload.get("version") if isinstance(payload.get("version"), dict) else {}
+        object_id = content.get("id")
+        version_id = version.get("id") or content.get("current_version_id")
+    else:
+        object_id = payload.get("id") or course_id
+        version_id = (
+            payload.get("current_version_id")
+            or payload.get("version_id")
+            or tool_call_id
+        )
+    if not object_id or not version_id:
+        return None
+    return {
+        "domain": "edu",
+        "object_type": contract[1],
+        "object_id": str(object_id),
+        "version_id": str(version_id),
+        "preview_kind": contract[2],
+        "business_route": product_business_route(
+            product_code,
+            course_id,
+            lesson_id,
+        ),
+    }
+
+
 class EducationWorkflow(db.Model):
     __tablename__ = "edu_workflows"
 
