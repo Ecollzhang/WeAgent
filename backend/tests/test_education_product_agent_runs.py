@@ -328,9 +328,21 @@ def test_teacher_starts_submission_review_agent_with_natural_visible_prompt(
         "learning_analyst",
         "teaching_reviewer",
     ]
+    assert run["nodes"][0]["finalizer"] == {
+        "type": "education_submission_review_from_agent_reply"
+    }
+    assert run["nodes"][1]["finalizer"] == {
+        "type": "education_submission_review_reviewer_from_agent_reply"
+    }
     started = runtime.started[0]
     assert "edu.submission_review.context.get" in started["prompt"]
     assert "edu.submission_review.analysis.create" in started["prompt"]
+    assert '"strengths":["string"]' in started["prompt"]
+    assert '"evidence":"exact quote"' in started["prompt"]
+    assert '"concern":"string"' in started["prompt"]
+    assert '"evidence_refs":["exact quote"]' in started["prompt"]
+    assert '"verdict":"approved|needs_revision"' in started["prompt"]
+    assert '"required_changes":["string"]' in started["prompt"]
     assert submitted["id"] in started["prompt"]
     assert submitted["id"] not in started["visible_prompt"]
     assert started["visible_prompt"] == "为当前学生提交生成可采纳的批改建议"
@@ -401,7 +413,6 @@ def test_submission_review_agent_persists_evidence_linked_cached_analysis(
             "agent_id": "_edu_4",
             "idempotency_key": "review-analysis-v1",
             "arguments": {
-                "submission_id": submitted["id"],
                 "analysis": analysis_payload,
             },
         },
@@ -707,6 +718,71 @@ def test_product_run_without_required_durable_tool_write_is_partial(education_ap
     assert run["status"] == "partial"
     assert "edu.mind_map.create" in run["error_summary"]
     assert "未写入" in run["error_summary"]
+
+
+def test_product_run_with_failed_agent_reaches_terminal_partial_state(education_app):
+    from services.edu.tool_models import EducationToolGrant
+
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, lesson, teacher, student, _ = seed_course(education_app)
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Review terminal state",
+            "kind": "writing",
+            "instruction_json": {"text": "Explain the evidence."},
+            "evaluation_json": {"rubric": {"evidence": 10}},
+        },
+    ).get_json()
+    client.post(f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher)
+    submission = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student,
+        json={"answer_json": {"writing": "A short response."}},
+    ).get_json()["submission"]
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "product_code": "submission_review",
+            "options": {"submission_id": submission["id"]},
+        },
+    ).get_json()
+    runtime.snapshot = {
+        "status": "done",
+        "agent_runs": [
+            {
+                "agent_id": "_edu_4",
+                "status": "done",
+                "content": '{"summary":"analysis attempted"}',
+            },
+            {
+                "agent_id": "_edu_9",
+                "status": "error",
+                "error": "reviewer failed",
+            },
+        ],
+    }
+
+    refreshed = client.get(
+        f"/api/edu/product-agent-runs/{created['id']}",
+        headers=teacher,
+    )
+
+    assert refreshed.status_code == 200
+    run = refreshed.get_json()
+    assert run["status"] == "partial"
+    assert run["finished_at"] is not None
+    assert "reviewer failed" in run["error_summary"]
+    with education_app.app_context():
+        grant = EducationToolGrant.query.filter_by(
+            agent_run_id=created["id"]
+        ).one()
+        assert grant.revoked_at is not None
 
 
 def test_product_run_skips_shared_artifact_repair_and_requires_designated_writer(

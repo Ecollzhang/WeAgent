@@ -37,7 +37,7 @@ export default {
     progressText() {
       const progress = (this.context && this.context.progress) || {}
       const run = (this.context && this.context.run) || {}
-      const done = progress.completed_agent_count || 0
+      const done = progress.completed_count || 0
       const total = progress.agent_count || 0
       const labels = {
         pending: '等待开始', running: '协作进行中', completed: '已完成并写入业务产物',

@@ -610,11 +610,30 @@ class MessageService:
             node_ids.add(node_id)
             finalizer = raw.get('finalizer')
             if finalizer is not None:
-                if (
-                    finalizer
-                    != {'type': 'education_courseware_from_agent_files'}
-                    or agent_id != '_edu_2'
-                ):
+                trusted_finalizer = (
+                    (
+                        finalizer
+                        == {'type': 'education_courseware_from_agent_files'}
+                        and agent_id == '_edu_2'
+                    )
+                    or (
+                        finalizer
+                        == {
+                            'type':
+                            'education_submission_review_from_agent_reply'
+                        }
+                        and agent_id == '_edu_4'
+                    )
+                    or (
+                        finalizer
+                        == {
+                            'type':
+                            'education_submission_review_reviewer_from_agent_reply'
+                        }
+                        and agent_id == '_edu_9'
+                    )
+                )
+                if not trusted_finalizer:
                     return None
             nodes.append(
                 {
@@ -1878,6 +1897,26 @@ class MessageService:
             'plan': plan,
         }, room=conversation_id)
 
+    @staticmethod
+    def _trusted_dependency_context(task, task_results):
+        """Project only completed predecessor replies into the next fixed node."""
+        sections = []
+        total = 0
+        for dependency_id in task.get('depends_on', []):
+            result = task_results.get(dependency_id) or {}
+            if result.get('status') != 'done':
+                continue
+            reply = str(result.get('reply') or '').strip()
+            if not reply:
+                continue
+            remaining = max(0, 24000 - total)
+            if not remaining:
+                break
+            bounded = reply[:min(12000, remaining)]
+            sections.append(f'[{dependency_id}]\n{bounded}')
+            total += len(bounded)
+        return '\n\n'.join(sections)
+
     def _execute_worker_plan(self, conversation, round_id, user_message_id,
                              user_content, plan, workers):
         worker_map = {p.participant_id: p.participant_id for p in workers}
@@ -1910,7 +1949,8 @@ class MessageService:
                 thread = threading.Thread(
                     target=self._run_worker_task,
                     args=(app, conversation.id, round_id, user_message_id, user_content,
-                          task, worker_map[task['agent_id']], group_results),
+                          task, worker_map[task['agent_id']], group_results,
+                          self._trusted_dependency_context(task, task_results)),
                     daemon=True,
                 )
                 threads.append(thread)
@@ -1925,12 +1965,140 @@ class MessageService:
         session_id,
         agent_id,
         finalizer,
+        reply=None,
     ):
         """Validate and adopt a bounded Agent file contract.
 
-        This is intentionally a one-item allowlist. Workflow JSON cannot name
+        This is intentionally a bounded allowlist. Workflow JSON cannot name
         arbitrary files, tools, actions, or idempotency keys.
         """
+        if (
+            finalizer
+            == {
+                'type':
+                'education_submission_review_reviewer_from_agent_reply'
+            }
+            and agent_id == '_edu_9'
+        ):
+            try:
+                source = json.loads(str(reply or '').strip())
+                required = {
+                    'verdict',
+                    'rubric_alignment',
+                    'evidence_check',
+                    'labeling_check',
+                    'required_changes',
+                }
+                if not isinstance(source, dict) or set(source) != required:
+                    raise ValueError(
+                        'review conclusion must contain exactly verdict, '
+                        'rubric_alignment, evidence_check, labeling_check, '
+                        'and required_changes'
+                    )
+                if source['verdict'] not in {'approved', 'needs_revision'}:
+                    raise ValueError(
+                        'review conclusion verdict must be approved or needs_revision'
+                    )
+                for field in (
+                    'rubric_alignment',
+                    'evidence_check',
+                    'labeling_check',
+                ):
+                    if not isinstance(source[field], str) or not source[field].strip():
+                        raise ValueError(
+                            f'review conclusion {field} must be a non-empty string'
+                        )
+                changes = source['required_changes']
+                if (
+                    not isinstance(changes, list)
+                    or any(
+                        not isinstance(item, str) or not item.strip()
+                        for item in changes
+                    )
+                ):
+                    raise ValueError(
+                        'review conclusion required_changes must be a string array'
+                    )
+                if len(
+                    json.dumps(source, ensure_ascii=False).encode('utf-8')
+                ) > 100_000:
+                    raise ValueError('review conclusion exceeds the size limit')
+            except Exception as error:
+                return {
+                    'status': 'error',
+                    'error': f'Review conclusion is not adoptable: {error}',
+                }
+            return {'status': 'ok', 'result': source}
+
+        if (
+            finalizer
+            == {'type': 'education_submission_review_from_agent_reply'}
+            and agent_id == '_edu_4'
+        ):
+            try:
+                source = json.loads(str(reply or '').strip())
+                required = {
+                    'summary',
+                    'strengths',
+                    'issues',
+                    'next_steps',
+                    'evidence_refs',
+                }
+                if not isinstance(source, dict) or set(source) != required:
+                    raise ValueError(
+                        'review analysis must contain exactly summary, strengths, '
+                        'issues, next_steps, and evidence_refs'
+                    )
+                source_bytes = json.dumps(
+                    source,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                ).encode('utf-8')
+                if len(source_bytes) > 200_000:
+                    raise ValueError('review analysis exceeds the size limit')
+            except Exception as error:
+                return {
+                    'status': 'error',
+                    'error': f'Review analysis is not adoptable: {error}',
+                }
+            response = manager.execute_tool(
+                session_id,
+                agent_id,
+                'education_action',
+                {
+                    'action': 'edu.submission_review.analysis.create',
+                    'arguments': {'analysis': source},
+                    'idempotency_key': (
+                        'product-submission-review-analysis-'
+                        + hashlib.sha256(source_bytes).hexdigest()[:16]
+                    ),
+                },
+            )
+            envelope = (
+                response.get('result')
+                if isinstance(response, dict) and response.get('status') == 'ok'
+                else None
+            )
+            if not isinstance(envelope, dict) or envelope.get('status') != 'ok':
+                error = (
+                    envelope.get('error')
+                    if isinstance(envelope, dict)
+                    else (response or {}).get('error')
+                    if isinstance(response, dict)
+                    else response
+                )
+                return {
+                    'status': 'error',
+                    'error': str(
+                        error or 'Education submission review adoption failed'
+                    )[:1000],
+                }
+            return {
+                'status': 'ok',
+                'result': envelope.get('result'),
+            }
+
         if (
             finalizer != {'type': 'education_courseware_from_agent_files'}
             or agent_id != '_edu_2'
@@ -2008,7 +2176,8 @@ class MessageService:
         }
 
     def _run_worker_task(self, app, conversation_id, round_id, user_message_id,
-                         user_content, task, participant_id, result_bucket):
+                         user_content, task, participant_id, result_bucket,
+                         dependency_context=''):
         with app.app_context():
             conversation = conversation_repo.get_by_id(conversation_id)
             if not conversation:
@@ -2031,6 +2200,12 @@ class MessageService:
                 f'- 指令：{task["instruction"]}\n\n'
                 '请只完成分配给你的部分。需要生成文件时必须写入你的私有工作目录。'
             )
+            if dependency_context:
+                prompt += (
+                    '\n\n前置节点已完成，以下内容由服务端按依赖关系注入，'
+                    '只作为当前节点的审校依据：\n'
+                    + dependency_context
+                )
             try:
                 from app.sandbox import get_manager
                 manager = get_manager()
@@ -2058,20 +2233,51 @@ class MessageService:
                                 conversation.sandbox_session_id,
                                 participant.participant_id,
                                 finalizer,
+                                reply=reply,
                             )
                             if finalizer_result.get('status') == 'ok':
                                 break
                             if repair_number >= 2:
                                 break
-                            repair_prompt = (
-                                '系统已校验你生成的课件文件，但尚不能采纳。'
-                                f'校验错误：{finalizer_result.get("error")}\n'
-                                '请只修复并覆盖你私有目录中的 '
-                                'slide_document.json 与 preview.html。'
-                                'slide_document 必须使用任务指定的 canonical schema；'
-                                'preview 必须是完整 HTML。不要创建新文件，不要调用业务工具；'
-                                '系统会在修复后重新校验并采纳。'
-                            )
+                            if finalizer == {
+                                'type':
+                                'education_submission_review_from_agent_reply'
+                            }:
+                                repair_prompt = (
+                                    '固定终结器尚不能采纳你的批改分析。'
+                                    f'精确错误：{finalizer_result.get("error")}\n'
+                                    '请修复后只返回一个完整 JSON 对象，不要 Markdown、'
+                                    '解释、工具调用或外层包装。根对象必须且只能包含 '
+                                    'summary、strengths、issues、next_steps、'
+                                    'evidence_refs；strengths、next_steps、'
+                                    'evidence_refs 是字符串数组；issues 每项必须且'
+                                    '只能包含 evidence、concern、suggestion 字符串。'
+                                )
+                            elif finalizer == {
+                                'type':
+                                'education_submission_review_reviewer_from_agent_reply'
+                            }:
+                                repair_prompt = (
+                                    '固定终结器尚不能采纳你的审校结论。'
+                                    f'精确错误：{finalizer_result.get("error")}\n'
+                                    '请修复后只返回一个完整 JSON 对象，不要进度命令、'
+                                    'Markdown、解释、工具调用或外层包装。根对象必须'
+                                    '且只能包含 verdict、rubric_alignment、'
+                                    'evidence_check、labeling_check、required_changes；'
+                                    'verdict 只能是 approved 或 needs_revision；'
+                                    '三个检查说明必须是非空字符串；required_changes '
+                                    '必须是字符串数组。'
+                                )
+                            else:
+                                repair_prompt = (
+                                    '系统已校验你生成的课件文件，但尚不能采纳。'
+                                    f'校验错误：{finalizer_result.get("error")}\n'
+                                    '请只修复并覆盖你私有目录中的 '
+                                    'slide_document.json 与 preview.html。'
+                                    'slide_document 必须使用任务指定的 canonical schema；'
+                                    'preview 必须是完整 HTML。不要创建新文件，不要调用业务工具；'
+                                    '系统会在修复后重新校验并采纳。'
+                                )
                             repair = manager.send_message(
                                 conversation.sandbox_session_id,
                                 participant.participant_id,

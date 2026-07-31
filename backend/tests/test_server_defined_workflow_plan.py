@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 from app.services.message_service import MessageService
 
@@ -164,3 +165,93 @@ def test_courseware_finalizer_adopts_the_designated_agents_validated_files():
     assert args["arguments"]["source_json"]["theme"]["style"] == "paper_annotation"
     assert args["idempotency_key"].startswith("product-courseware-slide-")
     assert len(args["idempotency_key"]) == len("product-courseware-slide-") + 16
+
+
+def test_submission_review_finalizer_adopts_strict_agent_json():
+    class FakeManager:
+        def __init__(self):
+            self.executed = []
+
+        def execute_tool(self, session_id, agent_id, tool_name, args):
+            self.executed.append((session_id, agent_id, tool_name, args))
+            return {
+                "status": "ok",
+                "result": {
+                    "status": "ok",
+                    "result": {"id": "analysis-1", "status": "ready"},
+                },
+            }
+
+    analysis = {
+        "summary": "The response identifies the turning point.",
+        "strengths": ["Uses a clear sequence"],
+        "issues": [
+            {
+                "evidence": "Then she chose to return.",
+                "concern": "The reason is under-explained.",
+                "suggestion": "Add one causal sentence.",
+            }
+        ],
+        "next_steps": ["Explain cause and effect"],
+        "evidence_refs": ["Then she chose to return."],
+    }
+    manager = FakeManager()
+
+    result = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_4",
+        {"type": "education_submission_review_from_agent_reply"},
+        reply=json.dumps(analysis),
+    )
+
+    assert result["status"] == "ok"
+    _, agent_id, tool_name, args = manager.executed[0]
+    assert agent_id == "_edu_4"
+    assert tool_name == "education_action"
+    assert args["action"] == "edu.submission_review.analysis.create"
+    assert args["arguments"] == {"analysis": analysis}
+    assert args["idempotency_key"].startswith("product-submission-review-analysis-")
+
+
+def test_submission_review_reviewer_finalizer_requires_a_real_conclusion():
+    valid = {
+        "verdict": "approved",
+        "rubric_alignment": "The advice follows all three rubric dimensions.",
+        "evidence_check": "Every quoted phrase occurs in the submitted response.",
+        "labeling_check": "The wording describes evidence rather than labeling the student.",
+        "required_changes": [],
+    }
+
+    accepted = MessageService._execute_trusted_task_finalizer(
+        object(),
+        "session-1",
+        "_edu_9",
+        {"type": "education_submission_review_reviewer_from_agent_reply"},
+        reply=json.dumps(valid),
+    )
+    progress_only = MessageService._execute_trusted_task_finalizer(
+        object(),
+        "session-1",
+        "_edu_9",
+        {"type": "education_submission_review_reviewer_from_agent_reply"},
+        reply="weagent-report '{\"type\":\"progress\",\"status\":\"running\"}'",
+    )
+
+    assert accepted == {"status": "ok", "result": valid}
+    assert progress_only["status"] == "error"
+    assert "not adoptable" in progress_only["error"]
+
+
+def test_dependency_context_contains_only_completed_predecessor_replies():
+    task = {"depends_on": ["step-1", "missing"]}
+    results = {
+        "step-1": {"status": "done", "reply": '{"summary":"analysis"}'},
+        "missing": {"status": "error", "reply": "do not include"},
+    }
+
+    context = MessageService._trusted_dependency_context(task, results)
+
+    assert "step-1" in context
+    assert '{"summary":"analysis"}' in context
+    assert "do not include" not in context

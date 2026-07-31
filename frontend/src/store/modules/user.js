@@ -1,4 +1,5 @@
 import { login, register, getProfile } from '../../api/auth'
+import { clearUserSessionStorage } from '../../utils/session-storage'
 
 const state = {
   user: JSON.parse(localStorage.getItem('user') || 'null'),
@@ -27,9 +28,7 @@ const mutations = {
     state.user = null
     state.accessToken = ''
     state.refreshToken = ''
-    localStorage.removeItem('user')
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
+    clearUserSessionStorage()
   },
 }
 
@@ -68,6 +67,12 @@ const actions = {
 
   logout({ commit }) {
     commit('CLEAR_AUTH')
+    commit('workspace/RESET_STATE', null, { root: true })
+    commit('conversation/RESET_STATE', null, { root: true })
+    commit('message/RESET_STATE', null, { root: true })
+    commit('agent/RESET_STATE', null, { root: true })
+    commit('settings/RESET_STATE', null, { root: true })
+    commit('education/RESET_STATE', null, { root: true })
   },
 }
 

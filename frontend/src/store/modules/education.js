@@ -84,10 +84,8 @@ function items(response) {
   return Array.isArray(value.items) ? value.items : []
 }
 
-export default {
-  namespaced: true,
-
-  state: {
+function initialState() {
+  return {
     courses: [],
     activeCourse: null,
     units: [],
@@ -119,7 +117,13 @@ export default {
     studentInsightOverview: null,
     loading: false,
     saving: false,
-  },
+  }
+}
+
+export default {
+  namespaced: true,
+
+  state: initialState(),
 
   getters: {
     courses: state => state.courses,
@@ -157,6 +161,7 @@ export default {
   },
 
   mutations: {
+    RESET_STATE(state) { Object.assign(state, initialState()) },
     SET_LOADING(state, value) { state.loading = value },
     SET_SAVING(state, value) { state.saving = value },
     SET_COURSES(state, value) { state.courses = value },

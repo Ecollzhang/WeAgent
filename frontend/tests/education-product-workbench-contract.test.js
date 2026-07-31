@@ -174,6 +174,12 @@ for (const fragment of [
     'Education chat must link back to its durable business context'
   )
 }
+
+contains(
+  'src/components/education/EducationChatContext.vue',
+  'progress.completed_count',
+  'Education chat banner must use the completed-count field returned by product context'
+)
 contains(
   'src/api/education.js',
   'getEducationConversationContext',

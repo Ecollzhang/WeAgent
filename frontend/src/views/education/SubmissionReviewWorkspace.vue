@@ -37,6 +37,15 @@
         @poll-error="$message.warning('AI 建议状态暂时无法刷新，教师批改不受影响')"
         @close="closeAgentRun"
       />
+      <div v-if="canRetryAgent" class="agent-retry">
+        <span>上一轮 AI 建议未完整写入，不影响人工批改。</span>
+        <el-button
+          size="mini"
+          plain
+          :loading="retryingAgent"
+          @click="retryReviewAgent"
+        >重新生成 AI 建议</el-button>
+      </div>
 
       <main class="review-workbench">
         <aside class="review-rubric-column">
@@ -222,6 +231,7 @@ export default {
       feedbackComment: '',
       saving: false,
       publishing: false,
+      retryingAgent: false,
     }
   },
   computed: {
@@ -287,6 +297,11 @@ export default {
     agentRunning() {
       return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
     },
+    canRetryAgent() {
+      if (!this.review || this.review.analysis_state === 'ready') return false
+      if (!this.productAgentRun) return true
+      return ['partial', 'failed', 'cancelled'].includes(this.productAgentRun.status)
+    },
   },
   watch: {
     submissionId() { this.loadReview() },
@@ -299,7 +314,9 @@ export default {
     async loadReview() {
       try {
         const review = await this.$store.dispatch('education/fetchSubmissionReview', this.submissionId)
-        this.hydrateDraft(review.review_draft)
+        this.hydrateDraft(
+          review.review_draft || this.latestReleasedFeedback(review.feedback_versions)
+        )
         const runs = await this.$store.dispatch('education/fetchProductAgentRuns', {
           courseId: this.courseId,
           productCode: 'submission_review',
@@ -321,6 +338,15 @@ export default {
         this.$message.error('批改内容加载失败或你无权访问')
         this.$router.replace(this.overviewPath)
       }
+    },
+    latestReleasedFeedback(items) {
+      return (Array.isArray(items) ? items : [])
+        .filter(item => item && item.status === 'released')
+        .reduce((latest, item) => (
+          !latest || Number(item.version_number || 0) > Number(latest.version_number || 0)
+            ? item
+            : latest
+        ), null)
     },
     hydrateDraft(value) {
       const source = value || emptyDraft()
@@ -407,6 +433,16 @@ export default {
           this.submissionId
         )
         if (refreshed.review_draft) this.hydrateDraft(refreshed.review_draft)
+      }
+    },
+    async retryReviewAgent() {
+      if (this.agentRunning || this.retryingAgent) return
+      this.retryingAgent = true
+      try {
+        this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
+        await this.startReviewAgent()
+      } finally {
+        this.retryingAgent = false
       }
     },
     closeAgentRun() {

@@ -153,10 +153,31 @@ export default {
       })
     },
 
-    switchWorkspace(ws) {
-    console.log('[WorkspaceSwitcher] switchWorkspace:', ws)
-      this.$store.dispatch('workspace/selectWorkspace', ws)
+    async switchWorkspace(ws) {
+      await this.$store.dispatch('workspace/selectWorkspace', ws)
       this.$store.dispatch('grayscale/loadDomainConfig', ws.domain)
+      if (ws.domain === 'edu') {
+        await this.syncEducationContext(ws)
+      } else {
+        this.$store.commit('education/SET_ACTIVE_COURSE', null)
+      }
+    },
+
+    async syncEducationContext(ws) {
+      try {
+        const courses = await this.$store.dispatch('education/fetchCourses')
+        const requestedRole = ws.sub_role || ''
+        const candidate = requestedRole
+          ? courses.find(course => course.membership_role === requestedRole)
+          : courses[0]
+        if (candidate) {
+          await this.$store.dispatch('education/selectCourse', candidate.id)
+        } else {
+          this.$store.commit('education/SET_ACTIVE_COURSE', null)
+        }
+      } catch (error) {
+        this.$store.commit('education/SET_ACTIVE_COURSE', null)
+      }
     },
 
     async handleCreate() {

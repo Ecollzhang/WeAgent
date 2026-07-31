@@ -434,6 +434,21 @@ def _sync_run(run, authorization):
 
     if failed_count:
         run.status = "partial" if done_count else "failed"
+        failed_nodes = [
+            (
+                node.get("agent_name")
+                or node.get("agent_role")
+                or node.get("agent_id")
+                or "Agent"
+            )
+            + ": "
+            + str(node.get("error") or "Agent execution failed")
+            for node in nodes
+            if node.get("status") == "failed"
+        ]
+        run.error_summary = "；".join(failed_nodes)[:2000]
+        run.finished_at = datetime.utcnow()
+        _revoke_tool_grant(run)
     elif agent_count and done_count == agent_count:
         missing_write = _missing_required_product_write(run)
         has_approval = any(node.get("type") == "approval" for node in nodes)

@@ -9,6 +9,7 @@ const sidebar = read('src/components/Sidebar/index.vue')
 const shell = read('src/components/education/EducationShell.vue')
 const courseSpace = read('src/views/education/CourseSpace.vue')
 const router = read('src/router/index.js')
+const workspaceSwitcher = read('src/components/WorkspaceSwitcher/index.vue')
 
 for (const label of [
   '教学空间',
@@ -25,6 +26,14 @@ assert.ok(sidebar.includes('educationDomainNavItems'), 'Education domains must b
 assert.ok(
   sidebar.includes("activeSubRole"),
   'Education domains must use the workspace role before a course is selected'
+)
+assert.ok(
+  workspaceSwitcher.includes('syncEducationContext'),
+  'switching into Education must hydrate course membership for legacy workspaces'
+)
+assert.ok(
+  workspaceSwitcher.includes("dispatch('education/fetchCourses')"),
+  'Education navigation must know teacher/student membership before opening a course'
 )
 assert.ok(
   !sidebar.includes('if (!course || !this.membershipRole) return [teachingSpace]'),
@@ -64,6 +73,14 @@ assert.ok(
 assert.ok(
   router.includes("educationRole: 'student'"),
   'student product routes must declare their role'
+)
+assert.ok(
+  router.includes('ensureEducationWorkspace'),
+  'direct Education routes must activate the Education workspace before rendering'
+)
+assert.ok(
+  router.includes("store.dispatch('workspace/fetchWorkspaces', 'edu')"),
+  'deep links must not retain a workspace from another domain'
 )
 
 console.log('education unified navigation contract ok')

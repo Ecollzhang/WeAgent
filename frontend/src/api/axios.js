@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { Message } from 'element-ui'
+import { clearUserSessionStorage } from '../utils/session-storage'
 
 const service = axios.create({
   baseURL: '/api',
@@ -40,9 +41,7 @@ service.interceptors.response.use(
             Message.error(data?.message || '用户名或密码错误')
           } else {
             // Token expired or invalid
-            localStorage.removeItem('access_token')
-            localStorage.removeItem('refresh_token')
-            localStorage.removeItem('user')
+            clearUserSessionStorage()
             window.location.href = '/login'
             Message.error('Login expired, please login again')
           }

@@ -508,6 +508,8 @@ BUILTIN_TOOL_DEFINITIONS = [
                         "edu.question_bank.upsert",
                         "edu.paper.compose",
                         "edu.student_insight.refresh",
+                        "edu.submission_review.context.get",
+                        "edu.submission_review.analysis.create",
                         "edu.mock_exam.create",
                         "edu.weakness.analyze",
                         "edu.mind_map.create",

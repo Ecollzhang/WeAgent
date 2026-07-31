@@ -221,7 +221,15 @@
           >正式提交</el-button>
         </div>
         <div v-if="studentFeedback" class="feedback-card" data-testid="released-feedback">
-          <div><i class="el-icon-chat-line-square"></i><b>学习反馈</b></div>
+          <div class="feedback-card-head">
+            <span><i class="el-icon-chat-line-square"></i><b>学习反馈</b></span>
+            <strong v-if="studentFeedback.score !== null" class="feedback-score">
+              {{ studentFeedback.score }} / {{ assignment.max_score }} 分
+            </strong>
+          </div>
+          <div v-if="studentFeedback.version_number" class="feedback-version">
+            反馈版本 v{{ studentFeedback.version_number }}
+          </div>
           <p>{{ studentFeedback.content }}</p>
           <small v-if="studentFeedback.next_step">下一步：{{ studentFeedback.next_step }}</small>
         </div>
@@ -256,6 +264,7 @@ export default {
   computed: {
     courseId() { return this.$route.params.courseId },
     assignmentId() { return this.$route.params.assignmentId },
+    currentUserId() { return this.$store.getters['user/userId'] || 'anonymous' },
     course() { return this.$store.getters['education/activeCourse'] || {} },
     assignment() { return this.$store.state.education.activeAssignment },
     overview() { return this.$store.getters['education/assignmentOverview'] || {} },
@@ -335,9 +344,14 @@ export default {
       const next = Array.isArray(value.next_steps)
         ? value.next_steps.join('；')
         : value.next_step || ''
-      return { content: lines.join('\n') || '教师已发布本次反馈。', next_step: next }
+      return {
+        content: lines.join('\n') || '教师已发布本次反馈。',
+        next_step: next,
+        score: latest.score === null || latest.score === undefined ? null : latest.score,
+        version_number: latest.version_number || null,
+      }
     },
-    draftKey() { return `education_submission_draft:${this.assignmentId}` },
+    draftKey() { return `education_submission_draft:${this.currentUserId}:${this.assignmentId}` },
   },
   async created() {
     try {
@@ -516,7 +530,10 @@ dd { margin: 0; color: #364456; font-size: 13px; }
 .section-title p, .section-title > span { margin: 4px 0 0; color: #8490a0; font-size: 11px; }
 .submission-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 13px; }
 .feedback-card { margin-top: 18px; padding: 17px; border: 1px solid #bfe0da; border-radius: 10px; background: #eff9f7; }
-.feedback-card div { display: flex; gap: 8px; color: #247b72; }
+.feedback-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #247b72; }
+.feedback-card-head span { display: flex; align-items: center; gap: 8px; }
+.feedback-score { padding: 5px 10px; border-radius: 999px; background: #d9f1ec; color: #17685f; font-size: 15px; }
+.feedback-version { margin-top: 7px; color: #6a8984; font-size: 12px; }
 .feedback-card p { color: #48645f; white-space: pre-wrap; line-height: 1.7; }
 @media (max-width: 1050px) {
   .overview-metrics { grid-template-columns: repeat(2, 1fr); }

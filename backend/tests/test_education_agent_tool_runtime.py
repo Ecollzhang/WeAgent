@@ -41,6 +41,8 @@ def test_education_action_is_a_real_bounded_builtin_tool_definition():
             "edu.question_bank.upsert",
             "edu.paper.compose",
             "edu.student_insight.refresh",
+            "edu.submission_review.context.get",
+            "edu.submission_review.analysis.create",
             "edu.mock_exam.create",
             "edu.weakness.analyze",
             "edu.mind_map.create",
@@ -183,6 +185,55 @@ def test_sandbox_education_action_uses_only_server_projected_scope(monkeypatch):
         "agent_id": "_edu_1",
     }
     assert timeout == 30
+
+
+def test_sandbox_education_action_allows_submission_review_tools(monkeypatch):
+    requested_urls = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit=None):
+            return json.dumps(
+                {
+                    "call_id": "call-review",
+                    "tool_name": "edu.submission_review.context.get",
+                    "replayed": False,
+                    "result": {"submission": {"id": "submission-1"}},
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append((request.full_url, timeout))
+        return FakeResponse()
+
+    monkeypatch.setenv("EDUCATION_RUN_GRANT", "server-grant")
+    monkeypatch.setenv(
+        "EDUCATION_SERVICE_URL",
+        "http://host.docker.internal:5102",
+    )
+    monkeypatch.setattr(container_tools.urllib.request, "urlopen", fake_urlopen)
+
+    result = container_tools._education_action(
+        action="edu.submission_review.context.get",
+        arguments={"submission_id": "submission-1"},
+        _weagent_agent_id="_edu_4",
+    )
+
+    assert result["result"]["submission"]["id"] == "submission-1"
+    assert requested_urls == [
+        (
+            "http://host.docker.internal:5102"
+            "/api/edu/tools/edu.submission_review.context.get/invoke",
+            30,
+        )
+    ]
 
 
 def test_sandbox_education_action_requires_projected_grant(monkeypatch):

@@ -227,6 +227,44 @@ const router = new Router({
   routes,
 })
 
+async function ensureEducationWorkspace(to) {
+  const requestedRole = [...to.matched]
+    .reverse()
+    .map(record => record.meta.educationRole || '')
+    .find(Boolean) || ''
+  const activeDomain = store.getters['workspace/activeDomain']
+  const activeSubRole = store.getters['workspace/activeSubRole']
+  if (
+    activeDomain === 'edu'
+    && (!requestedRole || !activeSubRole || activeSubRole === requestedRole)
+  ) {
+    return
+  }
+
+  try {
+    await store.dispatch('workspace/fetchWorkspaces', 'edu')
+    const workspaces = store.getters['workspace/workspacesByDomain']('edu')
+    const workspace = (
+      requestedRole
+        ? workspaces.find(item => item.sub_role === requestedRole)
+        : null
+    ) || workspaces[0]
+    await store.dispatch('workspace/selectWorkspace', workspace || {
+      id: null,
+      domain: 'edu',
+      name: '',
+      sub_role: requestedRole,
+    })
+  } catch (error) {
+    await store.dispatch('workspace/selectWorkspace', {
+      id: null,
+      domain: 'edu',
+      name: '',
+      sub_role: requestedRole,
+    })
+  }
+}
+
 // Navigation guard
 router.beforeEach(async (to, from, next) => {
   const isAuthenticated = store.getters['user/isAuthenticated']
@@ -237,6 +275,7 @@ router.beforeEach(async (to, from, next) => {
     } else if (to.matched.some(record => record.meta.education)) {
       try {
         await store.dispatch('grayscale/loadDomainConfig', 'edu')
+        await ensureEducationWorkspace(to)
       } catch (error) {
         next({ name: 'Dashboard' })
         return

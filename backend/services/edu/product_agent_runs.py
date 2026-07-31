@@ -250,7 +250,28 @@ def product_template(product_code):
                     }
                     if product_code == "courseware"
                     and role == "courseware_maker"
-                    else {}
+                    else (
+                        {
+                            "finalizer": {
+                                "type": "education_submission_review_from_agent_reply"
+                            }
+                        }
+                        if product_code == "submission_review"
+                        and role == "learning_analyst"
+                        else (
+                            {
+                                "finalizer": {
+                                    "type": (
+                                        "education_submission_review_"
+                                        "reviewer_from_agent_reply"
+                                    )
+                                }
+                            }
+                            if product_code == "submission_review"
+                            and role == "teaching_reviewer"
+                            else {}
+                        )
+                    )
                 ),
             }
             for index, role in enumerate(contract["agent_roles"], 1)
@@ -385,13 +406,25 @@ def build_product_prompt(product_code, course, options, lesson=None):
         prompt += (
             "\n【学情分析师】调用 edu.submission_review.context.get，参数只包含 "
             f"submission_id={json.dumps(submission_id)}。严格依据返回的当前提交版本、"
-            "作业要求和量规形成建议；不得推测未提供的学生特征。随后调用 "
-            "edu.submission_review.analysis.create，submission_id 使用同一值，"
-            "analysis 必须包含 summary、strengths、issues、next_steps 和 "
-            "evidence_refs；每条问题都要引用提交中的原文证据；"
-            "idempotency_key=product-submission-review-analysis-v1。"
-            "\n【教学审校员】检查建议是否与量规一致、证据是否真实、是否存在标签化"
-            "判断；不得写入教师批改草稿、量规分数、正式成绩或已发布反馈。"
+            "作业要求和量规形成建议；不得推测未提供的学生特征。不要直接调用 "
+            "edu.submission_review.analysis.create；固定终结器会校验并写入。"
+            "你的最终回复必须只包含这一 JSON 对象（字段名和类型不可变）："
+            '{"summary":"string","strengths":["string"],'
+            '"issues":[{"evidence":"exact quote","concern":"string",'
+            '"suggestion":"string"}],"next_steps":["string"],'
+            '"evidence_refs":["exact quote"]}。strengths、next_steps 和 '
+            "evidence_refs 只能是字符串数组；issues 中每项只能使用 evidence、"
+            "concern、suggestion，并且 evidence 必须引用当前提交的原文；"
+            "不要添加 Markdown 代码围栏、summary 包装或 adopted_object 包装。"
+            "\n【教学审校员】系统会附加学情分析师的前置输出。只检查建议是否与量规"
+            "一致、证据是否真实、是否存在标签化判断；不得调用任何工具，不得写入"
+            "教师批改草稿、量规分数、正式成绩或已发布反馈。最终回复必须只包含"
+            "这一 JSON 对象："
+            '{"verdict":"approved|needs_revision","rubric_alignment":"string",'
+            '"evidence_check":"string","labeling_check":"string",'
+            '"required_changes":["string"]}。verdict 只能是 approved 或 '
+            "needs_revision；三个检查说明必须是非空字符串；required_changes "
+            "只能是字符串数组。不得只返回进度命令、Markdown 或外层包装。"
         )
     elif product_code == "mock_exam":
         question_count = int(options.get("question_count") or 5)

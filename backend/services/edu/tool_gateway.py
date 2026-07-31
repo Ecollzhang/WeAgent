@@ -1260,6 +1260,15 @@ def _paper_compose(grant, arguments):
 
 
 def _submission_review_scope(grant, submission_id):
+    if not str(submission_id or "").strip() and grant.agent_run_id:
+        from .workflow_models import EducationAgentRun
+
+        run = EducationAgentRun.query.filter_by(id=grant.agent_run_id).first()
+        submission_id = (
+            ((run.input_payload or {}).get("options") or {}).get("submission_id")
+            if run
+            else None
+        )
     submission = Submission.query.filter_by(id=str(submission_id or "")).first()
     assignment = (
         Assignment.query.filter_by(id=submission.assignment_id).first()

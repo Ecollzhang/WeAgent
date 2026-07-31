@@ -77,6 +77,7 @@ export default {
       return (this.run && this.run.output && this.run.output.adopted_object) || null
     },
     statusLabel() {
+      if (this.run && this.run.status === 'partial') return '部分完成'
       const labels = {
         pending: '等待中',
         running: '进行中',
@@ -88,13 +89,14 @@ export default {
     },
     statusText() {
       if (!this.run) return ''
+      if (this.run.status === 'partial') return '部分 Agent 已完成；可查看失败原因并重新生成。'
       if (this.run.status === 'completed') return '产物已写入 Education，可展开复核来源与工具调用。'
       if (this.run.status === 'failed') return '已保留现有产物和失败信息，可展开查看。'
       return '后台 Agent 正在通过受控 Education 工具处理。'
     },
     statusType() {
       if (this.run && this.run.status === 'completed') return 'success'
-      if (this.run && this.run.status === 'failed') return 'danger'
+      if (this.run && ['partial', 'failed'].includes(this.run.status)) return 'danger'
       return 'info'
     },
   },

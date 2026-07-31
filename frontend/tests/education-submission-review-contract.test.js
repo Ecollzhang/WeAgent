@@ -49,6 +49,17 @@ assert.ok(
   ),
   'assignment overview must not auto-select the first student'
 )
+for (const fragment of [
+  'studentFeedback.score',
+  'studentFeedback.version_number',
+  'feedback-score',
+]) {
+  contains(
+    'src/views/education/AssignmentWorkspace.vue',
+    fragment,
+    'students must see the teacher-confirmed score and feedback version'
+  )
+}
 
 for (const fragment of [
   'review-workbench',
@@ -57,6 +68,10 @@ for (const fragment of [
   'review-feedback-column',
   'AI 批改建议',
   "product_code: 'submission_review'",
+  'canRetryAgent',
+  'retryReviewAgent',
+  'latestReleasedFeedback',
+  'review.review_draft || this.latestReleasedFeedback(review.feedback_versions)',
   '采纳到反馈',
   '保存批改草稿',
   '发布成绩与反馈',
