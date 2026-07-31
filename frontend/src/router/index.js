@@ -151,7 +151,7 @@ const routes = [
     meta: { requiresAuth: true },
   },
   { path: '/tasks', redirect: '/meetings' },
-  { path: '/organization', name: 'organization', component: () => import('../views/OfficeOrganization.vue'), meta: { requiresAuth: true } },
+  { path: '/organization', name: 'organization', component: () => import('../views/OfficeOrganizationCompact.vue'), meta: { requiresAuth: true } },
   { path: '/notifications', name: 'notifications', component: () => import('../views/OfficeNotifications.vue'), meta: { requiresAuth: true } },
   // ── 管理页面 ───────────────────────────────────────
   {
