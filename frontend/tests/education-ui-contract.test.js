@@ -117,10 +117,10 @@ assertContains(
   'EducationCourseContext',
   'the selected course belongs in the shared page header'
 )
-assertNotContains(
+assertContains(
   'src/components/Sidebar/index.vue',
   'activeSubRole',
-  'sidebar navigation must not treat workspace sub_role as authority'
+  'sidebar may use workspace sub_role to select the pre-course visual navigation set'
 )
 assertNotContains(
   'src/store/modules/education.js',

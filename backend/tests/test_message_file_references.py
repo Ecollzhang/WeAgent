@@ -11,10 +11,16 @@ def test_json_workspace_reference_is_not_truncated_to_javascript_extension():
     summary = MessageService._display_summary_from_raw(
         f"课件已生成：`{path}`"
     )
-    elements = mentioned_file_elements("conversation-1", f"文件：`{path}`")
+    unverified = mentioned_file_elements("conversation-1", f"文件：`{path}`")
+    elements = mentioned_file_elements(
+        "conversation-1",
+        f"文件：`{path}`",
+        verified_paths={path},
+    )
 
     assert path in summary
     assert "slide_document.js`" not in summary
+    assert unverified == []
     assert [element["data"]["path"] for element in elements] == [path]
 
 

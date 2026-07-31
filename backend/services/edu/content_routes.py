@@ -1,5 +1,6 @@
 """Membership-scoped Education content and teaching-loop API."""
 
+import base64
 import hashlib
 import json
 import os
@@ -37,6 +38,7 @@ from .course_context_service import build_courseware_context
 from .extensions import db
 from .models import Course, CourseMembership
 from .presentation_quality import inspect_pptx_bytes, inspect_slide_document
+from .presentation_rendering import PresentationRenderError, render_pptx_pages
 
 
 education_content_api = Blueprint("education_content_api", __name__)
@@ -636,18 +638,28 @@ def inspect_content_visual_quality(content_id):
     )
     source_report = inspect_slide_document(version.source_json or {})
     try:
-        rendered_report = inspect_pptx_bytes(
-            export_pptx(
-                version.source_json or {},
-                lesson.title if lesson else f"education-content-{content.id}",
-            )
+        pptx_payload = export_pptx(
+            version.source_json or {},
+            lesson.title if lesson else f"education-content-{content.id}",
         )
+        rendered_report = inspect_pptx_bytes(pptx_payload)
+        rendered_pages = render_pptx_pages(pptx_payload)
     except ContentExportError as error:
         return jsonify(
             {
                 "error": str(error),
                 "adapter_status": "unavailable",
                 "source": source_report,
+            }
+        ), 424
+    except PresentationRenderError as error:
+        return jsonify(
+            {
+                "error": str(error),
+                "adapter_status": "unavailable",
+                "render_adapter_status": "unavailable",
+                "source": source_report,
+                "rendered_pptx": rendered_report,
             }
         ), 424
     status = (
@@ -659,6 +671,60 @@ def inspect_content_visual_quality(content_id):
             else "passed"
         )
     )
+    source_slides = source_report["slides"]
+    rendered_slide_reports = rendered_report.get("slides") or []
+    cover_offset = 1 if len(rendered_pages) == len(source_slides) + 1 else 0
+    rendered_page_payloads = []
+    for page in rendered_pages:
+        page_number = int(page["number"])
+        source_index = page_number - 1 - cover_offset
+        source_slide = (
+            source_slides[source_index]
+            if 0 <= source_index < len(source_slides)
+            else None
+        )
+        package_slide = (
+            rendered_slide_reports[page_number - 1]
+            if 0 <= page_number - 1 < len(rendered_slide_reports)
+            else {}
+        )
+        findings = []
+        if source_slide:
+            findings.extend(source_slide.get("findings") or [])
+        findings.extend(package_slide.get("findings") or [])
+        page_statuses = {
+            str((source_slide or {}).get("status") or "passed"),
+            str(package_slide.get("status") or "passed"),
+        }
+        page_status = (
+            "failed"
+            if "failed" in page_statuses
+            else ("warning" if "warning" in page_statuses else "passed")
+        )
+        rendered_page_payloads.append(
+            {
+                "id": (
+                    str(source_slide.get("id"))
+                    if source_slide
+                    else f"rendered-page-{page_number}"
+                ),
+                "number": page_number,
+                "title": (
+                    str(source_slide.get("title"))
+                    if source_slide
+                    else str((version.source_json or {}).get("title") or "课件封面")
+                ),
+                "status": page_status,
+                "findings": findings,
+                "width": page["width"],
+                "height": page["height"],
+                "engine": page["engine"],
+                "preview_data_url": (
+                    "data:image/png;base64,"
+                    + base64.b64encode(page["content"]).decode("ascii")
+                ),
+            }
+        )
     return jsonify(
         {
             "status": status,
@@ -667,10 +733,13 @@ def inspect_content_visual_quality(content_id):
             "version_number": version.version_number,
             "theme_style": source_report["theme_style"],
             "theme_label": source_report["theme_label"],
-            "slide_count": source_report["slide_count"],
+            "slide_count": len(rendered_page_payloads),
+            "source_slide_count": source_report["slide_count"],
             "slides": source_report["slides"],
             "findings": source_report["findings"],
             "rendered_pptx": rendered_report,
+            "render_adapter_status": "ready",
+            "rendered_pages": rendered_page_payloads,
         }
     )
 

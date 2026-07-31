@@ -71,6 +71,22 @@ assert.ok(
   !messageBubble.includes('fetch(getSessionRawFileUrl'),
   'message artifact previews must not issue unauthenticated native fetch'
 )
+const webpageSrcMethod = messageBubble.match(/webpageSrc\(el\)\s*\{([\s\S]*?)\n\s*\},/)
+assert.ok(webpageSrcMethod, 'message artifact previews must expose webpageSrc')
+assert.ok(
+  !webpageSrcMethod[1].includes('getWorkspaceFileUrl'),
+  'HTML iframes must never fall back to an authenticated raw URL'
+)
+contains(
+  'src/components/MessageBubble/index.vue',
+  'artifactPreviewErrors',
+  'missing or expired HTML artifacts must expose an explicit preview state'
+)
+contains(
+  'src/components/MessageBubble/index.vue',
+  'artifact-preview-unavailable',
+  'missing HTML artifacts must not render a blank iframe'
+)
 
 const record = read('src/components/education/EmbeddedAgentRecord.vue')
 contains(

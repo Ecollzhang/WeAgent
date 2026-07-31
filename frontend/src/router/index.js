@@ -155,7 +155,7 @@ const routes = [
     path: '/education/help',
     name: 'EducationHelpCenter',
     component: () => import('../views/education/HelpCenter.vue'),
-    meta: { requiresAuth: true, education: true },
+    meta: { requiresAuth: true, education: true, educationModule: 'help' },
   },
   {
     path: '/courses',

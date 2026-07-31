@@ -19,11 +19,6 @@
       >邀请学生</el-button>
       <el-button
         v-if="isTeacher"
-        icon="el-icon-collection"
-        @click="$router.push(`/education/courses/${course.id}/knowledge`)"
-      >课程知识中心</el-button>
-      <el-button
-        v-if="isTeacher"
         data-testid="create-lesson-open"
         icon="el-icon-circle-plus-outline"
         @click="openLessonDialog"
@@ -55,7 +50,7 @@
           type="button"
           :class="{ active: activeTab === tab.key }"
           :data-testid="`course-tab-${tab.key}`"
-          @click="activeTab = tab.key"
+          @click="selectCourseTab(tab)"
         >
           <i :class="tab.icon"></i>{{ tab.label }}
         </button>
@@ -504,6 +499,7 @@ export default {
         { key: 'assignments', label: '作业', icon: 'el-icon-edit-outline' },
         { key: 'people', label: '成员', icon: 'el-icon-user' },
         { key: 'analytics', label: '学情', icon: 'el-icon-data-analysis' },
+        { key: 'knowledge', label: '知识中心', icon: 'el-icon-collection' },
       ]
     },
     visibleTabs() { return this.tabs },
@@ -578,6 +574,13 @@ export default {
     }
   },
   methods: {
+    selectCourseTab(tab) {
+      if (tab.key === 'knowledge') {
+        this.$router.push(`/education/courses/${this.course.id}/knowledge`)
+        return
+      }
+      this.activeTab = tab.key
+    },
     openLessonDialog() {
       const firstUnit = this.units[0]
       this.lessonForm = {

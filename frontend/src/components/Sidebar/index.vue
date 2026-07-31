@@ -119,10 +119,16 @@ export default {
         ? this.activeCourse.membership_role
         : ''
     },
+    activeSubRole() {
+      return this.$store.getters['workspace/activeSubRole'] || ''
+    },
+    educationRole() {
+      return this.membershipRole || this.activeSubRole
+    },
     domainSectionLabel() {
       if (this.activeDomain !== 'edu') return '领域'
-      if (this.membershipRole === 'student') return '学习领域'
-      if (this.membershipRole === 'teacher') return '教师领域'
+      if (this.educationRole === 'student') return '学习领域'
+      if (this.educationRole === 'teacher') return '教师领域'
       return '教育领域'
     },
     commonNavItems() {
@@ -154,8 +160,14 @@ export default {
         activePath: '/education/courses',
         iconClass: 'el-icon-reading',
       }
-      if (!course || !this.membershipRole) return [teachingSpace]
-      if (this.membershipRole === 'student') {
+      const helpCenter = {
+        key: 'ui.sidebar.education-help',
+        module: 'help',
+        label: '帮助中心',
+        route: { path: '/education/help', query: courseQuery },
+        iconClass: 'el-icon-question',
+      }
+      if (this.educationRole === 'student') {
         return [
           teachingSpace,
           {
@@ -172,25 +184,30 @@ export default {
             route: { path: '/education/student/mind-maps', query: courseQuery },
             iconClass: 'el-icon-share',
           },
+          helpCenter,
         ]
       }
-      return [
-        teachingSpace,
-        {
-          key: 'ui.sidebar.courseware',
-          module: 'courseware',
-          label: 'PPT 与课件',
-          route: { path: '/education/teacher/courseware', query: courseQuery },
-          iconClass: 'el-icon-picture-outline',
-        },
-        {
-          key: 'ui.sidebar.insights',
-          module: 'insights',
-          label: '学生画像与评估',
-          route: { path: '/education/teacher/insights', query: courseQuery },
-          iconClass: 'el-icon-pie-chart',
-        },
-      ]
+      if (this.educationRole === 'teacher') {
+        return [
+          teachingSpace,
+          {
+            key: 'ui.sidebar.courseware',
+            module: 'courseware',
+            label: 'PPT 与课件',
+            route: { path: '/education/teacher/courseware', query: courseQuery },
+            iconClass: 'el-icon-picture-outline',
+          },
+          {
+            key: 'ui.sidebar.insights',
+            module: 'insights',
+            label: '学生画像与评估',
+            route: { path: '/education/teacher/insights', query: courseQuery },
+            iconClass: 'el-icon-pie-chart',
+          },
+          helpCenter,
+        ]
+      }
+      return [teachingSpace, helpCenter]
     },
   },
   methods: {

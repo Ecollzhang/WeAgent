@@ -230,9 +230,13 @@ def _run_nodes(template):
 
 
 def _workflow_payload(template, nodes):
+    runtime_nodes = [
+        node for node in nodes
+        if isinstance(node, dict) and node.get("type") == "agent_task"
+    ]
     edges = [
-        {"from": nodes[index]["id"], "to": nodes[index + 1]["id"]}
-        for index in range(len(nodes) - 1)
+        {"from": runtime_nodes[index]["id"], "to": runtime_nodes[index + 1]["id"]}
+        for index in range(len(runtime_nodes) - 1)
     ]
     return {
         "id": template["code"],
@@ -252,7 +256,7 @@ def _workflow_payload(template, nodes):
                     "finalizer",
                 }
             }
-            for node in nodes
+            for node in runtime_nodes
         ],
         "edges": edges,
         "parallel_groups": [],

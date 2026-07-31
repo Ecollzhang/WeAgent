@@ -317,14 +317,20 @@
             </div>
           </div>
           <article
-            v-for="slide in visualQaReport.slides"
+            v-for="slide in visualQaReport.rendered_pages"
             :key="slide.id"
             class="visual-qa-slide"
           >
-            <SafeHtmlPreview
+            <el-image
+              v-if="slide.preview_data_url"
               class="visual-qa-slide-preview"
-              :html="renderVisualQaSlide(slide)"
+              :src="slide.preview_data_url"
+              :preview-src-list="visualQaPageUrls()"
+              fit="contain"
             />
+            <div v-else class="visual-qa-render-unavailable">
+              当前版本没有可核验的 PPTX 实际渲染页。
+            </div>
             <div>
               <span>{{ String(slide.number).padStart(2, '0') }}</span>
               <b>{{ slide.title }}</b>
@@ -724,6 +730,11 @@ export default {
         failed: '需要修复',
       }[status] || '待检查'
     },
+    visualQaPageUrls() {
+      return ((this.visualQaReport && this.visualQaReport.rendered_pages) || [])
+        .map(page => page.preview_data_url)
+        .filter(Boolean)
+    },
     renderVisualQaSlide(slide) {
       const source = this.visualQaEntry && this.visualQaEntry.version
         && this.visualQaEntry.version.source_json
@@ -880,7 +891,16 @@ export default {
   border-radius: 10px;
 }
 .visual-qa-slide-preview { grid-column: 1 / -1; width: 100%; }
-.visual-qa-slide-preview ::v-deep .preview-frame { height: 360px; }
+.visual-qa-slide-preview { height: 360px; border-radius: 8px; background: #f2f5f4; }
+.visual-qa-render-unavailable {
+  grid-column: 1 / -1;
+  justify-content: center;
+  min-height: 180px;
+  padding: 20px;
+  border-radius: 8px;
+  color: #8c6b52;
+  background: #fff8f1;
+}
 .adopted-preview-heading {
   display: flex;
   align-items: center;

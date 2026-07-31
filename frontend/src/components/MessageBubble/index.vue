@@ -222,14 +222,23 @@
             <div v-else-if="group.type === 'webpage'" class="artifact-block artifact-detail-card webpage-card detail-card">
               <div v-if="artifactGroupPath(group)" class="file-path webpage-path">{{ artifactGroupPath(group) }}</div>
               <div class="webpage-preview">
+                <div v-if="isArtifactGroupPreviewLoading(group)" class="artifact-inline-loading">
+                  <i class="el-icon-loading"></i> 正在通过安全通道读取网页产物...
+                </div>
                 <iframe
-                  v-if="!isWorkbenchPreviewingPath(artifactGroupPath(group))"
+                  v-else-if="!isWorkbenchPreviewingPath(artifactGroupPath(group)) && webpagePreviewSrc(group)"
                   class="webpage-frame"
                   :src="webpagePreviewSrc(group)"
                   title="webpage-preview"
                   sandbox="allow-scripts"
                 ></iframe>
-                <div v-else class="webpage-preview-paused">已在统一编辑平台中打开</div>
+                <div
+                  v-else-if="artifactGroupPreviewError(group)"
+                  class="artifact-preview-unavailable"
+                >{{ artifactGroupPreviewError(group) }}</div>
+                <div v-else class="webpage-preview-paused">
+                  {{ isWorkbenchPreviewingPath(artifactGroupPath(group)) ? '已在统一编辑平台中打开' : '正在准备预览...' }}
+                </div>
               </div>
             </div>
 
@@ -394,7 +403,7 @@
 
 <script>
 import { formatTime } from '../../utils/format'
-import { getFileTree, getWorkspaceFileUrl, getServiceLogs, readSessionRawFile, restartService, stopService, writeFile } from '@/api/sandbox'
+import { getFileTree, getServiceLogs, readSessionRawFile, restartService, stopService, writeFile } from '@/api/sandbox'
 import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
 
@@ -416,6 +425,7 @@ export default {
       artifactPreviewCache: {},
       artifactPreviewObjectUrls: {},
       artifactPreviewLoading: {},
+      artifactPreviewErrors: {},
       artifactMetaLoading: {},
       diffBusyKey: '',
 
@@ -1026,11 +1036,16 @@ export default {
       const path = this.artifactGroupPath(group)
       const cached = path ? this.artifactPreviewCache[path] : null
       if (cached?.previewUrl) return cached.previewUrl
+      if (path && this.sessionId) return ''
       return this.webpageSrc(group.webpageElement || group.primaryElement)
     },
     isArtifactGroupPreviewLoading(group) {
       const path = this.artifactGroupPath(group)
       return Boolean(path && this.artifactPreviewLoading[path])
+    },
+    artifactGroupPreviewError(group) {
+      const path = this.artifactGroupPath(group)
+      return path ? (this.artifactPreviewErrors[path] || '') : ''
     },
     ensureVisibleArtifactPreviews() {
       this.artifactGroups.forEach(group => {
@@ -1046,7 +1061,9 @@ export default {
       if (!['code', 'text', 'table', 'webpage'].includes(group.type)) return
       if (this.hasUsefulArtifactPreview(group)) return
       if (this.artifactPreviewLoading[path]) return
+      if (this.artifactPreviewErrors[path]) return
       this.$set(this.artifactPreviewLoading, path, true)
+      this.$delete(this.artifactPreviewErrors, path)
       try {
         const text = await readSessionRawFile(this.sessionId, path, 'text')
         let previewUrl = ''
@@ -1059,6 +1076,11 @@ export default {
         this.$set(this.artifactPreviewCache, path, { text, previewUrl })
       } catch (error) {
         console.warn('[ArtifactPreview] failed to load raw preview', { path, error })
+        this.$set(
+          this.artifactPreviewErrors,
+          path,
+          '无法读取该临时产物；文件可能不存在，或对应 Sandbox 已被回收。请打开正式业务产物继续查看。',
+        )
       } finally {
         this.$delete(this.artifactPreviewLoading, path)
       }
@@ -1415,9 +1437,7 @@ export default {
     },
     webpageSrc(el) {
       const path = this.webpagePath(el)
-      if (path && this.sessionId) {
-        return getWorkspaceFileUrl(this.sessionId, this.normalizeWorkspacePath(path))
-      }
+      if (path && this.sessionId) return ''
       return this.resolveFileUrl(path)
     },
     isWorkbenchPreviewingPath(path) {
@@ -2844,6 +2864,21 @@ export default {
   background: #f8fafc;
   color: #6b7280;
   font-size: 13px;
+}
+
+.artifact-preview-unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  padding: 24px;
+  border: 1px solid #f0d6bd;
+  border-radius: 8px;
+  color: #8a6547;
+  background: #fff8f1;
+  font-size: 13px;
+  line-height: 1.7;
+  text-align: center;
 }
 
 .artifact-image {

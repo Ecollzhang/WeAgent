@@ -125,17 +125,22 @@ def report_event_element(session_id, report):
     return element
 
 
-def mentioned_file_elements(session_id, text):
-    """Build file/image elements for workspace paths mentioned in text."""
-    if not session_id or not text:
+def mentioned_file_elements(session_id, text, *, verified_paths=None):
+    """Build elements only for workspace paths verified by a trusted file event."""
+    if not session_id or not text or not verified_paths:
         return []
 
     elements = []
     seen = set()
+    allowed_paths = {
+        "/" + str(path).lstrip("/").replace("\\", "/")
+        for path in verified_paths
+        if path
+    }
     for match in WORKSPACE_FILE_RE.findall(text):
         path = '/' + match.lstrip('/').replace('\\', '/')
         path = path.rstrip('.,;:，。；：')
-        if path in seen:
+        if path in seen or path not in allowed_paths:
             continue
         seen.add(path)
         element = file_event_element(session_id, {'file': path, 'size': None})

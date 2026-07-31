@@ -16,11 +16,20 @@ for (const label of [
   '学生画像与评估',
   '模拟考试',
   '课程思维导图',
+  '帮助中心',
 ]) {
   assert.ok(sidebar.includes(label), `global sidebar missing ${label}`)
 }
 
 assert.ok(sidebar.includes('educationDomainNavItems'), 'Education domains must be computed')
+assert.ok(
+  sidebar.includes("activeSubRole"),
+  'Education domains must use the workspace role before a course is selected'
+)
+assert.ok(
+  !sidebar.includes('if (!course || !this.membershipRole) return [teachingSpace]'),
+  'Education product domains must not disappear before a course is selected'
+)
 assert.ok(sidebar.includes('membership_role'), 'server membership must choose domain set')
 assert.ok(sidebar.includes('isNavActive'), 'active domain must use route metadata')
 assert.ok(!shell.includes('EducationModuleRail'), 'a second Education rail is forbidden')
@@ -35,6 +44,14 @@ for (const marker of [
 ]) {
   assert.ok(courseSpace.includes(marker), `student teaching space missing ${marker}`)
 }
+assert.ok(
+  courseSpace.includes("{ key: 'knowledge', label: '知识中心'"),
+  'teacher knowledge center must be a first-class course tab'
+)
+assert.ok(
+  !courseSpace.includes('>课程知识中心</el-button>'),
+  'knowledge center must not remain a duplicate header action'
+)
 
 assert.ok(
   router.includes("educationModule: 'teaching-space'"),

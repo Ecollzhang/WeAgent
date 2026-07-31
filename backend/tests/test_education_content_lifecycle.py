@@ -659,7 +659,19 @@ def test_teacher_exports_editable_json_html_and_real_office_files(app):
     ).status_code == 404
 
 
-def test_teacher_runs_current_version_visual_qa_for_slide_document(app):
+def test_teacher_runs_current_version_visual_qa_for_slide_document(app, monkeypatch):
+    monkeypatch.setattr(
+        "services.edu.content_routes.render_pptx_pages",
+        lambda payload: [
+            {
+                "number": 1,
+                "content": b"\x89PNG\r\n\x1a\nrendered-slide",
+                "width": 1280,
+                "height": 720,
+                "engine": "test-powerpoint",
+            }
+        ],
+    )
     client = app.test_client()
     teacher = headers(app, "visual-teacher")
     outsider = headers(app, "visual-outsider")
@@ -713,6 +725,14 @@ def test_teacher_runs_current_version_visual_qa_for_slide_document(app):
     assert report.get_json()["theme_label"] == "童趣绘本"
     assert report.get_json()["slide_count"] == 1
     assert report.get_json()["rendered_pptx"]["editable_text_shape_count"] >= 4
+    assert report.get_json()["render_adapter_status"] == "ready"
+    assert report.get_json()["rendered_pages"][0]["number"] == 1
+    assert report.get_json()["rendered_pages"][0]["engine"] == "test-powerpoint"
+    assert report.get_json()["rendered_pages"][0]["title"] == "Find the turning point"
+    assert report.get_json()["rendered_pages"][0]["status"] == "passed"
+    assert report.get_json()["rendered_pages"][0]["preview_data_url"].startswith(
+        "data:image/png;base64,"
+    )
     assert client.get(
         f"/api/edu/contents/{created['id']}/visual-qa",
         headers=outsider,

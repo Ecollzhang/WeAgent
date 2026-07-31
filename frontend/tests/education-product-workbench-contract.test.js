@@ -113,8 +113,8 @@ for (const [file, fragments] of Object.entries(pages)) {
 
 contains(
   'src/views/education/CourseSpace.vue',
-  '课程知识中心',
-  'teaching space must link to the course Knowledge Center'
+  "{ key: 'knowledge', label: '知识中心'",
+  'teaching space must expose the course Knowledge Center as a peer tab'
 )
 for (const fragment of [
   'data-testid="agent-roster-import"',

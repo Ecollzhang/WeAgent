@@ -302,6 +302,22 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
     ]
     assert created["nodes"][0]["workspace_path"] == "/workspace/agents/课程设计师"
     assert runtime.started["agent_ids"] == ["_edu_1", "_edu_3", "_edu_9"]
+    assert [node["type"] for node in runtime.started["workflow"]["nodes"]] == [
+        "agent_task",
+        "agent_task",
+        "agent_task",
+    ]
+    assert [
+        (edge["from"], edge["to"])
+        for edge in runtime.started["workflow"]["edges"]
+    ] == [
+        ("step-1", "step-2"),
+        ("step-2", "step-3"),
+    ]
+    assert all(
+        node["id"] != "teacher-approval"
+        for node in runtime.started["workflow"]["nodes"]
+    )
     assert len(runtime.started["education_run_grant"]) >= 40
     assert runtime.started["education_run_grant"] not in runtime.started["prompt"]
     assert "education_action" in runtime.started["prompt"]

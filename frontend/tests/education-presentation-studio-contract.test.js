@@ -33,4 +33,16 @@ for (const fragment of [
 }
 
 assert.ok(api.includes('/visual-qa'), 'frontend must call the durable visual QA endpoint')
+assert.ok(
+  courseware.includes('preview_data_url'),
+  'visual QA must render the exact exported PPTX page image'
+)
+assert.ok(
+  courseware.includes('v-for="slide in visualQaReport.rendered_pages"'),
+  'visual QA must enumerate every exported PPTX page, including generated covers'
+)
+assert.ok(
+  !courseware.includes(':html="renderVisualQaSlide(slide)"'),
+  'visual QA must not present a reconstructed HTML slide as the exported PPTX'
+)
 console.log('education presentation studio contract ok')
