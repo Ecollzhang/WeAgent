@@ -142,4 +142,26 @@ def migrate_existing_education_schema():
                     )
                 )
             changes.append("edu_assignments.max_score")
+        if "source_asset_ids" not in columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_assignments "
+                        "ADD COLUMN source_asset_ids JSON NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "UPDATE edu_assignments "
+                        "SET source_asset_ids = JSON_ARRAY() "
+                        "WHERE source_asset_ids IS NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_assignments "
+                        "MODIFY COLUMN source_asset_ids JSON NOT NULL"
+                    )
+                )
+            changes.append("edu_assignments.source_asset_ids")
     return changes

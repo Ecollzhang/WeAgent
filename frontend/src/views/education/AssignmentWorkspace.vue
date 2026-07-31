@@ -24,6 +24,23 @@
           <div><dt>截止时间</dt><dd>{{ dueLabel }}</dd></div>
           <div v-if="assignment.evaluation_json"><dt>评价标准</dt><dd>{{ rubricText }}</dd></div>
         </dl>
+        <div
+          v-if="assignment.source_assets && assignment.source_assets.length"
+          class="assignment-source-assets"
+          data-testid="assignment-source-assets"
+        >
+          <b>作业附件</b>
+          <button
+            v-for="asset in assignment.source_assets"
+            :key="asset.id"
+            type="button"
+            @click="downloadAssignmentAsset(asset)"
+          >
+            <i class="el-icon-document"></i>
+            <span>{{ asset.title || asset.original_filename }}</span>
+            <i class="el-icon-download"></i>
+          </button>
+        </div>
       </section>
 
       <section v-if="!isTeacher" class="student-work">
@@ -253,6 +270,19 @@ export default {
         next_step: nextSteps.join('；'),
       }
     },
+    async downloadAssignmentAsset(asset) {
+      try {
+        const blob = await this.$store.dispatch('education/downloadAsset', asset)
+        const objectUrl = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = objectUrl
+        link.download = asset.original_filename || asset.title || '作业附件'
+        link.click()
+        URL.revokeObjectURL(objectUrl)
+      } catch (error) {
+        this.$message.error('作业附件下载失败')
+      }
+    },
     async loadStudentSubmissionState() {
       const recovery = await this.$store.dispatch(
         'education/fetchMySubmission',
@@ -341,6 +371,13 @@ dl { margin: 18px 0 0; border-top: 1px solid #e8edf1; }
 dl div { padding: 11px 0; border-bottom: 1px solid #edf1f4; }
 dt { color: #8b96a5; font-size: 11px; }
 dd { margin: 4px 0 0; color: #364456; font-size: 13px; }
+.assignment-source-assets { margin-top: 18px; }
+.assignment-source-assets > b { display: block; margin-bottom: 8px; color: #435164; font-size: 12px; }
+.assignment-source-assets button {
+  width: 100%; display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  gap: 8px; padding: 10px; border: 1px solid #dce7e4; border-radius: 8px;
+  background: #f5faf9; color: #2f716a; text-align: left; cursor: pointer;
+}
 .student-work { padding: 20px; }
 .section-title { display: flex; justify-content: space-between; align-items: start; margin-bottom: 14px; }
 .section-title h2 { margin: 0; color: #283647; font-size: 17px; }

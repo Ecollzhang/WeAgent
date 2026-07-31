@@ -46,6 +46,7 @@ import {
   publishCoursePaper,
   publishCourseQuestion,
   publishLesson,
+  processAssignmentImport,
   releaseFeedback,
   refreshStudentInsights,
   refreshWeaknessAnalysis,
@@ -60,6 +61,7 @@ import {
   submitAssignment,
   submitMockExam,
   updateCourseAsset,
+  uploadAssignmentSource as uploadAssignmentSourceApi,
   uploadCourseAsset,
   uploadLessonMaterial,
   updateMyCourseProfile,
@@ -464,6 +466,14 @@ export default {
       const created = payload(await createAssignment(lessonId, assignment))
       await dispatch('fetchCourseOverview', courseId)
       return created
+    },
+
+    async uploadAssignmentSource(context, { courseId, formData }) {
+      return payload(await uploadAssignmentSourceApi(courseId, formData))
+    },
+
+    async processAssignmentImport(context, importId) {
+      return payload(await processAssignmentImport(importId))
     },
 
     async publishAssignment(context, assignmentId) {

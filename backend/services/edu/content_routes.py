@@ -15,12 +15,14 @@ from werkzeug.utils import secure_filename
 from .asset_models import EducationAsset
 from .asset_service import (
     AssetServiceError,
+    asset_to_dict,
     asset_storage_capacity_error,
     create_database_asset,
     validate_asset_access,
 )
 from .content_models import (
     Assignment,
+    AssignmentImportJob,
     CourseUnit,
     EducationContent,
     EducationContentVersion,
@@ -35,6 +37,7 @@ from .content_models import (
 )
 from .content_exporters import ContentExportError, export_content_bytes, export_pptx
 from .course_context_service import build_courseware_context
+from .document_extraction import DocumentExtractionError, extract_document_text
 from .extensions import db
 from .models import Course, CourseMembership
 from .presentation_quality import inspect_pptx_bytes, inspect_slide_document
@@ -64,6 +67,12 @@ MATERIAL_EXTENSIONS = {"pdf", "doc", "docx", "ppt", "pptx", "html", "htm"}
 STUDENT_PRIVATE_KEYS = {
     "answer", "answers", "answer_key", "correct_answer", "explanation",
     "common_mistakes", "rubric", "teacher_payload",
+}
+ASSIGNMENT_IMPORT_EXTENSIONS = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
 }
 
 
@@ -994,7 +1003,24 @@ def get_teacher_publication(lesson_id):
     return jsonify(_publication_dict(publication, include_teacher=True))
 
 
+def _assets_for_ids(asset_ids, course_id):
+    ordered_ids = [str(item) for item in (asset_ids or []) if item]
+    if not ordered_ids:
+        return []
+    rows = EducationAsset.query.filter(
+        EducationAsset.course_id == course_id,
+        EducationAsset.status == "active",
+        EducationAsset.id.in_(ordered_ids),
+    ).all()
+    by_id = {row.id: row for row in rows}
+    return [by_id[item] for item in ordered_ids if item in by_id]
+
+
 def _assignment_dict(assignment, include_evaluation=False):
+    source_assets = _assets_for_ids(
+        assignment.source_asset_ids,
+        assignment.course_id,
+    )
     result = {
         "id": assignment.id,
         "course_id": assignment.course_id,
@@ -1002,6 +1028,7 @@ def _assignment_dict(assignment, include_evaluation=False):
         "title": assignment.title,
         "kind": assignment.kind,
         "instruction_json": assignment.instruction_json,
+        "source_assets": [asset_to_dict(asset) for asset in source_assets],
         "max_score": assignment.max_score,
         "max_attempts": assignment.max_attempts,
         "allow_revision_after_feedback": assignment.allow_revision_after_feedback,
@@ -1013,6 +1040,168 @@ def _assignment_dict(assignment, include_evaluation=False):
     if include_evaluation:
         result["evaluation_json"] = assignment.evaluation_json
     return result
+
+
+def _assignment_import_dict(job):
+    asset = EducationAsset.query.filter_by(id=job.source_asset_id).first()
+    return {
+        "id": job.id,
+        "course_id": job.course_id,
+        "lesson_id": job.lesson_id,
+        "mode": job.mode,
+        "status": job.status,
+        "extractor_code": job.extractor_code,
+        "extracted_text": job.extracted_text or "",
+        "draft_json": job.draft_json or {},
+        "warnings": job.warnings or [],
+        "error_summary": job.error_summary,
+        "source_asset": asset_to_dict(asset) if asset else None,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
+
+
+def _assignment_import_for_teacher(job_id, user_id):
+    job = AssignmentImportJob.query.filter_by(id=job_id).first()
+    if not job or not _membership(job.course_id, user_id, "teacher"):
+        return None
+    return job
+
+
+@education_content_api.post("/courses/<course_id>/assignment-imports")
+@jwt_required()
+def create_assignment_import(course_id):
+    user_id = get_jwt_identity()
+    if not _membership(course_id, user_id, "teacher"):
+        return jsonify({"error": "course not found"}), 404
+    lesson_id = str(request.form.get("lesson_id") or "").strip()
+    lesson = Lesson.query.filter_by(id=lesson_id, course_id=course_id).first()
+    if not lesson:
+        return jsonify({"error": "lesson not found"}), 404
+    mode = str(request.form.get("mode") or "attachment").strip()
+    if mode not in {"attachment", "editable"}:
+        return jsonify({"error": "mode must be attachment or editable"}), 400
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"error": "file is required", "error_code": "file_required"}), 400
+    extension = os.path.splitext(uploaded.filename)[1].lower()
+    media_type = ASSIGNMENT_IMPORT_EXTENSIONS.get(extension)
+    if not media_type:
+        return jsonify(
+            {
+                "error": "only PDF, PNG, JPG, and JPEG files are supported",
+                "error_code": "unsupported_document_type",
+            }
+        ), 400
+    content = uploaded.read()
+    max_bytes = int(
+        current_app.config.get("EDUCATION_MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
+    )
+    if not content or len(content) > max_bytes:
+        return jsonify(
+            {
+                "error": "file is empty or exceeds the upload limit",
+                "error_code": "asset_size_invalid",
+            }
+        ), 400
+    filename = secure_filename(uploaded.filename) or f"assignment-source{extension}"
+    try:
+        asset = create_database_asset(
+            course_id=course_id,
+            lesson_id=lesson.id,
+            actor_user_id=user_id,
+            content=content,
+            original_filename=filename,
+            media_type=media_type,
+            title=str(request.form.get("title") or uploaded.filename).strip(),
+            purpose="course_material",
+            visibility_scope="course_teacher",
+        )
+        draft = {}
+        status = "uploaded"
+        if mode == "attachment":
+            status = "ready"
+            draft = {
+                "title": os.path.splitext(uploaded.filename)[0],
+                "instruction_json": {"text": "请完成并提交附件中的作业。"},
+                "source_asset_ids": [asset.id],
+            }
+        job = AssignmentImportJob(
+            course_id=course_id,
+            lesson_id=lesson.id,
+            source_asset_id=asset.id,
+            requested_by=user_id,
+            mode=mode,
+            status=status,
+            draft_json=draft,
+        )
+        db.session.add(job)
+        db.session.commit()
+    except AssetServiceError as error:
+        db.session.rollback()
+        return jsonify(
+            {"error": error.message, "error_code": error.error_code}
+        ), error.status_code
+    except DataError:
+        db.session.rollback()
+        error = asset_storage_capacity_error()
+        return jsonify(
+            {"error": error.message, "error_code": error.error_code}
+        ), error.status_code
+    return jsonify(_assignment_import_dict(job)), 201
+
+
+@education_content_api.get("/assignment-imports/<job_id>")
+@jwt_required()
+def get_assignment_import(job_id):
+    job = _assignment_import_for_teacher(job_id, get_jwt_identity())
+    if not job:
+        return jsonify({"error": "assignment import not found"}), 404
+    return jsonify(_assignment_import_dict(job))
+
+
+@education_content_api.post("/assignment-imports/<job_id>/process")
+@jwt_required()
+def process_assignment_import(job_id):
+    job = _assignment_import_for_teacher(job_id, get_jwt_identity())
+    if not job:
+        return jsonify({"error": "assignment import not found"}), 404
+    if job.mode != "editable":
+        return jsonify(_assignment_import_dict(job))
+    if job.status == "review_required":
+        return jsonify(_assignment_import_dict(job))
+    asset = EducationAsset.query.filter_by(
+        id=job.source_asset_id,
+        course_id=job.course_id,
+        status="active",
+    ).first()
+    if not asset:
+        return jsonify({"error": "assignment source is unavailable"}), 404
+    job.status = "extracting"
+    job.error_summary = None
+    db.session.commit()
+    try:
+        text, extractor_code, warnings = extract_document_text(
+            bytes(asset.blob_bytes),
+            asset.media_type,
+        )
+    except DocumentExtractionError as error:
+        job.status = "failed"
+        job.error_summary = error.message
+        job.warnings = [{"code": error.error_code, "message": error.message}]
+        db.session.commit()
+        return jsonify(_assignment_import_dict(job)), 422
+    job.status = "review_required"
+    job.extractor_code = extractor_code
+    job.extracted_text = text
+    job.warnings = warnings
+    job.draft_json = {
+        "title": os.path.splitext(asset.original_filename)[0],
+        "instruction_json": {"text": text},
+        "source_asset_ids": [asset.id],
+    }
+    db.session.commit()
+    return jsonify(_assignment_import_dict(job))
 
 
 def _submission_dict(submission):
@@ -1087,6 +1276,13 @@ def create_assignment(lesson_id):
         return jsonify({"error": "instruction_json is required"}), 400
     if not isinstance(evaluation, dict):
         return jsonify({"error": "evaluation_json must be an object"}), 400
+    source_asset_ids = data.get("source_asset_ids") or []
+    if not isinstance(source_asset_ids, list) or len(source_asset_ids) > 20:
+        return jsonify({"error": "source_asset_ids must be a list of at most 20 items"}), 400
+    source_asset_ids = list(dict.fromkeys(str(item) for item in source_asset_ids if item))
+    source_assets = _assets_for_ids(source_asset_ids, lesson.course_id)
+    if len(source_assets) != len(source_asset_ids):
+        return jsonify({"error": "one or more source assets are unavailable"}), 400
     rubric = evaluation.get("rubric")
     inferred_max_score = None
     if isinstance(rubric, dict) and rubric:
@@ -1118,6 +1314,7 @@ def create_assignment(lesson_id):
         kind=kind,
         instruction_json=instruction,
         evaluation_json=evaluation,
+        source_asset_ids=source_asset_ids,
         max_score=max_score,
         max_attempts=max_attempts,
         allow_revision_after_feedback=bool(
@@ -1147,6 +1344,11 @@ def publish_assignment(assignment_id):
             "assignment",
             assignment.id,
         )
+        for asset in _assets_for_ids(
+            assignment.source_asset_ids,
+            assignment.course_id,
+        ):
+            asset.visibility_scope = "course_published"
         db.session.commit()
     return jsonify(_assignment_dict(assignment, include_evaluation=True))
 

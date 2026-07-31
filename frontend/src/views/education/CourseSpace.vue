@@ -315,8 +315,42 @@
       </template>
     </el-dialog>
 
-    <el-dialog title="发布作业" :visible.sync="assignmentDialog" width="650px">
+    <el-dialog title="发布作业" :visible.sync="assignmentDialog" width="720px">
       <el-form label-position="top">
+        <el-form-item label="从文件开始（可选）">
+          <div class="assignment-import-row">
+            <el-radio-group v-model="assignmentImportMode" size="small">
+              <el-radio-button label="attachment">附件发布</el-radio-button>
+              <el-radio-button label="editable">识别为可编辑作业</el-radio-button>
+            </el-radio-group>
+            <el-upload
+              data-testid="assignment-import-upload"
+              action=""
+              accept=".pdf,.png,.jpg,.jpeg"
+              :auto-upload="false"
+              :show-file-list="false"
+              :disabled="assignmentImportLoading"
+              :on-change="handleAssignmentSource"
+            >
+              <el-button
+                size="small"
+                icon="el-icon-upload2"
+                :loading="assignmentImportLoading"
+              >选择 PDF 或照片</el-button>
+            </el-upload>
+          </div>
+          <el-alert
+            v-if="assignmentImportStatus"
+            class="assignment-import-status"
+            :title="assignmentImportStatus"
+            :type="assignmentImportError ? 'error' : 'success'"
+            :closable="false"
+            show-icon
+          />
+          <p class="dialog-help">
+            “附件发布”保留原文件；“识别为可编辑作业”会先提取 PDF 正文或调用开源 OCR，结果仍需教师确认。
+          </p>
+        </el-form-item>
         <el-form-item label="作业名称">
           <el-input v-model.trim="assignmentForm.title" data-testid="assignment-title" />
         </el-form-item>
@@ -450,6 +484,10 @@ export default {
       rosterText: '',
       displayName: '',
       invitationToken: '',
+      assignmentImportMode: 'attachment',
+      assignmentImportLoading: false,
+      assignmentImportStatus: '',
+      assignmentImportError: false,
       lessonForm: {
         unit_id: '__new__',
         unit_title: '第一单元',
@@ -466,6 +504,7 @@ export default {
         kind: 'mixed',
         lesson_id: '',
         max_score: 100,
+        source_asset_ids: [],
       },
     }
   },
@@ -710,17 +749,67 @@ export default {
             max_score: this.assignmentForm.max_score,
             instruction_json: { text: this.assignmentForm.instructions },
             evaluation_json: {},
+            source_asset_ids: this.assignmentForm.source_asset_ids,
             max_attempts: 3,
             allow_revision_after_feedback: true,
           },
         })
         this.assignmentDialog = false
         this.assignmentForm = {
-          title: '', instructions: '', kind: 'mixed', lesson_id: '', max_score: 100,
+          title: '',
+          instructions: '',
+          kind: 'mixed',
+          lesson_id: '',
+          max_score: 100,
+          source_asset_ids: [],
         }
+        this.assignmentImportMode = 'attachment'
+        this.assignmentImportStatus = ''
+        this.assignmentImportError = false
         this.$message.success('作业草稿已保存')
       } catch (error) {
         this.$message.error('作业保存失败')
+      }
+    },
+    async handleAssignmentSource(file) {
+      if (!file || !file.raw) return
+      if (!this.assignmentForm.lesson_id) {
+        this.$message.warning('请先选择所属课时，再上传作业文件')
+        return
+      }
+      this.assignmentImportLoading = true
+      this.assignmentImportError = false
+      this.assignmentImportStatus = '正在上传文件…'
+      const formData = new FormData()
+      formData.append('file', file.raw)
+      formData.append('lesson_id', this.assignmentForm.lesson_id)
+      formData.append('mode', this.assignmentImportMode)
+      try {
+        let job = await this.$store.dispatch('education/uploadAssignmentSource', {
+          courseId: this.courseId,
+          formData,
+        })
+        if (this.assignmentImportMode === 'editable') {
+          this.assignmentImportStatus = '上传成功，正在提取文字…'
+          job = await this.$store.dispatch('education/processAssignmentImport', job.id)
+        }
+        const draft = job.draft_json || {}
+        this.assignmentForm.title = this.assignmentForm.title || draft.title || ''
+        this.assignmentForm.instructions = (
+          draft.instruction_json && draft.instruction_json.text
+        ) || this.assignmentForm.instructions
+        this.assignmentForm.source_asset_ids = draft.source_asset_ids
+          || (job.source_asset ? [job.source_asset.id] : [])
+        this.assignmentImportStatus = this.assignmentImportMode === 'editable'
+          ? '文字已提取，请检查并编辑作业要求'
+          : '附件已上传，将随作业发布给学生'
+      } catch (error) {
+        const data = error.response && error.response.data
+        this.assignmentImportError = true
+        this.assignmentImportStatus = (data && (data.error_summary || data.error))
+          || '文件导入失败，请检查格式后重试'
+      } finally {
+        this.assignmentImportLoading = false
       }
     },
     parseRoster() {
@@ -854,6 +943,9 @@ export default {
 .analytics-note { margin-top: 16px; padding: 16px; display: flex; gap: 12px; border-radius: 10px; background: #eef8f6; color: #4d675f; font-size: 13px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-grid-three { grid-template-columns: 1.2fr 1.2fr .8fr; }
+.assignment-import-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.assignment-import-status { margin-top: 10px; }
+.dialog-help { margin: 8px 0 0; color: #7b8795; font-size: 12px; line-height: 1.6; }
 .small-empty .el-button { margin-top: 12px; }
 .published-assets { display: grid; gap: 9px; margin-bottom: 16px; }
 .published-assets article {

@@ -144,6 +144,16 @@ export function createAssignment(lessonId, data) {
   return service.post(url(`/lessons/${lessonId}/assignments`), data)
 }
 
+export function uploadAssignmentSource(courseId, formData) {
+  return service.post(url(`/courses/${courseId}/assignment-imports`), formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export function processAssignmentImport(importId) {
+  return service.post(url(`/assignment-imports/${importId}/process`))
+}
+
 export function publishAssignment(assignmentId) {
   return service.post(url(`/assignments/${assignmentId}/publish`))
 }

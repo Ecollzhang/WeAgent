@@ -1,7 +1,9 @@
 from datetime import timedelta
+from io import BytesIO
 
 import pytest
 from flask_jwt_extended import create_access_token
+from reportlab.pdfgen import canvas
 
 from services.edu.extensions import db
 
@@ -363,3 +365,69 @@ def test_teacher_reads_submission_bodies_only_inside_assignment_course(setup):
         f"/api/edu/assignments/{assignment['id']}/submissions",
         headers=outsider,
     ).status_code == 404
+
+
+def test_teacher_imports_pdf_as_editable_assignment_and_publishes_source_file(setup):
+    app, client, teacher, student_a, student_b, outsider, course, lesson = setup
+    pdf_buffer = BytesIO()
+    pdf = canvas.Canvas(pdf_buffer)
+    pdf.drawString(72, 760, "Read the fable and explain the lesson with evidence.")
+    pdf.save()
+    pdf_bytes = pdf_buffer.getvalue()
+
+    uploaded = client.post(
+        f"/api/edu/courses/{course['id']}/assignment-imports",
+        headers=teacher,
+        data={
+            "lesson_id": lesson["id"],
+            "mode": "editable",
+            "file": (BytesIO(pdf_bytes), "fable-work.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 201
+    import_job = uploaded.get_json()
+    assert import_job["status"] == "uploaded"
+    assert import_job["source_asset"]["original_filename"] == "fable-work.pdf"
+
+    processed = client.post(
+        f"/api/edu/assignment-imports/{import_job['id']}/process",
+        headers=teacher,
+    )
+    assert processed.status_code == 200
+    import_job = processed.get_json()
+    assert import_job["status"] == "review_required"
+    assert import_job["extractor_code"] == "pdf_text"
+    assert "explain the lesson" in import_job["extracted_text"]
+    assert import_job["draft_json"]["instruction_json"]["text"]
+
+    created = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Fable evidence worksheet",
+            "kind": "mixed",
+            "instruction_json": import_job["draft_json"]["instruction_json"],
+            "evaluation_json": {},
+            "source_asset_ids": [import_job["source_asset"]["id"]],
+        },
+    )
+    assert created.status_code == 201
+    assignment = created.get_json()
+    assert assignment["source_assets"][0]["original_filename"] == "fable-work.pdf"
+
+    asset_id = import_job["source_asset"]["id"]
+    assert client.get(
+        f"/api/edu/assets/{asset_id}/download",
+        headers=student_a,
+    ).status_code == 404
+    assert client.post(
+        f"/api/edu/assignments/{assignment['id']}/publish",
+        headers=teacher,
+    ).status_code == 200
+    downloaded = client.get(
+        f"/api/edu/assets/{asset_id}/download",
+        headers=student_a,
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.data == pdf_bytes

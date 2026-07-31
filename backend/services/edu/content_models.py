@@ -174,12 +174,39 @@ class Assignment(TimestampMixin, db.Model):
     kind = db.Column(db.String(20), nullable=False)
     instruction_json = db.Column(db.JSON, nullable=False)
     evaluation_json = db.Column(db.JSON, nullable=False, default=dict)
+    source_asset_ids = db.Column(db.JSON, nullable=False, default=list)
     max_score = db.Column(db.Float, nullable=False, default=100.0)
     max_attempts = db.Column(db.Integer, nullable=False, default=1)
     allow_revision_after_feedback = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(20), nullable=False, default="draft")
     published_by = db.Column(db.String(100))
     published_at = db.Column(db.DateTime)
+
+
+class AssignmentImportJob(TimestampMixin, db.Model):
+    __tablename__ = "edu_assignment_import_jobs"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    course_id = db.Column(
+        db.String(36), db.ForeignKey("edu_courses.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    lesson_id = db.Column(
+        db.String(36), db.ForeignKey("edu_lessons.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    source_asset_id = db.Column(
+        db.String(36), db.ForeignKey("edu_assets.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    requested_by = db.Column(db.String(100), nullable=False, index=True)
+    mode = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="uploaded", index=True)
+    extractor_code = db.Column(db.String(50))
+    extracted_text = db.Column(db.Text)
+    draft_json = db.Column(db.JSON, nullable=False, default=dict)
+    warnings = db.Column(db.JSON, nullable=False, default=list)
+    error_summary = db.Column(db.Text)
 
 
 class Submission(TimestampMixin, db.Model):
