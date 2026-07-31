@@ -446,6 +446,8 @@ def create_app(config_name=None):
     from app.controllers.workspace_controller import workspace_bp
     from app.controllers.grayscale_controller import grayscale_bp
     from app.controllers.domain_proxy_controller import domain_proxy_bp
+    from app.controllers.office_ai_controller import office_ai_bp
+    from app.controllers.user_directory_controller import user_directory_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
@@ -461,6 +463,8 @@ def create_app(config_name=None):
     app.register_blueprint(workspace_bp)
     app.register_blueprint(grayscale_bp)
     app.register_blueprint(domain_proxy_bp)
+    app.register_blueprint(office_ai_bp, url_prefix='/api/office-ai')
+    app.register_blueprint(user_directory_bp)
 
     # Register sandbox blueprint (optional, for testing)
     try:

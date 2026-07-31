@@ -3,9 +3,11 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-# 始终加载 services/rag/.env（无论从哪个目录启动）
+# 先继承核心服务连接配置，再允许 RAG 专属 .env 覆盖。
 _RAG_DIR = os.path.abspath(os.path.dirname(__file__))
-load_dotenv(os.path.join(_RAG_DIR, '.env'))
+_BACKEND_DIR = os.path.abspath(os.path.join(_RAG_DIR, '..', '..'))
+load_dotenv(os.path.join(_BACKEND_DIR, '.env'))
+load_dotenv(os.path.join(_RAG_DIR, '.env'), override=True)
 
 
 class Config:

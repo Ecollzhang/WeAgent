@@ -63,3 +63,13 @@ def archive_workspace(workspace_id):
     if error:
         return error_response(error, code=400)
     return success_response(result, message='Workspace archived')
+
+
+@workspace_bp.route('/api/workspaces/<workspace_id>/members', methods=['POST'])
+@jwt_required()
+def add_workspace_member(workspace_id):
+    data = request.get_json(silent=True) or {}
+    result, error = workspace_service.add_member(workspace_id, get_jwt_identity(), data.get('user_id', ''))
+    if error:
+        return error_response(error, code=403)
+    return success_response(result, message='Workspace member added')

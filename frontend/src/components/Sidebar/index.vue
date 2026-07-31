@@ -100,11 +100,10 @@ const DOMAIN_NAV = {
     ],
   },
   office: [
-    { key: 'ui.sidebar.documents', label: '公文管理', route: '/documents', activePath: '/documents', iconClass: 'el-icon-document' },
-    { key: 'ui.sidebar.meetings', label: '会议管理', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
-    { key: 'ui.sidebar.approvals', label: '审批流程', route: '/approvals', activePath: '/approvals', iconClass: 'el-icon-check' },
-    { key: 'ui.sidebar.reports', label: '报表服务', route: '/reports', activePath: '/reports', iconClass: 'el-icon-data-line' },
-    { key: 'ui.sidebar.schedules', label: '日程管理', route: '/schedules', activePath: '/schedules', iconClass: 'el-icon-time' },
+    { key: 'organization', label: '组织协同', route: '/organization', activePath: '/organization', iconClass: 'el-icon-s-custom' },
+    { key: 'ui.sidebar.meetings', label: '\u4f1a\u8bae\u4efb\u52a1', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
+    { key: 'ui.sidebar.documents', label: '公文审批', route: '/documents', activePath: '/documents', iconClass: 'el-icon-document' },
+    { key: 'ui.sidebar.reports', label: '办公看板', route: '/reports', activePath: '/reports', iconClass: 'el-icon-data-line' },
   ],
 }
 

@@ -49,4 +49,5 @@ from app.models.capability import (  # noqa: E402,F401
 )
 from app.models.tool_provider_config import ToolProviderConfig  # noqa: E402,F401
 from app.models.workspace import Workspace  # noqa: E402,F401
+from app.models.workspace_member import WorkspaceMember  # noqa: E402,F401
 from app.models.grayscale_config import GrayscaleConfig  # noqa: E402,F401

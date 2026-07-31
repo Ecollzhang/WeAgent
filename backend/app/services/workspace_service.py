@@ -1,5 +1,6 @@
 """Workspace business logic — 工作空间服务."""
 from app.models.workspace import Workspace
+from app.models.workspace_member import WorkspaceMember
 from app.models.conversation import Conversation
 from app import db
 
@@ -46,7 +47,12 @@ class WorkspaceService:
 
     def list_by_user(self, user_id, domain=None):
         """获取用户的工作空间列表，可按领域过滤."""
-        q = Workspace.query.filter_by(user_id=user_id, status='active')
+        q = Workspace.query.filter(
+            Workspace.status == 'active',
+            (Workspace.user_id == user_id) | Workspace.id.in_(
+                db.session.query(WorkspaceMember.workspace_id).filter_by(user_id=user_id)
+            )
+        )
         if domain:
             q = q.filter_by(domain=domain)
         workspaces = q.order_by(Workspace.sort_order, Workspace.created_at).all()
@@ -54,7 +60,9 @@ class WorkspaceService:
 
     def get_by_id(self, workspace_id, user_id):
         """获取单个工作空间详情（含会话数量）."""
-        ws = Workspace.query.filter_by(id=workspace_id, user_id=user_id).first()
+        ws = Workspace.query.filter_by(id=workspace_id).first()
+        if ws and ws.user_id != user_id and not WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=user_id).first():
+            ws = None
         if not ws:
             return None, 'Workspace not found'
         return ws.to_dict(), None
@@ -95,6 +103,18 @@ class WorkspaceService:
         ws.status = 'archived'
         db.session.commit()
         return {'archived': True}, None
+
+    def add_member(self, workspace_id, owner_id, member_user_id):
+        workspace = Workspace.query.filter_by(id=workspace_id, user_id=owner_id, status='active').first()
+        if not workspace:
+            return None, 'Only the workspace owner can add members'
+        if member_user_id == owner_id:
+            return {'workspace_id': workspace_id, 'user_id': member_user_id}, None
+        item = WorkspaceMember.query.filter_by(workspace_id=workspace_id, user_id=member_user_id).first()
+        if not item:
+            item = WorkspaceMember(workspace_id=workspace_id, user_id=member_user_id)
+            db.session.add(item); db.session.commit()
+        return item.to_dict(), None
 
     # ── 查询辅助 ──────────────────────────────────────────────────────
 

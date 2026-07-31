@@ -7,11 +7,12 @@
 import sys
 import os
 
-# 确保能导入 weagent_core
+from config import Config
+
+# 确保能导入共享核心 app 包
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from weagent_core.services.domain_base import DomainServiceBase
-from config import Config
+from app.services.domain_base import DomainServiceBase
 
 service = DomainServiceBase(Config)
 app = service.app
