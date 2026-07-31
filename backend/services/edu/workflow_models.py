@@ -6,7 +6,8 @@ from .extensions import db
 from .models import new_id
 
 
-def product_business_route(product_code, course_id, lesson_id=None):
+def product_business_route(product_code, course_id, lesson_id=None, options=None):
+    options = options if isinstance(options, dict) else {}
     query = {"courseId": course_id}
     if lesson_id:
         query["lessonId"] = lesson_id
@@ -14,6 +15,10 @@ def product_business_route(product_code, course_id, lesson_id=None):
         "roster_import": f"/education/courses/{course_id}",
         "courseware": "/education/teacher/courseware",
         "student_insight": "/education/teacher/insights",
+        "submission_review": (
+            f"/education/courses/{course_id}/assignments/"
+            f"{options.get('assignment_id')}/review/{options.get('submission_id')}"
+        ),
         "mock_exam": "/education/student/mock-exams",
         "weakness_analysis": f"/education/courses/{course_id}",
         "course_mind_map": "/education/student/mind-maps",
@@ -40,6 +45,11 @@ PRODUCT_ADOPTED_OBJECTS = {
         "edu.student_insight.refresh",
         "student_insight_report",
         "student_insight",
+    ),
+    "product.submission_review": (
+        "edu.submission_review.analysis.create",
+        "submission_review_analysis",
+        "review_analysis",
     ),
     "product.mock_exam": (
         "edu.mock_exam.create",
@@ -97,6 +107,7 @@ def adopted_object_from_tool_result(
             product_code,
             course_id,
             lesson_id,
+            payload,
         ),
     }
 
@@ -200,7 +211,16 @@ class EducationAgentRun(db.Model):
             "error_summary": self.error_summary,
             "product_code": product_code,
             "business_route": (
-                product_business_route(product_code, self.course_id, self.lesson_id)
+                product_business_route(
+                    product_code,
+                    self.course_id,
+                    self.lesson_id,
+                    (
+                        (self.input_payload or {}).get("options")
+                        if product_code == "submission_review"
+                        else None
+                    ),
+                )
                 if product_code
                 else None
             ),

@@ -32,14 +32,16 @@ from .content_models import (
     Lesson,
     LessonActivity,
     PublishedLessonVersion,
+    ReviewDraft,
     Submission,
+    SubmissionReviewAnalysis,
     SubmissionVersion,
 )
 from .content_exporters import ContentExportError, export_content_bytes, export_pptx
 from .course_context_service import build_courseware_context
 from .document_extraction import DocumentExtractionError, extract_document_text
 from .extensions import db
-from .models import Course, CourseMembership
+from .models import Course, CourseMemberProfile, CourseMembership
 from .presentation_quality import inspect_pptx_bytes, inspect_slide_document
 from .presentation_rendering import PresentationRenderError, render_pptx_pages
 
@@ -74,6 +76,7 @@ ASSIGNMENT_IMPORT_EXTENSIONS = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
 }
+SUBMISSION_REVIEW_PROMPT_VERSION = "review-v1"
 
 
 def _student_safe_payload(value):
@@ -1374,6 +1377,149 @@ def list_assignments(course_id):
     )
 
 
+def _course_student_names(course_id):
+    memberships = CourseMembership.query.filter_by(
+        course_id=course_id,
+        role="student",
+        status="active",
+    ).order_by(CourseMembership.created_at.asc()).all()
+    profiles = {
+        row.user_id: row.display_name
+        for row in CourseMemberProfile.query.filter_by(course_id=course_id).all()
+    }
+    account_profiles = {}
+    try:
+        account_profiles = current_app.extensions[
+            "education_runtime_client"
+        ].get_user_profiles(
+            authorization=request.headers.get("Authorization", ""),
+            user_ids=[membership.user_id for membership in memberships],
+        )
+    except Exception:
+        account_profiles = {}
+    return [
+        {
+            "user_id": membership.user_id,
+            "display_name": (
+                profiles.get(membership.user_id)
+                or (account_profiles.get(membership.user_id) or {}).get("username")
+                or f"学生 {index + 1:02d}"
+            ),
+        }
+        for index, membership in enumerate(memberships)
+    ]
+
+
+def _current_submission_version(submission):
+    if not submission or not submission.current_version_id:
+        return None
+    return SubmissionVersion.query.filter_by(
+        id=submission.current_version_id,
+        submission_id=submission.id,
+    ).first()
+
+
+def _answer_text(value):
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(
+            text for text in (_answer_text(item) for item in value) if text
+        )
+    if not isinstance(value, dict):
+        return "" if value is None else str(value)
+    preferred = ("writing", "text", "response", "answer", "content")
+    texts = [
+        _answer_text(value[key])
+        for key in preferred
+        if key in value and _answer_text(value[key])
+    ]
+    if texts:
+        return "\n".join(texts)
+    return "\n".join(
+        text
+        for key, item in value.items()
+        if key not in {"id", "question_id"}
+        for text in [_answer_text(item)]
+        if text
+    )
+
+
+@education_content_api.get("/assignments/<assignment_id>/overview")
+@jwt_required()
+def get_assignment_overview(assignment_id):
+    user_id = get_jwt_identity()
+    assignment = _assignment_for_member(assignment_id, user_id, "teacher")
+    if not assignment:
+        return jsonify({"error": "assignment not found"}), 404
+    students = _course_student_names(assignment.course_id)
+    submissions = {
+        row.student_user_id: row
+        for row in Submission.query.filter_by(assignment_id=assignment.id).all()
+        if row.status != "draft"
+    }
+    rows = []
+    scores = []
+    for student in students:
+        submission = submissions.get(student["user_id"])
+        version = _current_submission_version(submission)
+        score = submission.final_score if submission else None
+        if score is not None:
+            scores.append(float(score))
+        rows.append(
+            {
+                "display_name": student["display_name"],
+                "submission_id": submission.id if submission else None,
+                "status": submission.status if submission else "unsubmitted",
+                "submitted_at": (
+                    submission.submitted_at.isoformat()
+                    if submission and submission.submitted_at
+                    else None
+                ),
+                "version_number": version.version_number if version else None,
+                "score": score,
+                "word_count": (
+                    len(_answer_text(version.answer_json)) if version else 0
+                ),
+                "artifact_count": len(version.artifact_ids or []) if version else 0,
+            }
+        )
+    graded_states = {"graded"}
+    revision_states = {"revision_requested"}
+    submitted_count = len([row for row in rows if row["submission_id"]])
+    pending_count = len(
+        [
+            row
+            for row in rows
+            if row["submission_id"]
+            and row["status"] not in graded_states | revision_states
+        ]
+    )
+    metrics = {
+        "expected": len(students),
+        "submitted": submitted_count,
+        "unsubmitted": len(students) - submitted_count,
+        "late": 0,
+        "pending_review": pending_count,
+        "graded": len([row for row in rows if row["status"] in graded_states]),
+        "revision_requested": len(
+            [row for row in rows if row["status"] in revision_states]
+        ),
+        "highest_score": max(scores) if scores else None,
+        "lowest_score": min(scores) if scores else None,
+        "average_score": (
+            round(sum(scores) / len(scores), 2) if scores else None
+        ),
+    }
+    return jsonify(
+        {
+            "assignment": _assignment_dict(assignment, include_evaluation=True),
+            "metrics": metrics,
+            "students": rows,
+        }
+    )
+
+
 def _submission_payload(submission, include_draft=False):
     if not submission:
         return {"submission": None, "draft": None, "versions": []}
@@ -1564,6 +1710,331 @@ def _submission_for_reviewer(submission_id, user_id):
     return submission, assignment
 
 
+def _rubric_items(assignment):
+    rubric = (assignment.evaluation_json or {}).get("rubric")
+    items = []
+    if isinstance(rubric, dict):
+        for key, value in rubric.items():
+            try:
+                maximum = float(value)
+            except (TypeError, ValueError):
+                continue
+            items.append(
+                {
+                    "id": str(key),
+                    "label": str(key).replace("_", " ").strip().title(),
+                    "max_score": maximum,
+                }
+            )
+    elif isinstance(rubric, list):
+        for index, item in enumerate(rubric):
+            if not isinstance(item, dict):
+                continue
+            try:
+                maximum = float(item.get("max_score") or item.get("score"))
+            except (TypeError, ValueError):
+                continue
+            items.append(
+                {
+                    "id": str(item.get("id") or f"criterion_{index + 1}"),
+                    "label": str(
+                        item.get("label") or item.get("name") or f"维度 {index + 1}"
+                    ),
+                    "max_score": maximum,
+                }
+            )
+    if not items:
+        items = [
+            {
+                "id": "overall",
+                "label": "整体表现",
+                "max_score": float(assignment.max_score),
+            }
+        ]
+    return items
+
+
+def _review_draft_dict(draft):
+    if not draft:
+        return None
+    return {
+        "id": draft.id,
+        "submission_id": draft.submission_id,
+        "submission_version_id": draft.submission_version_id,
+        "rubric_scores": draft.rubric_scores or {},
+        "feedback_json": draft.feedback_json or {},
+        "annotations": draft.annotations or [],
+        "score": draft.score,
+        "revision_requested": bool(draft.revision_requested),
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+    }
+
+
+def _feedback_dict(feedback):
+    return {
+        "id": feedback.id,
+        "submission_version_id": feedback.submission_version_id,
+        "feedback_json": feedback.feedback_json,
+        "rubric_scores": feedback.rubric_scores or {},
+        "annotations": feedback.annotations or [],
+        "score": feedback.score,
+        "status": feedback.status,
+        "version_number": feedback.version_number,
+        "revision_requested": bool(feedback.revision_requested),
+        "released_at": (
+            feedback.released_at.isoformat() if feedback.released_at else None
+        ),
+    }
+
+
+def _review_analysis_dict(analysis):
+    if not analysis:
+        return None
+    return {
+        "id": analysis.id,
+        "submission_version_id": analysis.submission_version_id,
+        "evaluation_checksum": analysis.evaluation_checksum,
+        "prompt_version": analysis.prompt_version,
+        "agent_run_id": analysis.agent_run_id,
+        "analysis_json": analysis.analysis_json or {},
+        "status": analysis.status,
+        "updated_at": analysis.updated_at.isoformat() if analysis.updated_at else None,
+    }
+
+
+def _submission_evidence(version, course_id):
+    answer = version.answer_json if version else {}
+    artifacts = _assets_for_ids(version.artifact_ids, course_id) if version else []
+    items = answer.get("items") if isinstance(answer, dict) else None
+    if isinstance(items, list) and items:
+        rendered = []
+        for index, item in enumerate(items):
+            if isinstance(item, dict):
+                rendered.append(
+                    {
+                        "index": index + 1,
+                        "prompt": str(item.get("prompt") or item.get("question") or ""),
+                        "answer": _answer_text(item.get("answer") or item.get("response")),
+                    }
+                )
+        return {
+            "kind": "items",
+            "items": rendered,
+            "text": "",
+            "artifacts": [asset_to_dict(asset) for asset in artifacts],
+        }
+    text = _answer_text(answer)
+    return {
+        "kind": "text" if text else ("attachments" if artifacts else "empty"),
+        "text": text,
+        "items": [],
+        "artifacts": [asset_to_dict(asset) for asset in artifacts],
+    }
+
+
+def _review_navigation(assignment_id, submission_id):
+    rows = (
+        Submission.query.filter(
+            Submission.assignment_id == assignment_id,
+            Submission.status != "draft",
+        )
+        .order_by(Submission.created_at.asc())
+        .all()
+    )
+    ids = [row.id for row in rows]
+    try:
+        index = ids.index(submission_id)
+    except ValueError:
+        return {"previous_submission_id": None, "next_submission_id": None}
+    return {
+        "previous_submission_id": ids[index - 1] if index > 0 else None,
+        "next_submission_id": ids[index + 1] if index + 1 < len(ids) else None,
+    }
+
+
+@education_content_api.get("/submissions/<submission_id>/review")
+@jwt_required()
+def get_submission_review(submission_id):
+    user_id = get_jwt_identity()
+    submission, assignment = _submission_for_reviewer(submission_id, user_id)
+    if not submission:
+        return jsonify({"error": "submission not found"}), 404
+    version = _current_submission_version(submission)
+    if not version:
+        return jsonify({"error": "submission version not found"}), 404
+    student_name = next(
+        (
+            row["display_name"]
+            for row in _course_student_names(assignment.course_id)
+            if row["user_id"] == submission.student_user_id
+        ),
+        "未命名学生",
+    )
+    draft = ReviewDraft.query.filter_by(
+        submission_version_id=version.id,
+        saved_by=user_id,
+    ).first()
+    evaluation_checksum = _json_checksum(assignment.evaluation_json or {})
+    analysis = SubmissionReviewAnalysis.query.filter_by(
+        submission_version_id=version.id,
+        evaluation_checksum=evaluation_checksum,
+        prompt_version=SUBMISSION_REVIEW_PROMPT_VERSION,
+        status="ready",
+    ).first()
+    stale_exists = SubmissionReviewAnalysis.query.filter_by(
+        submission_id=submission.id,
+        status="ready",
+    ).first()
+    feedbacks = Feedback.query.filter_by(
+        submission_version_id=version.id
+    ).order_by(Feedback.version_number.asc()).all()
+    return jsonify(
+        {
+            "assignment": _assignment_dict(assignment, include_evaluation=True),
+            "student": {
+                "display_name": student_name,
+            },
+            "submission": _submission_dict(submission),
+            "version": _submission_version_dict(version),
+            "evidence": _submission_evidence(version, assignment.course_id),
+            "rubric": _rubric_items(assignment),
+            "review_draft": _review_draft_dict(draft),
+            "feedback_versions": [_feedback_dict(row) for row in feedbacks],
+            "analysis_state": (
+                "ready" if analysis else ("stale" if stale_exists else "missing")
+            ),
+            "analysis": _review_analysis_dict(analysis or stale_exists),
+            "analysis_cache_key": {
+                "submission_version_id": version.id,
+                "evaluation_checksum": evaluation_checksum,
+                "prompt_version": SUBMISSION_REVIEW_PROMPT_VERSION,
+            },
+            "navigation": _review_navigation(assignment.id, submission.id),
+        }
+    )
+
+
+def _validated_review_draft(data, assignment):
+    scores = data.get("rubric_scores") or {}
+    feedback_json = data.get("feedback_json") or {}
+    annotations = data.get("annotations") or []
+    if not isinstance(scores, dict):
+        raise ValueError("rubric_scores must be an object")
+    if not isinstance(feedback_json, dict):
+        raise ValueError("feedback_json must be an object")
+    if not isinstance(annotations, list) or len(annotations) > 200:
+        raise ValueError("annotations must be a list of at most 200 items")
+    criteria = {item["id"]: item for item in _rubric_items(assignment)}
+    normalized_scores = {}
+    for key, value in scores.items():
+        if key not in criteria:
+            raise ValueError(f"unknown rubric criterion: {key}")
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"rubric score for {key} must be numeric") from error
+        if not 0 <= number <= criteria[key]["max_score"]:
+            raise ValueError(f"rubric score for {key} is out of range")
+        normalized_scores[key] = number
+    score = sum(normalized_scores.values()) if normalized_scores else None
+    return {
+        "rubric_scores": normalized_scores,
+        "feedback_json": feedback_json,
+        "annotations": annotations,
+        "score": score,
+        "revision_requested": bool(data.get("revision_requested", False)),
+    }
+
+
+@education_content_api.put("/submissions/<submission_id>/review-draft")
+@jwt_required()
+def save_review_draft(submission_id):
+    user_id = get_jwt_identity()
+    submission, assignment = _submission_for_reviewer(submission_id, user_id)
+    if not submission:
+        return jsonify({"error": "submission not found"}), 404
+    version = _current_submission_version(submission)
+    if not version:
+        return jsonify({"error": "submission version not found"}), 404
+    try:
+        values = _validated_review_draft(request.get_json(silent=True) or {}, assignment)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    draft = ReviewDraft.query.filter_by(
+        submission_version_id=version.id,
+        saved_by=user_id,
+    ).first()
+    if not draft:
+        draft = ReviewDraft(
+            submission_id=submission.id,
+            submission_version_id=version.id,
+            saved_by=user_id,
+        )
+        db.session.add(draft)
+    for key, value in values.items():
+        setattr(draft, key, value)
+    if submission.status in {"submitted", "revised"}:
+        submission.status = "reviewing"
+    db.session.commit()
+    return jsonify(_review_draft_dict(draft))
+
+
+@education_content_api.post("/submissions/<submission_id>/review/publish")
+@jwt_required()
+def publish_submission_review(submission_id):
+    user_id = get_jwt_identity()
+    submission, assignment = _submission_for_reviewer(submission_id, user_id)
+    if not submission:
+        return jsonify({"error": "submission not found"}), 404
+    version = _current_submission_version(submission)
+    draft = (
+        ReviewDraft.query.filter_by(
+            submission_version_id=version.id,
+            saved_by=user_id,
+        ).first()
+        if version
+        else None
+    )
+    if not draft:
+        return jsonify({"error": "review draft is required"}), 409
+    prior_count = Feedback.query.filter_by(
+        submission_version_id=version.id
+    ).count()
+    feedback = Feedback(
+        submission_version_id=version.id,
+        feedback_json=draft.feedback_json or {},
+        status="released",
+        version_number=prior_count + 1,
+        rubric_scores=draft.rubric_scores or {},
+        annotations=draft.annotations or [],
+        revision_requested=bool(draft.revision_requested),
+        score=draft.score,
+        released_by=user_id,
+    )
+    db.session.add(feedback)
+    submission.status = (
+        "revision_requested" if draft.revision_requested else "graded"
+    )
+    submission.final_score = draft.score
+    submission.graded_by = user_id
+    submission.graded_at = datetime.utcnow()
+    _event(
+        assignment.course_id,
+        user_id,
+        "FeedbackReleased",
+        "submission",
+        submission.id,
+        {
+            "student_user_id": submission.student_user_id,
+            "score": draft.score,
+            "revision_requested": bool(draft.revision_requested),
+        },
+    )
+    db.session.delete(draft)
+    db.session.commit()
+    return jsonify(_feedback_dict(feedback)), 201
+
+
 @education_content_api.post("/submissions/<submission_id>/feedback")
 @jwt_required()
 def release_feedback(submission_id):
@@ -1581,15 +2052,32 @@ def release_feedback(submission_id):
         return jsonify({"error": "score must be numeric"}), 400
     if score is not None and not 0 <= score <= assignment.max_score:
         return jsonify({"error": "score must be within assignment max_score"}), 400
+    prior_count = Feedback.query.filter_by(
+        submission_version_id=submission.current_version_id
+    ).count()
     feedback = Feedback(
         submission_version_id=submission.current_version_id,
         feedback_json=feedback_json,
         status="released",
+        version_number=prior_count + 1,
+        rubric_scores=(
+            data.get("rubric_scores")
+            if isinstance(data.get("rubric_scores"), dict)
+            else {}
+        ),
+        annotations=(
+            data.get("annotations")
+            if isinstance(data.get("annotations"), list)
+            else []
+        ),
+        revision_requested=bool(data.get("revision_requested", False)),
         score=score,
         released_by=user_id,
     )
     db.session.add(feedback)
-    submission.status = "graded"
+    submission.status = (
+        "revision_requested" if feedback.revision_requested else "graded"
+    )
     submission.final_score = score
     submission.graded_by = user_id
     submission.graded_at = datetime.utcnow()
@@ -1602,15 +2090,7 @@ def release_feedback(submission_id):
         {"student_user_id": submission.student_user_id, "score": score},
     )
     db.session.commit()
-    return jsonify(
-        {
-            "id": feedback.id,
-            "submission_version_id": feedback.submission_version_id,
-            "feedback_json": feedback.feedback_json,
-            "score": feedback.score,
-            "status": feedback.status,
-        }
-    ), 201
+    return jsonify(_feedback_dict(feedback)), 201
 
 
 @education_content_api.get("/submissions/<submission_id>/feedback")
@@ -1637,17 +2117,7 @@ def list_feedback(submission_id):
     )
     return jsonify(
         {
-            "items": [
-                {
-                    "id": row.id,
-                    "submission_version_id": row.submission_version_id,
-                    "feedback_json": row.feedback_json,
-                    "score": row.score,
-                    "status": row.status,
-                    "released_at": row.released_at.isoformat(),
-                }
-                for row in rows
-            ]
+            "items": [_feedback_dict(row) for row in rows]
         }
     )
 

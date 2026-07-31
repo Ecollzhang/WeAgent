@@ -155,6 +155,16 @@ PRODUCT_AGENT_WORKFLOWS = {
             "edu.student_insight.refresh",
         ],
     },
+    "submission_review": {
+        "name": "Agent 提交批改建议",
+        "role": "teacher",
+        "requires_lesson": False,
+        "agent_roles": ["learning_analyst", "teaching_reviewer"],
+        "tools": [
+            "edu.submission_review.context.get",
+            "edu.submission_review.analysis.create",
+        ],
+    },
     "mock_exam": {
         "name": "Agent 模拟考试",
         "role": "student",
@@ -202,6 +212,7 @@ def build_visible_product_intent(product_code, options, lesson=None):
         "roster_import": "导入并核对课程成员名单",
         "courseware": "根据当前教案生成 PPT",
         "student_insight": "根据课程正式成绩与学习证据生成学情分析",
+        "submission_review": "为当前学生提交生成可采纳的批改建议",
         "mock_exam": "根据当前课程生成一套模拟考试",
         "weakness_analysis": "分析我的作业弱点并给出改进建议",
         "course_mind_map": "根据当前课程生成思维导图",
@@ -368,6 +379,19 @@ def build_product_prompt(product_code, course, options, lesson=None):
             "证据解释结果；数据不足必须明确写出，禁止性格标签或虚构掌握概率。"
             "\n【教学审校员】检查每条建议能否回溯到工具返回的证据摘要，"
             "只提供教学建议，不发布学生反馈。"
+        )
+    elif product_code == "submission_review":
+        submission_id = str(options.get("submission_id") or "").strip()
+        prompt += (
+            "\n【学情分析师】调用 edu.submission_review.context.get，参数只包含 "
+            f"submission_id={json.dumps(submission_id)}。严格依据返回的当前提交版本、"
+            "作业要求和量规形成建议；不得推测未提供的学生特征。随后调用 "
+            "edu.submission_review.analysis.create，submission_id 使用同一值，"
+            "analysis 必须包含 summary、strengths、issues、next_steps 和 "
+            "evidence_refs；每条问题都要引用提交中的原文证据；"
+            "idempotency_key=product-submission-review-analysis-v1。"
+            "\n【教学审校员】检查建议是否与量规一致、证据是否真实、是否存在标签化"
+            "判断；不得写入教师批改草稿、量规分数、正式成绩或已发布反馈。"
         )
     elif product_code == "mock_exam":
         question_count = int(options.get("question_count") or 5)

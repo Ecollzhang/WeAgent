@@ -284,6 +284,142 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     assert "supported presentation style" in invalid_theme.get_json()["error"]
 
 
+def test_teacher_starts_submission_review_agent_with_natural_visible_prompt(
+    education_app,
+):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, lesson, teacher, student, _ = seed_course(education_app)
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Evidence paragraph",
+            "kind": "writing",
+            "instruction_json": {"text": "Explain the turning point."},
+            "evaluation_json": {"rubric": {"evidence": 5, "reasoning": 5}},
+        },
+    ).get_json()
+    client.post(f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher)
+    submitted = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student,
+        json={"answer_json": {"writing": "The choice changes the ending."}},
+    ).get_json()["submission"]
+
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "product_code": "submission_review",
+            "options": {"submission_id": submitted["id"]},
+        },
+    )
+
+    assert created.status_code == 202
+    run = created.get_json()
+    assert run["workflow_code"] == "product.submission_review"
+    assert run["business_route"]["path"].endswith(
+        f"/assignments/{assignment['id']}/review/{submitted['id']}"
+    )
+    assert [node["agent_role"] for node in run["nodes"]] == [
+        "learning_analyst",
+        "teaching_reviewer",
+    ]
+    started = runtime.started[0]
+    assert "edu.submission_review.context.get" in started["prompt"]
+    assert "edu.submission_review.analysis.create" in started["prompt"]
+    assert submitted["id"] in started["prompt"]
+    assert submitted["id"] not in started["visible_prompt"]
+    assert started["visible_prompt"] == "为当前学生提交生成可采纳的批改建议"
+
+
+def test_submission_review_agent_persists_evidence_linked_cached_analysis(
+    education_app,
+):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, lesson, teacher, student, _ = seed_course(education_app)
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Evidence paragraph",
+            "kind": "writing",
+            "instruction_json": {"text": "Explain the turning point."},
+            "evaluation_json": {"rubric": {"evidence": 5, "reasoning": 5}},
+        },
+    ).get_json()
+    client.post(f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher)
+    submitted = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student,
+        json={"answer_json": {"writing": "The choice changes the ending."}},
+    ).get_json()["submission"]
+    run = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "product_code": "submission_review",
+            "options": {"submission_id": submitted["id"]},
+        },
+    ).get_json()
+    grant = runtime.started[0]["education_run_grant"]
+
+    context = client.post(
+        "/api/edu/tools/edu.submission_review.context.get/invoke",
+        headers={"X-Education-Run-Grant": grant},
+        json={
+            "agent_id": "_edu_4",
+            "arguments": {"submission_id": submitted["id"]},
+        },
+    )
+    assert context.status_code == 200
+    assert context.get_json()["result"]["answer_json"]["writing"].startswith("The choice")
+
+    analysis_payload = {
+        "summary": "The response identifies the turning point but needs reasoning.",
+        "strengths": ["Identifies the decisive choice"],
+        "issues": [
+            {
+                "evidence": "The choice changes the ending.",
+                "concern": "The causal link is asserted but not explained.",
+                "suggestion": "Add one sentence connecting the choice to the result.",
+            }
+        ],
+        "next_steps": ["Use evidence → reasoning → conclusion"],
+        "evidence_refs": ["The choice changes the ending."],
+    }
+    created = client.post(
+        "/api/edu/tools/edu.submission_review.analysis.create/invoke",
+        headers={"X-Education-Run-Grant": grant},
+        json={
+            "agent_id": "_edu_4",
+            "idempotency_key": "review-analysis-v1",
+            "arguments": {
+                "submission_id": submitted["id"],
+                "analysis": analysis_payload,
+            },
+        },
+    )
+    assert created.status_code == 200
+    assert created.get_json()["result"]["analysis_json"] == analysis_payload
+
+    review = client.get(
+        f"/api/edu/submissions/{submitted['id']}/review",
+        headers=teacher,
+    ).get_json()
+    assert review["analysis_state"] == "ready"
+    assert review["analysis"]["agent_run_id"] == run["id"]
+    assert review["analysis"]["analysis_json"]["issues"][0]["evidence"].startswith(
+        "The choice"
+    )
+
+
 def test_teacher_starts_agent_roster_import_with_structured_member_rows(
     education_app,
 ):

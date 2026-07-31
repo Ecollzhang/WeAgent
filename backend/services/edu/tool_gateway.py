@@ -23,10 +23,14 @@ from .asset_service import (
     create_database_asset,
 )
 from .content_models import (
+    Assignment,
     CourseUnit,
     EducationContent,
     EducationContentVersion,
     Lesson,
+    Submission,
+    SubmissionReviewAnalysis,
+    SubmissionVersion,
 )
 from .course_context_service import build_courseware_context
 from .extensions import db
@@ -340,6 +344,27 @@ TOOL_CATALOG = {
         "roles": [TEACHER],
         "mode": "write",
         "input_schema": _object_schema(),
+    },
+    "edu.submission_review.context.get": {
+        "description": "Read one current submission, assignment rubric, and review evidence.",
+        "roles": [TEACHER],
+        "mode": "read",
+        "input_schema": _object_schema(
+            {"submission_id": {"type": "string"}},
+            ["submission_id"],
+        ),
+    },
+    "edu.submission_review.analysis.create": {
+        "description": "Persist evidence-linked AI review suggestions without changing grades.",
+        "roles": [TEACHER],
+        "mode": "write",
+        "input_schema": _object_schema(
+            {
+                "submission_id": {"type": "string"},
+                "analysis": {"type": "object"},
+            },
+            ["submission_id", "analysis"],
+        ),
     },
     "edu.mock_exam.create": {
         "description": "Create a private mock-exam attempt for the granted student.",
@@ -1234,6 +1259,155 @@ def _paper_compose(grant, arguments):
     return paper_to_dict(paper)
 
 
+def _submission_review_scope(grant, submission_id):
+    submission = Submission.query.filter_by(id=str(submission_id or "")).first()
+    assignment = (
+        Assignment.query.filter_by(id=submission.assignment_id).first()
+        if submission
+        else None
+    )
+    version = (
+        SubmissionVersion.query.filter_by(
+            id=submission.current_version_id,
+            submission_id=submission.id,
+        ).first()
+        if submission and submission.current_version_id
+        else None
+    )
+    if not submission or not assignment or not version or assignment.course_id != grant.course_id:
+        raise ToolGatewayError("submission not found", 404, "submission_not_found")
+    return submission, assignment, version
+
+
+def _submission_review_context(grant, arguments):
+    submission, assignment, version = _submission_review_scope(
+        grant,
+        arguments.get("submission_id"),
+    )
+    profile = CourseMemberProfile.query.filter_by(
+        course_id=grant.course_id,
+        user_id=submission.student_user_id,
+    ).first()
+    return {
+        "submission_id": submission.id,
+        "submission_version_id": version.id,
+        "assignment_id": assignment.id,
+        "student": {
+            "display_name": (
+                profile.display_name if profile else submission.student_user_id
+            )
+        },
+        "assignment": {
+            "title": assignment.title,
+            "kind": assignment.kind,
+            "instruction_json": assignment.instruction_json,
+            "evaluation_json": assignment.evaluation_json,
+            "max_score": assignment.max_score,
+        },
+        "answer_json": version.answer_json,
+        "artifact_ids": version.artifact_ids or [],
+        "submitted_at": version.submitted_at.isoformat(),
+        "prompt_version": "review-v1",
+    }
+
+
+def _normalized_review_analysis(value):
+    if not isinstance(value, dict):
+        raise ToolGatewayError(
+            "analysis must be an object",
+            400,
+            "invalid_review_analysis",
+        )
+    summary = str(value.get("summary") or "").strip()
+    strengths = value.get("strengths") or []
+    issues = value.get("issues") or []
+    next_steps = value.get("next_steps") or []
+    evidence_refs = value.get("evidence_refs") or []
+    if not summary or not all(
+        isinstance(items, list)
+        for items in (strengths, issues, next_steps, evidence_refs)
+    ):
+        raise ToolGatewayError(
+            "analysis requires summary and list fields",
+            400,
+            "invalid_review_analysis",
+        )
+    normalized_issues = []
+    for item in issues[:20]:
+        if not isinstance(item, dict):
+            raise ToolGatewayError(
+                "every issue must be an object",
+                400,
+                "invalid_review_analysis",
+            )
+        evidence = str(item.get("evidence") or "").strip()
+        concern = str(item.get("concern") or "").strip()
+        suggestion = str(item.get("suggestion") or "").strip()
+        if not evidence or not concern or not suggestion:
+            raise ToolGatewayError(
+                "every issue requires evidence, concern, and suggestion",
+                400,
+                "invalid_review_analysis",
+            )
+        normalized_issues.append(
+            {
+                "evidence": evidence[:1000],
+                "concern": concern[:1000],
+                "suggestion": suggestion[:1000],
+            }
+        )
+    return {
+        "summary": summary[:2000],
+        "strengths": [str(item)[:1000] for item in strengths[:20] if str(item).strip()],
+        "issues": normalized_issues,
+        "next_steps": [str(item)[:1000] for item in next_steps[:20] if str(item).strip()],
+        "evidence_refs": [
+            str(item)[:1000] for item in evidence_refs[:30] if str(item).strip()
+        ],
+    }
+
+
+def _submission_review_analysis(grant, arguments):
+    submission, assignment, version = _submission_review_scope(
+        grant,
+        arguments.get("submission_id"),
+    )
+    normalized = _normalized_review_analysis(arguments.get("analysis"))
+    evaluation_checksum = _payload_hash(assignment.evaluation_json or {})
+    cached = SubmissionReviewAnalysis.query.filter_by(
+        submission_version_id=version.id,
+        evaluation_checksum=evaluation_checksum,
+        prompt_version="review-v1",
+        status="ready",
+    ).first()
+    if cached:
+        analysis = cached
+    else:
+        analysis = SubmissionReviewAnalysis(
+            submission_id=submission.id,
+            submission_version_id=version.id,
+            evaluation_checksum=evaluation_checksum,
+            prompt_version="review-v1",
+            agent_run_id=grant.agent_run_id,
+            requested_by=grant.actor_user_id,
+            analysis_json=normalized,
+            status="ready",
+        )
+        db.session.add(analysis)
+        db.session.flush()
+    return {
+        "id": analysis.id,
+        "version_id": analysis.id,
+        "assignment_id": assignment.id,
+        "submission_id": submission.id,
+        "submission_version_id": version.id,
+        "evaluation_checksum": analysis.evaluation_checksum,
+        "prompt_version": analysis.prompt_version,
+        "analysis_json": analysis.analysis_json,
+        "status": analysis.status,
+    }
+
+
 def _student_insight(grant, _arguments):
     rows = refresh_student_insights(grant.course_id, grant.actor_user_id)
     return {
@@ -1273,6 +1447,8 @@ DISPATCH = {
     "edu.asset.attach": _attach_asset,
     "edu.question_bank.upsert": _question_upsert,
     "edu.paper.compose": _paper_compose,
+    "edu.submission_review.context.get": _submission_review_context,
+    "edu.submission_review.analysis.create": _submission_review_analysis,
     "edu.student_insight.refresh": _student_insight,
     "edu.mock_exam.create": _mock_exam,
     "edu.weakness.analyze": _weakness,
@@ -1283,6 +1459,7 @@ PRODUCT_WRITE_AGENT = {
     ("product.roster_import", "edu.course.members.import"): "_edu_1",
     ("product.courseware", "edu.courseware.create"): "_edu_2",
     ("product.student_insight", "edu.student_insight.refresh"): "_edu_4",
+    ("product.submission_review", "edu.submission_review.analysis.create"): "_edu_4",
     ("product.mock_exam", "edu.mock_exam.create"): "_edu_6",
     ("product.weakness_analysis", "edu.weakness.analyze"): "_edu_6",
     ("product.course_mind_map", "edu.mind_map.create"): "_edu_7",

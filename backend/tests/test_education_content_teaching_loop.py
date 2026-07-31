@@ -431,3 +431,111 @@ def test_teacher_imports_pdf_as_editable_assignment_and_publishes_source_file(se
     )
     assert downloaded.status_code == 200
     assert downloaded.data == pdf_bytes
+
+
+def test_teacher_uses_assignment_overview_and_persisted_review_draft(setup):
+    app, client, teacher, student_a, student_b, outsider, course, lesson = setup
+    client.put(
+        f"/api/edu/courses/{course['id']}/me/profile",
+        headers=student_a,
+        json={"display_name": "林同学"},
+    )
+    client.put(
+        f"/api/edu/courses/{course['id']}/me/profile",
+        headers=student_b,
+        json={"display_name": "周同学"},
+    )
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Fable evidence response",
+            "kind": "writing",
+            "instruction_json": {"text": "Explain the lesson with two details."},
+            "evaluation_json": {
+                "rubric": {"content": 6, "language": 4},
+                "answer_notes": "Accept evidence-based interpretations.",
+            },
+        },
+    ).get_json()
+    client.post(f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher)
+    submitted = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student_a,
+        json={
+            "answer_json": {
+                "writing": "The character learns to listen. The final choice proves it."
+            }
+        },
+    ).get_json()
+
+    overview = client.get(
+        f"/api/edu/assignments/{assignment['id']}/overview",
+        headers=teacher,
+    )
+    assert overview.status_code == 200
+    body = overview.get_json()
+    assert body["metrics"]["expected"] == 2
+    assert body["metrics"]["submitted"] == 1
+    assert body["metrics"]["unsubmitted"] == 1
+    assert body["metrics"]["pending_review"] == 1
+    assert [row["display_name"] for row in body["students"]] == ["林同学", "周同学"]
+    assert body["students"][0]["submission_id"] == submitted["submission"]["id"]
+    assert body["students"][1]["submission_id"] is None
+
+    review = client.get(
+        f"/api/edu/submissions/{submitted['submission']['id']}/review",
+        headers=teacher,
+    )
+    assert review.status_code == 200
+    review_body = review.get_json()
+    assert review_body["student"]["display_name"] == "林同学"
+    assert review_body["evidence"]["kind"] == "text"
+    assert "final choice" in review_body["evidence"]["text"]
+    assert review_body["rubric"][0]["max_score"] == 6
+    assert review_body["review_draft"] is None
+    assert review_body["analysis_state"] == "missing"
+
+    saved = client.put(
+        f"/api/edu/submissions/{submitted['submission']['id']}/review-draft",
+        headers=teacher,
+        json={
+            "rubric_scores": {"content": 5, "language": 3},
+            "feedback_json": {
+                "strengths": ["Uses relevant evidence"],
+                "issues": ["Explain how the detail proves the lesson"],
+                "next_steps": ["Add one reasoning sentence"],
+                "comment": "Clear response with a useful next step.",
+            },
+            "annotations": [
+                {"quote": "final choice", "comment": "Strong evidence anchor"}
+            ],
+            "revision_requested": False,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.get_json()["score"] == 8
+
+    restored = client.get(
+        f"/api/edu/submissions/{submitted['submission']['id']}/review",
+        headers=teacher,
+    ).get_json()
+    assert restored["review_draft"]["rubric_scores"]["content"] == 5
+    assert restored["submission"]["status"] == "reviewing"
+
+    released = client.post(
+        f"/api/edu/submissions/{submitted['submission']['id']}/review/publish",
+        headers=teacher,
+        json={},
+    )
+    assert released.status_code == 201
+    assert released.get_json()["score"] == 8
+    assert released.get_json()["version_number"] == 1
+
+    completed = client.get(
+        f"/api/edu/assignments/{assignment['id']}/overview",
+        headers=teacher,
+    ).get_json()
+    assert completed["metrics"]["pending_review"] == 0
+    assert completed["metrics"]["graded"] == 1
+    assert completed["metrics"]["average_score"] == 8

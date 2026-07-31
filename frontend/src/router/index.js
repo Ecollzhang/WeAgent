@@ -122,6 +122,12 @@ const routes = [
     meta: { requiresAuth: true, education: true, educationModule: 'teaching-space' },
   },
   {
+    path: '/education/courses/:courseId/assignments/:assignmentId/review/:submissionId',
+    name: 'EducationSubmissionReview',
+    component: () => import('../views/education/SubmissionReviewWorkspace.vue'),
+    meta: { requiresAuth: true, education: true, educationModule: 'teaching-space', educationRole: 'teacher' },
+  },
+  {
     path: '/education/teacher/courseware',
     name: 'EducationCourseware',
     component: () => import('../views/education/CoursewareLibrary.vue'),

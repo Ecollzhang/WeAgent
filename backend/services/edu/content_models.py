@@ -252,6 +252,61 @@ class SubmissionVersion(db.Model):
     checksum = db.Column(db.String(64), nullable=False)
 
 
+class ReviewDraft(TimestampMixin, db.Model):
+    __tablename__ = "edu_review_drafts"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "submission_version_id",
+            "saved_by",
+            name="uq_edu_review_draft_version_reviewer",
+        ),
+    )
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    submission_id = db.Column(
+        db.String(36), db.ForeignKey("edu_submissions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    submission_version_id = db.Column(
+        db.String(36), db.ForeignKey("edu_submission_versions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    rubric_scores = db.Column(db.JSON, nullable=False, default=dict)
+    feedback_json = db.Column(db.JSON, nullable=False, default=dict)
+    annotations = db.Column(db.JSON, nullable=False, default=list)
+    score = db.Column(db.Float)
+    revision_requested = db.Column(db.Boolean, nullable=False, default=False)
+    saved_by = db.Column(db.String(100), nullable=False, index=True)
+
+
+class SubmissionReviewAnalysis(TimestampMixin, db.Model):
+    __tablename__ = "edu_submission_review_analyses"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "submission_version_id",
+            "evaluation_checksum",
+            "prompt_version",
+            name="uq_edu_submission_review_analysis_cache",
+        ),
+    )
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    submission_id = db.Column(
+        db.String(36), db.ForeignKey("edu_submissions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    submission_version_id = db.Column(
+        db.String(36), db.ForeignKey("edu_submission_versions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    evaluation_checksum = db.Column(db.String(64), nullable=False, index=True)
+    prompt_version = db.Column(db.String(30), nullable=False)
+    agent_run_id = db.Column(db.String(36), nullable=True, index=True)
+    requested_by = db.Column(db.String(100), nullable=False, index=True)
+    analysis_json = db.Column(db.JSON, nullable=False, default=dict)
+    status = db.Column(db.String(20), nullable=False, default="ready", index=True)
+
+
 class Feedback(db.Model):
     __tablename__ = "edu_feedback"
 
@@ -262,6 +317,10 @@ class Feedback(db.Model):
     )
     feedback_json = db.Column(db.JSON, nullable=False)
     status = db.Column(db.String(20), nullable=False, default="released")
+    version_number = db.Column(db.Integer, nullable=False, default=1)
+    rubric_scores = db.Column(db.JSON, nullable=False, default=dict)
+    annotations = db.Column(db.JSON, nullable=False, default=list)
+    revision_requested = db.Column(db.Boolean, nullable=False, default=False)
     score = db.Column(db.Float)
     released_by = db.Column(db.String(100), nullable=False)
     released_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

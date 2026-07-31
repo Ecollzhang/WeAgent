@@ -140,6 +140,22 @@ export function getAssignment(assignmentId) {
   return service.get(url(`/assignments/${assignmentId}`))
 }
 
+export function getAssignmentOverview(assignmentId) {
+  return service.get(url(`/assignments/${assignmentId}/overview`))
+}
+
+export function getSubmissionReview(submissionId) {
+  return service.get(url(`/submissions/${submissionId}/review`))
+}
+
+export function saveSubmissionReviewDraft(submissionId, data) {
+  return service.put(url(`/submissions/${submissionId}/review-draft`), data)
+}
+
+export function publishSubmissionReview(submissionId) {
+  return service.post(url(`/submissions/${submissionId}/review/publish`))
+}
+
 export function createAssignment(lessonId, data) {
   return service.post(url(`/lessons/${lessonId}/assignments`), data)
 }

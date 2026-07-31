@@ -15,6 +15,7 @@ import {
   downloadCourseAsset,
   getAssignmentSubmissions,
   getAssignment,
+  getAssignmentOverview,
   getContentVersions,
   getCourseAnalytics,
   getCourseAssets,
@@ -42,7 +43,9 @@ import {
   getLessonMaterials,
   getMySubmission,
   getSubmissionFeedback,
+  getSubmissionReview,
   publishAssignment,
+  publishSubmissionReview,
   publishCoursePaper,
   publishCourseQuestion,
   publishLesson,
@@ -57,6 +60,7 @@ import {
   saveMindMapVersion,
   saveMockExamAnswers,
   saveSubmissionDraft,
+  saveSubmissionReviewDraft,
   searchEducationResources,
   submitAssignment,
   submitMockExam,
@@ -91,6 +95,8 @@ export default {
     coursewareContext: null,
     assignments: [],
     activeAssignment: null,
+    assignmentOverview: null,
+    submissionReview: null,
     submissions: [],
     feedback: [],
     members: [],
@@ -127,6 +133,8 @@ export default {
     units: state => state.units,
     coursewareContext: state => state.coursewareContext,
     assignments: state => state.assignments,
+    assignmentOverview: state => state.assignmentOverview,
+    submissionReview: state => state.submissionReview,
     members: state => state.members,
     analytics: state => state.analytics,
     loading: state => state.loading,
@@ -158,6 +166,8 @@ export default {
     SET_COURSEWARE_CONTEXT(state, value) { state.coursewareContext = value },
     SET_ASSIGNMENTS(state, value) { state.assignments = value },
     SET_ACTIVE_ASSIGNMENT(state, value) { state.activeAssignment = value },
+    SET_ASSIGNMENT_OVERVIEW(state, value) { state.assignmentOverview = value },
+    SET_SUBMISSION_REVIEW(state, value) { state.submissionReview = value },
     SET_SUBMISSIONS(state, value) { state.submissions = value },
     SET_FEEDBACK(state, value) { state.feedback = value },
     SET_MEMBERS(state, value) { state.members = value },
@@ -460,6 +470,33 @@ export default {
       const assignment = payload(await getAssignment(assignmentId))
       commit('SET_ACTIVE_ASSIGNMENT', assignment)
       return assignment
+    },
+
+    async fetchAssignmentOverview({ commit }, assignmentId) {
+      const value = payload(await getAssignmentOverview(assignmentId))
+      commit('SET_ASSIGNMENT_OVERVIEW', value)
+      commit('SET_ACTIVE_ASSIGNMENT', value.assignment || null)
+      return value
+    },
+
+    async fetchSubmissionReview({ commit }, submissionId) {
+      const value = payload(await getSubmissionReview(submissionId))
+      commit('SET_SUBMISSION_REVIEW', value)
+      commit('SET_ACTIVE_ASSIGNMENT', value.assignment || null)
+      return value
+    },
+
+    async saveSubmissionReviewDraft({ commit, state }, { submissionId, draft }) {
+      const value = payload(await saveSubmissionReviewDraft(submissionId, draft))
+      commit('SET_SUBMISSION_REVIEW', {
+        ...(state.submissionReview || {}),
+        review_draft: value,
+      })
+      return value
+    },
+
+    async publishSubmissionReview(context, submissionId) {
+      return payload(await publishSubmissionReview(submissionId))
     },
 
     async createAssignment({ dispatch }, { courseId, lessonId, assignment }) {

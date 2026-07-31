@@ -1,5 +1,6 @@
 """Subject-pack, Agent-team and safe workflow APIs."""
 
+import hashlib
 import json
 import re
 import threading
@@ -12,7 +13,7 @@ from .extensions import db
 from .access import active_membership
 from .routes import teacher_course_or_none
 from .subject_packs import AGENT_ROLES, SUBJECT_PACKS, WORKFLOW_TEMPLATES
-from .content_models import Lesson
+from .content_models import Assignment, Lesson, Submission
 from .product_agent_runs import (
     build_visible_product_intent,
     build_product_prompt,
@@ -62,6 +63,7 @@ REQUIRED_PRODUCT_WRITE_TOOL = {
     "product.roster_import": "edu.course.members.import",
     "product.courseware": "edu.courseware.create",
     "product.student_insight": "edu.student_insight.refresh",
+    "product.submission_review": "edu.submission_review.analysis.create",
     "product.mock_exam": "edu.mock_exam.create",
     "product.weakness_analysis": "edu.weakness.analyze",
     "product.course_mind_map": "edu.mind_map.create",
@@ -70,6 +72,7 @@ REQUIRED_PRODUCT_WRITE_AGENT = {
     "product.roster_import": "_edu_1",
     "product.courseware": "_edu_2",
     "product.student_insight": "_edu_4",
+    "product.submission_review": "_edu_4",
     "product.mock_exam": "_edu_6",
     "product.weakness_analysis": "_edu_6",
     "product.course_mind_map": "_edu_7",
@@ -891,6 +894,33 @@ def start_product_agent_run():
         options = _product_options(payload, product_code)
     except (TypeError, ValueError) as error:
         return jsonify({"error": str(error)}), 400
+    if product_code == "submission_review":
+        submission_id = str(options.get("submission_id") or "").strip()
+        submission = Submission.query.filter_by(id=submission_id).first()
+        assignment = (
+            Assignment.query.filter_by(id=submission.assignment_id).first()
+            if submission
+            else None
+        )
+        if (
+            not submission
+            or not submission.current_version_id
+            or not assignment
+            or assignment.course_id != course_id
+        ):
+            return jsonify({"error": "submission not found"}), 404
+        options["submission_id"] = submission.id
+        options["assignment_id"] = assignment.id
+        options["submission_version_id"] = submission.current_version_id
+        options["evaluation_checksum"] = hashlib.sha256(
+            json.dumps(
+                assignment.evaluation_json or {},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        options["prompt_version"] = "review-v1"
 
     template = product_template(product_code)
     nodes = _run_nodes(template)

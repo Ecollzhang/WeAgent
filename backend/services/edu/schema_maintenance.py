@@ -164,4 +164,56 @@ def migrate_existing_education_schema():
                     )
                 )
             changes.append("edu_assignments.source_asset_ids")
+    if "edu_feedback" in tables:
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns("edu_feedback")
+        }
+        feedback_columns = {
+            "version_number": "INTEGER NOT NULL DEFAULT 1",
+            "rubric_scores": "JSON NULL",
+            "annotations": "JSON NULL",
+            "revision_requested": "BOOLEAN NOT NULL DEFAULT FALSE",
+        }
+        added_json_columns = False
+        for name, definition in feedback_columns.items():
+            if name not in columns:
+                with db.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE edu_feedback "
+                            f"ADD COLUMN {name} {definition}"
+                        )
+                    )
+                changes.append(f"edu_feedback.{name}")
+                added_json_columns = added_json_columns or name in {
+                    "rubric_scores",
+                    "annotations",
+                }
+        if added_json_columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE edu_feedback SET rubric_scores = JSON_OBJECT() "
+                        "WHERE rubric_scores IS NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "UPDATE edu_feedback SET annotations = JSON_ARRAY() "
+                        "WHERE annotations IS NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_feedback "
+                        "MODIFY COLUMN rubric_scores JSON NOT NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_feedback "
+                        "MODIFY COLUMN annotations JSON NOT NULL"
+                    )
+                )
     return changes

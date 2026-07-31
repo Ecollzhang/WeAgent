@@ -374,9 +374,9 @@ assertContains(
   'students need a stable submission editor locator'
 )
 assertContains(
-  'src/views/education/AssignmentWorkspace.vue',
+  'src/views/education/SubmissionReviewWorkspace.vue',
   'data-testid="teacher-feedback-editor"',
-  'teachers need a stable review locator'
+  'teachers need a stable locator in the independent review workspace'
 )
 assertContains(
   'src/views/education/AssignmentWorkspace.vue',
