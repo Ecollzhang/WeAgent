@@ -8,6 +8,7 @@ export const updateMeeting = (id, data) => axios.put(`${root}/meetings/${id}`, d
 export const deleteMeeting = id => axios.delete(`${root}/meetings/${id}`)
 export const getMeeting = id => axios.get(`${root}/meetings/${id}`)
 export const createActionItem = (meetingId, data) => axios.post(`${root}/meetings/${meetingId}/action-items`, data)
+export const updateActionItem = (id, data) => axios.put(`${root}/meetings/action-items/${id}`, data)
 export const listSchedules = params => axios.get(`${root}/schedules`, { params })
 export const createSchedule = data => axios.post(`${root}/schedules`, data)
 export const updateSchedule = (id, data) => axios.put(`${root}/schedules/${id}`, data)

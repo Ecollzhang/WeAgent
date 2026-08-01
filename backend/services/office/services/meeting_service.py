@@ -67,6 +67,7 @@ class MeetingService:
             start_time=start_time,
             end_time=end_time,
             transcript=data.get('transcript', ''),
+            materials=data.get('materials') or [],
             status=data.get('status', 'scheduled'),
         )
         if meeting.status not in self.VALID_STATUSES:
@@ -102,7 +103,7 @@ class MeetingService:
             return None, str(error)
         if meeting.end_time <= meeting.start_time:
             return None, 'end_time must be later than start_time'
-        for field in ('title', 'agenda', 'participants', 'location', 'meeting_link', 'transcript', 'minutes', 'resolutions'):
+        for field in ('title', 'agenda', 'participants', 'location', 'meeting_link', 'transcript', 'minutes', 'materials', 'resolutions'):
             if field in data:
                 setattr(meeting, field, data[field])
         if 'status' in data:
@@ -194,6 +195,10 @@ class MeetingService:
             if data['status'] not in self.VALID_ACTION_STATUSES:
                 return None, 'Invalid action item status'
             action_item.status = data['status']
+            if action_item.schedule_id:
+                schedule = Schedule.query.get(action_item.schedule_id)
+                if schedule:
+                    schedule.status = 'done' if action_item.status == 'done' else 'pending'
         if 'due_date' in data:
             try:
                 action_item.due_date = parse_datetime(data.get('due_date'), 'due_date')

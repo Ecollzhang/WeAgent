@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS office_meetings (
   id VARCHAR(36) PRIMARY KEY, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
   workspace_id VARCHAR(36) NOT NULL, organizer_id VARCHAR(36) NOT NULL, title VARCHAR(200) NOT NULL,
   agenda TEXT, participants JSON, location VARCHAR(200), start_time DATETIME, end_time DATETIME,
-  transcript TEXT, minutes TEXT, resolutions JSON,
+  transcript TEXT, minutes TEXT, materials JSON, resolutions JSON,
   status ENUM('scheduled','ongoing','completed','cancelled') NOT NULL DEFAULT 'scheduled',
   INDEX ix_office_meetings_workspace_id (workspace_id), INDEX ix_office_meetings_start_time (start_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

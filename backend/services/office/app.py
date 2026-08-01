@@ -42,6 +42,9 @@ if __name__ == '__main__':
         columns = {item['name'] for item in inspect(db.engine).get_columns('office_meetings')}
         if 'meeting_link' not in columns:
             db.session.execute(text("ALTER TABLE office_meetings ADD COLUMN meeting_link VARCHAR(1000) DEFAULT ''"))
+        if 'materials' not in columns:
+            db.session.execute(text("ALTER TABLE office_meetings ADD COLUMN materials JSON NULL"))
+        if 'meeting_link' not in columns or 'materials' not in columns:
             db.session.commit()
         from seed_data import seed_system_templates
         seed_system_templates()
