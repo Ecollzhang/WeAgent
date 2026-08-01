@@ -20,6 +20,21 @@ class DocumentService:
         return [item.get('user_id') for item in (document.recipients or []) if isinstance(item, dict) and item.get('user_id')]
 
     @staticmethod
+    def _normalise_recipients(workspace_id, recipients):
+        """Only organization members can receive an office document."""
+        result, seen = [], set()
+        for item in recipients:
+            user_id = item.get('user_id') if isinstance(item, dict) else item
+            if not user_id or user_id in seen:
+                continue
+            member = organization_service.member(workspace_id, user_id)
+            if not member:
+                continue
+            seen.add(user_id)
+            result.append({'user_id': user_id, 'display_name': member.display_name})
+        return result
+
+    @staticmethod
     def _recipient_summary(document, receipts=None):
         recipients = document.recipients or []
         names = [item.get('display_name') or item.get('name') or '成员' for item in recipients if isinstance(item, dict)]
@@ -35,19 +50,23 @@ class DocumentService:
 
     def list_documents(self, user_id, params):
         workspace_id = (params.get('workspace_id') or '').strip()
-        if not workspace_id:
-            return None, 'workspace_id is required'
+        error = organization_service.require_access(workspace_id, user_id)
+        if error:
+            return None, error
         page, page_size = page_args(params)
-        query = OfficialDocument.query.filter_by(workspace_id=workspace_id).filter(
-            (OfficialDocument.user_id == user_id) | (OfficialDocument.status == 'published')
-        )
+        query = OfficialDocument.query.filter_by(workspace_id=workspace_id)
         if params.get('status'):
             query = query.filter_by(status=params['status'])
-        pagination = query.order_by(OfficialDocument.updated_at.desc()).paginate(
-            page=page, per_page=page_size, error_out=False
-        )
+        visible = []
+        for item in query.order_by(OfficialDocument.updated_at.desc()).all():
+            is_approver = any(user_id == step.get('approver_id') for approval in Approval.query.filter_by(document_id=item.id).all() for step in (approval.steps or []))
+            can_receive = user_id in self._recipient_ids(item)
+            if item.user_id == user_id or is_approver or (item.status == 'published' and can_receive):
+                visible.append(item)
+        total = len(visible)
+        visible = visible[(page - 1) * page_size: page * page_size]
         items = []
-        for item in pagination.items:
+        for item in visible:
             data = item.to_dict()
             receipts = DocumentReceipt.query.filter_by(document_id=item.id).all() if item.status == 'published' else []
             data['recipient_summary'] = self._recipient_summary(item, receipts)
@@ -55,16 +74,19 @@ class DocumentService:
             items.append(data)
         return {
             'items': items,
-            'total': pagination.total,
+            'total': total,
             'page': page,
             'page_size': page_size,
         }, None
 
     def get_document(self, document_id, user_id):
         document = OfficialDocument.query.get(document_id)
-        if document and document.user_id != user_id and document.status != 'published':
+        if document and not organization_service.can_access(document.workspace_id, user_id):
+            document = None
+        if document and document.user_id != user_id:
             related = Approval.query.filter_by(document_id=document.id).all()
-            if not any(user_id == step.get('approver_id') for item in related for step in (item.steps or [])):
+            is_approver = any(user_id == step.get('approver_id') for item in related for step in (item.steps or []))
+            if not is_approver and user_id not in self._recipient_ids(document):
                 document = None
         if not document:
             return None, 'Document not found'
@@ -83,8 +105,9 @@ class DocumentService:
         workspace_id = (data.get('workspace_id') or '').strip()
         title = (data.get('title') or '').strip()
         document_type = data.get('document_type', 'notice')
-        if not workspace_id:
-            return None, 'workspace_id is required'
+        error = organization_service.require_access(workspace_id, user_id)
+        if error:
+            return None, error
         if not title:
             return None, 'title is required'
         if document_type not in self.VALID_TYPES:
@@ -99,10 +122,11 @@ class DocumentService:
             if not template:
                 return None, 'Document template not found'
             content = template.content
+        recipients = self._normalise_recipients(workspace_id, data.get('recipients') or [])
         document = OfficialDocument(
             workspace_id=workspace_id, user_id=user_id, meeting_id=data.get('meeting_id'),
             title=title, document_type=document_type, content=content,
-            recipients=data.get('recipients') or [], template_id=template_id,
+            recipients=recipients, template_id=template_id,
         )
         db.session.add(document)
         db.session.commit()
@@ -131,7 +155,7 @@ class DocumentService:
             return None, 'Published or archived documents cannot be edited'
         for field in ('title', 'content', 'template_id', 'meeting_id', 'recipients'):
             if field in data:
-                setattr(document, field, data[field])
+                setattr(document, field, self._normalise_recipients(document.workspace_id, data[field] or []) if field == 'recipients' else data[field])
         if 'document_type' in data:
             if data['document_type'] not in self.VALID_TYPES:
                 return None, 'Invalid document_type'
@@ -141,8 +165,9 @@ class DocumentService:
 
     def list_templates(self, user_id, params):
         workspace_id = (params.get('workspace_id') or '').strip()
-        if not workspace_id:
-            return None, 'workspace_id is required'
+        error = organization_service.require_access(workspace_id, user_id)
+        if error:
+            return None, error
         query = DocumentTemplate.query.filter(
             (DocumentTemplate.workspace_id == workspace_id) | (DocumentTemplate.is_system.is_(True))
         )
@@ -156,6 +181,9 @@ class DocumentService:
         document_type = data.get('document_type', 'notice')
         if not workspace_id or not name or not data.get('content'):
             return None, 'workspace_id, name and content are required'
+        error = organization_service.require_access(workspace_id, user_id)
+        if error:
+            return None, error
         if document_type not in self.VALID_TYPES:
             return None, 'Invalid document_type'
         template = DocumentTemplate(
@@ -250,7 +278,7 @@ class DocumentService:
 
     def confirm_receipt(self, document_id, user_id):
         document = OfficialDocument.query.get(document_id)
-        if not document or document.status != 'published':
+        if not document or document.status != 'published' or not organization_service.can_access(document.workspace_id, user_id):
             return None, 'Published document not found'
         receipt = DocumentReceipt.query.filter_by(document_id=document_id, recipient_id=user_id).first()
         if not receipt:

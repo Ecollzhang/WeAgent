@@ -23,6 +23,12 @@ class Config:
         'OFFICE_DATABASE_URL',
         f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/weagent_office?charset=utf8mb4',
     )
+    # The Office domain owns its own business database, but workspace ownership
+    # lives in the main WeAgent database and must be checked for every request.
+    MAIN_DATABASE_URL = os.getenv(
+        'MAIN_DATABASE_URL',
+        f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{os.getenv("MYSQL_DB", "weagent")}?charset=utf8mb4',
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # Redis

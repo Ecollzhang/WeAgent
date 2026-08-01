@@ -119,7 +119,7 @@
                   </div>
                   <div class="reference-block action-block">
                     <div class="reference-block-head"><b>{{ t("linkedActions") }}（{{ selectedActions.length }}）</b><button v-if="selectedActions.length" @click="openAction(selectedActions[0])">{{ t("viewAll") }} <i class="el-icon-arrow-right"></i></button></div>
-                    <div v-if="selectedActions.length" class="action-list"><button v-for="action in selectedActions.slice(0, 3)" :key="action.id" @click="openAction(action)"><i></i><b>{{ action.title }}</b><em>{{ action.status === 'done' ? t("done") : t("meetingAction") }}</em></button></div>
+                    <div v-if="selectedActions.length" class="action-list"><button v-for="action in selectedActions.slice(0, 3)" :key="action.id" @click="openAction(action)"><i></i><b>{{ action.title }}</b><em>{{ actionState(action) }}</em></button></div>
                     <p v-else class="reference-empty">{{ t("noAction") }}</p>
                   </div>
                 </div>
@@ -214,6 +214,8 @@
                   :label="t('overdue')" /><el-option
                   value="pending"
                   :label="t('pending')" /><el-option
+                  value="in_progress"
+                  :label="t('inProgress')" /><el-option
                   value="done"
                   :label="t('done')"
               /></el-select>
@@ -258,6 +260,8 @@
                   ? 'danger'
                   : task.status === 'pending'
                   ? 'warning'
+                  : task.status === 'in_progress'
+                  ? 'primary'
                   : 'info'
               "
               >{{ taskState(task) }}</el-tag
@@ -470,6 +474,7 @@ const Z = {
   noDescription: "\u6682\u65e0\u5907\u6ce8",
   overdue: "\u5df2\u903e\u671f",
   pending: "\u5f85\u5904\u7406",
+  inProgress: "\u8fdb\u884c\u4e2d",
   done: "\u5df2\u5b8c\u6210",
   subject: "\u4f1a\u8bae\u4e3b\u9898",
   start: "\u5f00\u59cb",
@@ -915,9 +920,14 @@ export default {
     taskState(task) {
       return task.status === "done"
         ? this.t("done")
+        : task.status === "in_progress"
+        ? this.t("inProgress")
         : task.overdue
         ? this.t("overdue")
         : this.t("pending");
+    },
+    actionState(action) {
+      return action.status === "done" ? this.t("done") : action.status === "in_progress" ? this.t("inProgress") : this.t("meetingAction");
     },
     dateTime(v) {
       return String(v || "-")

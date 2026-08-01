@@ -13,19 +13,19 @@ class ApprovalService:
 
     def list(self, user_id, params):
         workspace_id = (params.get('workspace_id') or '').strip()
-        if not workspace_id:
-            return None, 'workspace_id is required'
+        error = organization_service.require_access(workspace_id, user_id)
+        if error:
+            return None, error
         page, page_size = page_args(params)
         query = Approval.query.filter_by(workspace_id=workspace_id)
         if params.get('status'):
             query = query.filter_by(status=params['status'])
-        pagination = query.order_by(Approval.updated_at.desc()).paginate(
-            page=page, per_page=page_size, error_out=False
-        )
+        visible = [item for item in query.order_by(Approval.updated_at.desc()).all()
+                   if item.initiator_id == user_id or user_id in [step.get('approver_id') for step in (item.steps or [])]]
+        total = len(visible)
+        visible = visible[(page - 1) * page_size: page * page_size]
         items = []
-        for item in pagination.items:
-            if item.initiator_id != user_id and user_id not in [step.get('approver_id') for step in (item.steps or [])]:
-                continue
+        for item in visible:
             data = item.to_dict()
             data['can_handle'] = item.status == 'pending' and self._current_approver(item) == user_id
             initiator = organization_service.member(workspace_id, item.initiator_id)
@@ -37,13 +37,15 @@ class ApprovalService:
                 if isinstance(row, dict)
             ]
             items.append(data)
-        return {'items': items, 'total': pagination.total, 'page': page, 'page_size': page_size}, None
+        return {'items': items, 'total': total, 'page': page, 'page_size': page_size}, None
 
     def get(self, approval_id, user_id):
         """Return the approval flow together with its associated document."""
         approval = Approval.query.filter_by(id=approval_id).first()
         if not approval:
             return None, 'Approval not found'
+        if not organization_service.can_access(approval.workspace_id, user_id):
+            return None, 'No permission to view this approval'
         if approval.initiator_id != user_id and self._current_approver(approval) != user_id:
             return None, 'No permission to view this approval'
         result = approval.to_dict()

@@ -48,6 +48,10 @@ if __name__ == '__main__':
             db.session.execute(text("ALTER TABLE office_documents ADD COLUMN recipients JSON NULL"))
         if 'document_id' not in schedule_columns:
             db.session.execute(text("ALTER TABLE office_schedules ADD COLUMN document_id VARCHAR(36) NULL"))
+        db.session.execute(text(
+            "ALTER TABLE office_schedules MODIFY COLUMN status "
+            "ENUM('pending','in_progress','done','cancelled') NOT NULL DEFAULT 'pending'"
+        ))
         if 'meeting_link' not in columns or 'materials' not in columns or 'recipients' not in document_columns or 'document_id' not in schedule_columns:
             db.session.commit()
         from seed_data import seed_system_templates

@@ -1,18 +1,21 @@
 """Schedule and conflict-detection business logic."""
 from models.schedule import Schedule
+from models.action_item import ActionItem
 from extensions import db
 from services.helpers import page_args, parse_datetime
+from services.organization_service import organization_service
 
 
 class ScheduleService:
     """Manage user schedules within an office workspace."""
     VALID_TYPES = ('meeting', 'task', 'reminder', 'other')
-    VALID_STATUSES = ('pending', 'done', 'cancelled')
+    VALID_STATUSES = ('pending', 'in_progress', 'done', 'cancelled')
 
     def list(self, user_id, params):
         workspace_id = (params.get('workspace_id') or '').strip()
-        if not workspace_id:
-            return None, 'workspace_id is required'
+        error = organization_service.require_access(workspace_id, user_id)
+        if error:
+            return None, error
         page, page_size = page_args(params)
         query = Schedule.query.filter_by(workspace_id=workspace_id, user_id=user_id)
         pagination = query.order_by(Schedule.start_time).paginate(page=page, per_page=page_size, error_out=False)
@@ -39,8 +42,9 @@ class ScheduleService:
         try:
             workspace_id = (data.get('workspace_id') or '').strip()
             title = (data.get('title') or '').strip()
-            if not workspace_id:
-                return None, 'workspace_id is required'
+            error = organization_service.require_access(workspace_id, user_id)
+            if error:
+                return None, error
             if not title:
                 return None, 'title is required'
             start_time = parse_datetime(data.get('start_time'), 'start_time', required=True)
@@ -90,6 +94,10 @@ class ScheduleService:
             if data['status'] not in self.VALID_STATUSES:
                 return None, 'Invalid status'
             schedule.status = data['status']
+            if schedule.action_item_id:
+                action_item = ActionItem.query.get(schedule.action_item_id)
+                if action_item:
+                    action_item.status = schedule.status if schedule.status in ('pending', 'in_progress', 'done', 'cancelled') else 'pending'
         conflicts = self._conflicts(user_id, schedule.workspace_id, schedule.start_time, schedule.end_time, schedule.id)
         db.session.commit()
         result = schedule.to_dict()
@@ -99,8 +107,9 @@ class ScheduleService:
     def conflicts(self, user_id, data):
         try:
             workspace_id = (data.get('workspace_id') or '').strip()
-            if not workspace_id:
-                return None, 'workspace_id is required'
+            error = organization_service.require_access(workspace_id, user_id)
+            if error:
+                return None, error
             start_time = parse_datetime(data.get('start_time'), 'start_time', required=True)
             end_time = parse_datetime(data.get('end_time'), 'end_time', required=True)
         except ValueError as error:

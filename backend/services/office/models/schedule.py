@@ -21,7 +21,7 @@ class Schedule(OfficeBaseModel):
         db.Enum('low', 'medium', 'high', name='office_schedule_priority'), default='medium'
     )
     status = db.Column(
-        db.Enum('pending', 'done', 'cancelled', name='office_schedule_status'),
+        db.Enum('pending', 'in_progress', 'done', 'cancelled', name='office_schedule_status'),
         default='pending', nullable=False, index=True,
     )
     meeting_id = db.Column(db.String(36), nullable=True, index=True)

@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS office_schedules (
   description TEXT, event_type ENUM('meeting','task','reminder','other') NOT NULL DEFAULT 'task',
   start_time DATETIME NOT NULL, end_time DATETIME NOT NULL,
   priority ENUM('low','medium','high') DEFAULT 'medium',
-  status ENUM('pending','done','cancelled') NOT NULL DEFAULT 'pending', meeting_id VARCHAR(36), document_id VARCHAR(36), action_item_id VARCHAR(36),
+  status ENUM('pending','in_progress','done','cancelled') NOT NULL DEFAULT 'pending', meeting_id VARCHAR(36), document_id VARCHAR(36), action_item_id VARCHAR(36),
   INDEX ix_office_schedules_workspace_id (workspace_id), INDEX ix_office_schedules_start_time (start_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
