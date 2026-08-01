@@ -31,7 +31,9 @@
         :class="{ active: activeWorkspaceId === ws.id }"
         @click="switchWorkspace(ws)"
       >
-        <span class="ws-icon">{{ ws.icon === 'default' ? '📁' : ws.icon }}</span>
+        <span class="ws-icon" aria-hidden="true">
+          <i :class="workspaceIconClass(ws.icon)"></i>
+        </span>
         <span class="ws-name">{{ ws.name }}</span>
         <el-tag v-if="ws.sub_role" size="mini" class="ws-sub-tag">
           {{ ws.sub_role === 'teacher' ? '教师' : '学生' }}
@@ -163,6 +165,17 @@ export default {
       }
     },
 
+    workspaceIconClass(value) {
+      const icons = {
+        default: 'el-icon-folder',
+        education: 'el-icon-reading',
+        edu: 'el-icon-reading',
+        research: 'el-icon-monitor',
+        office: 'el-icon-s-home',
+      }
+      return icons[value] || 'el-icon-folder'
+    },
+
     async syncEducationContext(ws) {
       try {
         const courses = await this.$store.dispatch('education/fetchCourses')
@@ -281,6 +294,8 @@ export default {
   width: 18px;
   text-align: center;
   flex-shrink: 0;
+  overflow: hidden;
+  line-height: 18px;
 }
 
 .ws-name {

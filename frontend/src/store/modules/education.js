@@ -4,6 +4,7 @@ import {
   createCourseMindMap,
   createCourseQuestion,
   createKnowledgeResource,
+  adoptWebKnowledgeResource as adoptWebKnowledgeResourceApi,
   createLessonContent,
   createLessonActivity,
   createUnit as createCourseUnit,
@@ -13,6 +14,7 @@ import {
   createCourseInvitation,
   createMockExam as createMockExamApi,
   downloadCourseAsset,
+  deleteCourseAsset,
   getAssignmentSubmissions,
   getAssignment,
   getAssignmentOverview,
@@ -45,6 +47,8 @@ import {
   getSubmissionFeedback,
   getSubmissionReview,
   publishAssignment,
+  updateAssignment,
+  getAssignmentVersions,
   publishSubmissionReview,
   publishCoursePaper,
   publishCourseQuestion,
@@ -58,6 +62,7 @@ import {
   saveContentVersion,
   saveLessonVersion,
   saveMindMapVersion,
+  getMindMapVersions,
   saveMockExamAnswers,
   saveSubmissionDraft,
   saveSubmissionReviewDraft,
@@ -103,6 +108,7 @@ function initialState() {
     agentRun: null,
     productAgentRun: null,
     productAgentRuns: [],
+    courseOverviewSequence: 0,
     assets: [],
     knowledgeSummary: null,
     questions: [],
@@ -181,6 +187,7 @@ export default {
     SET_AGENT_RUN(state, value) { state.agentRun = value },
     SET_PRODUCT_AGENT_RUN(state, value) { state.productAgentRun = value },
     SET_PRODUCT_AGENT_RUNS(state, value) { state.productAgentRuns = value },
+    SET_COURSE_OVERVIEW_SEQUENCE(state, value) { state.courseOverviewSequence = value },
     SET_ASSETS(state, value) { state.assets = value },
     SET_KNOWLEDGE_SUMMARY(state, value) { state.knowledgeSummary = value },
     SET_QUESTIONS(state, value) { state.questions = value },
@@ -249,15 +256,25 @@ export default {
       }
     },
 
-    async fetchCourseOverview({ commit, getters }, courseId) {
+    async fetchCourseOverview({ commit, getters, state }, courseId) {
+      const requestSequence = state.courseOverviewSequence + 1
+      commit('SET_COURSE_OVERVIEW_SEQUENCE', requestSequence)
+      const teacherRequest = getters.isTeacher
       const requests = [
         getCourseUnits(courseId),
         getCourseAssignments(courseId),
       ]
-      if (getters.isTeacher) {
+      if (teacherRequest) {
         requests.push(getCourseMembers(courseId), getCourseAnalytics(courseId))
       }
       const results = await Promise.all(requests)
+      if (
+        requestSequence !== state.courseOverviewSequence
+        || !state.activeCourse
+        || state.activeCourse.id !== courseId
+      ) {
+        return { stale: true, course_id: courseId }
+      }
       const structure = payload(results[0])
       const units = Array.isArray(structure.units) ? structure.units.slice() : []
       if (Array.isArray(structure.ungrouped_lessons) && structure.ungrouped_lessons.length) {
@@ -269,7 +286,7 @@ export default {
       }
       commit('SET_UNITS', units)
       commit('SET_ASSIGNMENTS', items(results[1]))
-      if (getters.isTeacher) {
+      if (teacherRequest) {
         commit('SET_MEMBERS', items(results[2]))
         commit('SET_ANALYTICS', payload(results[3]))
       } else {
@@ -522,6 +539,16 @@ export default {
       return payload(await publishAssignment(assignmentId))
     },
 
+    async saveAssignmentVersion({ commit }, { assignmentId, assignment }) {
+      const value = payload(await updateAssignment(assignmentId, assignment))
+      commit('SET_ACTIVE_ASSIGNMENT', value)
+      return value
+    },
+
+    async fetchAssignmentVersions(context, assignmentId) {
+      return items(await getAssignmentVersions(assignmentId))
+    },
+
     async fetchSubmissions({ commit }, assignmentId) {
       const value = items(await getAssignmentSubmissions(assignmentId))
       commit('SET_SUBMISSIONS', value)
@@ -551,8 +578,8 @@ export default {
     },
 
     async searchResources({ commit }, criteria) {
-      const value = items(await searchEducationResources(criteria))
-      commit('SET_RESOURCE_RESULTS', value)
+      const value = payload(await searchEducationResources(criteria))
+      commit('SET_RESOURCE_RESULTS', value.results || [])
       return value
     },
 
@@ -592,9 +619,8 @@ export default {
     },
 
     async restoreProductAgentRun({ commit }, { courseId, productCode }) {
-      const runs = items(await getCourseProductAgentRuns(courseId, {
-        product_code: productCode,
-      }))
+      const params = productCode ? { product_code: productCode } : {}
+      const runs = items(await getCourseProductAgentRuns(courseId, params))
       commit('SET_PRODUCT_AGENT_RUNS', runs)
       const run = runs[0] || null
       commit('SET_PRODUCT_AGENT_RUN', run)
@@ -602,9 +628,8 @@ export default {
     },
 
     async fetchProductAgentRuns({ commit }, { courseId, productCode }) {
-      const runs = items(await getCourseProductAgentRuns(courseId, {
-        product_code: productCode,
-      }))
+      const params = productCode ? { product_code: productCode } : {}
+      const runs = items(await getCourseProductAgentRuns(courseId, params))
       commit('SET_PRODUCT_AGENT_RUNS', runs)
       return runs
     },
@@ -622,27 +647,51 @@ export default {
       return candidate
     },
 
-    async fetchAssets({ commit }, courseId) {
-      const value = items(await getCourseAssets(courseId))
+    async fetchAssets({ commit }, input) {
+      const courseId = typeof input === 'string' ? input : input.courseId
+      const params = typeof input === 'string' ? {} : (input.params || {})
+      const value = items(await getCourseAssets(courseId, params))
       commit('SET_ASSETS', value)
       return value
     },
 
-    async uploadAsset({ dispatch }, { courseId, file, title, purpose, visibilityScope }) {
+    async uploadAsset({ dispatch }, {
+      courseId,
+      lessonId,
+      file,
+      title,
+      purpose,
+      visibilityScope,
+    }) {
       const form = new FormData()
       form.append('file', file)
       form.append('title', title || file.name)
       form.append('purpose', purpose || 'courseware')
       form.append('visibility_scope', visibilityScope || 'course_teacher')
+      if (lessonId) form.append('lesson_id', lessonId)
       const asset = payload(await uploadCourseAsset(courseId, form))
       await dispatch('fetchAssets', courseId)
       return asset
     },
 
-    async publishAsset({ dispatch }, { courseId, assetId }) {
+    async setAssetVisibility({ dispatch }, { courseId, assetId, visibilityScope }) {
       const asset = payload(await updateCourseAsset(assetId, {
-        visibility_scope: 'course_published',
+        visibility_scope: visibilityScope,
       }))
+      await dispatch('fetchAssets', courseId)
+      return asset
+    },
+
+    async publishAsset({ dispatch }, { courseId, assetId }) {
+      return dispatch('setAssetVisibility', {
+        courseId,
+        assetId,
+        visibilityScope: 'course_published',
+      })
+    },
+
+    async archiveAsset({ dispatch }, { courseId, assetId }) {
+      const asset = payload(await deleteCourseAsset(assetId))
       await dispatch('fetchAssets', courseId)
       return asset
     },
@@ -691,6 +740,12 @@ export default {
 
     async addKnowledgeResource({ dispatch }, { courseId, resource }) {
       const created = payload(await createKnowledgeResource(courseId, resource))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return created
+    },
+
+    async adoptWebKnowledgeResource({ dispatch }, { courseId, resource }) {
+      const created = payload(await adoptWebKnowledgeResourceApi(courseId, resource))
       await dispatch('fetchKnowledgeCenter', courseId)
       return created
     },
@@ -751,6 +806,10 @@ export default {
       commit('SET_ACTIVE_MIND_MAP', value)
       await dispatch('fetchMindMaps', courseId)
       return value
+    },
+
+    async fetchMindMapVersions(context, mindMapId) {
+      return items(await getMindMapVersions(mindMapId))
     },
 
     async fetchStudentInsights({ commit }, courseId) {

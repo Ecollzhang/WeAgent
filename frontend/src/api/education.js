@@ -174,6 +174,14 @@ export function publishAssignment(assignmentId) {
   return service.post(url(`/assignments/${assignmentId}/publish`))
 }
 
+export function updateAssignment(assignmentId, data) {
+  return service.patch(url(`/assignments/${assignmentId}`), data)
+}
+
+export function getAssignmentVersions(assignmentId) {
+  return service.get(url(`/assignments/${assignmentId}/versions`))
+}
+
 export function getAssignmentSubmissions(assignmentId) {
   return service.get(url(`/assignments/${assignmentId}/submissions`))
 }
@@ -253,8 +261,8 @@ export function getEducationConversationContext(conversationId) {
 
 // Durable course assets -----------------------------------------------------
 
-export function getCourseAssets(courseId) {
-  return service.get(url(`/courses/${courseId}/assets`))
+export function getCourseAssets(courseId, params = {}) {
+  return service.get(url(`/courses/${courseId}/assets`), { params })
 }
 
 export function uploadCourseAsset(courseId, formData) {
@@ -265,6 +273,10 @@ export function uploadCourseAsset(courseId, formData) {
 
 export function updateCourseAsset(assetId, data) {
   return service.patch(url(`/assets/${assetId}`), data)
+}
+
+export function deleteCourseAsset(assetId) {
+  return service.delete(url(`/assets/${assetId}`))
 }
 
 export function downloadCourseAsset(assetId) {
@@ -315,6 +327,10 @@ export function createKnowledgeResource(courseId, data) {
   return service.post(url(`/courses/${courseId}/knowledge-resources`), data)
 }
 
+export function adoptWebKnowledgeResource(courseId, data) {
+  return service.post(url(`/courses/${courseId}/knowledge-resources/adopt-url`), data)
+}
+
 // Student products and evidence -------------------------------------------
 
 export function getMockExams(courseId) {
@@ -359,6 +375,10 @@ export function getCourseMindMap(mindMapId) {
 
 export function saveMindMapVersion(mindMapId, data) {
   return service.post(url(`/mind-maps/${mindMapId}/versions`), data)
+}
+
+export function getMindMapVersions(mindMapId) {
+  return service.get(url(`/mind-maps/${mindMapId}/versions`))
 }
 
 export function getStudentInsights(courseId) {

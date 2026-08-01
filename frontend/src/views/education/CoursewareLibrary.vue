@@ -108,24 +108,13 @@
               >{{ objective.description || objective.text || objective }}</li>
             </ul>
           </div>
-          <div v-if="lessons.length" class="lesson-stack">
-            <article
-              v-for="lesson in lessons"
-              :key="lesson.id"
-              :class="{ active: lesson.id === selectedLessonId }"
-            >
-              <div class="lesson-number">{{ lesson.position + 1 || '—' }}</div>
-              <div>
-                <b>{{ lesson.title }}</b>
-                <span>{{ lesson.status === 'published' ? '已发布' : '草稿' }} · {{ lessonType(lesson) }}</span>
-              </div>
-              <div class="lesson-actions">
-                <el-button size="mini" type="text" @click="selectLesson(lesson)">读取</el-button>
-                <el-button size="mini" @click="openLesson(lesson)">编辑</el-button>
-              </div>
-            </article>
+          <div v-if="selectedLessonId" class="selected-lesson-actions">
+            <span>课件、导出和 AI 生成均作用于当前课时</span>
+            <el-button size="small" @click="openLesson(lessons.find(item => item.id === selectedLessonId))">
+              编辑课时与教案
+            </el-button>
           </div>
-          <div v-else class="empty-paper">
+          <div v-if="!lessons.length" class="empty-paper">
             <i class="el-icon-notebook-2"></i>
             <p>这门课程还没有课时。先回到教学空间建立课时与教案。</p>
             <el-button size="small" @click="openTeachingSpace">进入教学空间</el-button>
@@ -138,10 +127,16 @@
               <span class="panel-index">02</span>
               <h3>课件文件柜</h3>
             </div>
-            <small>教师私有文件可在确认后发布给课程学生。</small>
+            <div class="panel-tools">
+              <small>教师私有文件可在确认后发布给课程学生。</small>
+              <el-radio-group v-model="assetScope" size="mini">
+                <el-radio-button label="lesson">当前课时</el-radio-button>
+                <el-radio-button label="course">全课程</el-radio-button>
+              </el-radio-group>
+            </div>
           </header>
           <div v-loading="loadingAssets" class="asset-list">
-            <article v-for="asset in assets" :key="asset.id">
+            <article v-for="asset in visibleAssets" :key="asset.id">
               <span class="file-icon">{{ extension(asset.original_filename) }}</span>
               <div class="file-main">
                 <b>{{ asset.title }}</b>
@@ -155,17 +150,23 @@
               </el-tag>
               <el-dropdown trigger="click" @command="handleAssetCommand($event, asset)">
                 <el-button size="mini" icon="el-icon-more"></el-button>
-                <el-dropdown-menu #dropdown>
+                <el-dropdown-menu slot="dropdown">
                   <el-dropdown-item command="download" icon="el-icon-download">下载</el-dropdown-item>
                   <el-dropdown-item
-                    v-if="asset.visibility_scope !== 'course_published'"
-                    command="publish"
+                    command="teacher"
+                    icon="el-icon-lock"
+                    :disabled="asset.visibility_scope === 'course_teacher'"
+                  >教师可见</el-dropdown-item>
+                  <el-dropdown-item
+                    command="student"
                     icon="el-icon-position"
-                  >发布给学生</el-dropdown-item>
+                    :disabled="asset.visibility_scope === 'course_published'"
+                  >学生可见</el-dropdown-item>
+                  <el-dropdown-item command="delete" icon="el-icon-delete" divided>删除</el-dropdown-item>
                 </el-dropdown-menu>
               </el-dropdown>
             </article>
-            <div v-if="!loadingAssets && !assets.length" class="empty-paper compact">
+            <div v-if="!loadingAssets && !visibleAssets.length" class="empty-paper compact">
               <i class="el-icon-folder-opened"></i>
               <p>还没有课件文件。上传 PPTX、PDF、Word 或 HTML。</p>
             </div>
@@ -178,10 +179,16 @@
               <span class="panel-index">03</span>
               <h3>结构化课件版本</h3>
             </div>
-            <small>结构化源是可编辑主版本；PPTX、DOCX、PDF、HTML 与 JSON 均从当前版本即时导出。</small>
+            <div class="panel-tools">
+              <small>结构化源是可编辑主版本；所有格式均从当前版本即时导出。</small>
+              <el-radio-group v-model="versionScope" size="mini">
+                <el-radio-button label="lesson">当前课时</el-radio-button>
+                <el-radio-button label="course">全课程</el-radio-button>
+              </el-radio-group>
+            </div>
           </header>
           <div v-loading="loadingGenerated" class="generated-list">
-            <article v-for="entry in generatedContents" :key="entry.content.id">
+            <article v-for="entry in visibleGeneratedContents" :key="entry.content.id">
               <div class="generated-symbol">
                 <i :class="entry.content.kind === 'slide_document' ? 'el-icon-data-board' : 'el-icon-document'"></i>
               </div>
@@ -212,7 +219,7 @@
               >逐页视觉检查</el-button>
               <el-button size="mini" type="text" @click="openGeneratedEditor(entry)">打开编辑</el-button>
             </article>
-            <div v-if="!loadingGenerated && !generatedContents.length" class="empty-paper compact">
+            <div v-if="!loadingGenerated && !visibleGeneratedContents.length" class="empty-paper compact">
               <i class="el-icon-cpu"></i>
               <p>还没有结构化课件版本。选择课时后可手动编写，或使用 AI 生成可编辑草稿。</p>
             </div>
@@ -421,6 +428,8 @@ export default {
       loadingGenerated: false,
       contextLoading: false,
       selectedLessonId: '',
+      assetScope: 'lesson',
+      versionScope: 'lesson',
       exportingKey: '',
       generatedContents: [],
       exportFormats: ['pptx', 'docx', 'pdf', 'html', 'json'],
@@ -442,7 +451,15 @@ export default {
     },
     assets() {
       return (this.$store.getters['education/assets'] || [])
-        .filter(asset => ['courseware', 'lesson_material', 'course_material', 'agent_output'].includes(asset.purpose))
+        .filter(asset => ['courseware', 'lesson_material'].includes(asset.purpose))
+    },
+    visibleAssets() {
+      if (this.assetScope === 'course' || !this.selectedLessonId) return this.assets
+      return this.assets.filter(asset => asset.lesson_id === this.selectedLessonId)
+    },
+    visibleGeneratedContents() {
+      if (this.versionScope === 'course' || !this.selectedLessonId) return this.generatedContents
+      return this.generatedContents.filter(entry => entry.lesson.id === this.selectedLessonId)
     },
     units() { return this.$store.getters['education/units'] || [] },
     coursewareContext() { return this.$store.getters['education/coursewareContext'] },
@@ -462,8 +479,8 @@ export default {
     },
   },
   watch: {
-    'course.id'(next, previous) {
-      if (next && next !== previous) this.loadCourse(next)
+    '$route.query.courseId'(next, previous) {
+      if (next && next !== previous) this.bootstrap()
     },
   },
   created() {
@@ -501,8 +518,12 @@ export default {
         if (!this.agentForm.lesson_id && this.lessons[0]) {
           this.agentForm.lesson_id = this.lessons[0].id
         }
-        if (!this.selectedLessonId && this.lessons[0]) {
-          this.selectedLessonId = this.lessons[0].id
+        const rememberedLessonId = this.rememberedLessonId(courseId)
+        const selectedBelongsToCourse = this.lessons.some(lesson => lesson.id === this.selectedLessonId)
+        if (!selectedBelongsToCourse) {
+          this.selectedLessonId = this.lessons.some(lesson => lesson.id === rememberedLessonId)
+            ? rememberedLessonId
+            : ((this.lessons[0] && this.lessons[0].id) || '')
         }
         if (this.selectedLessonId) await this.loadSelectedContext(this.selectedLessonId)
       } catch (error) {
@@ -519,6 +540,7 @@ export default {
       try {
         await this.$store.dispatch('education/uploadAsset', {
           courseId: this.course.id,
+          lessonId: this.selectedLessonId,
           file,
           title: file.name,
           purpose: 'courseware',
@@ -548,15 +570,33 @@ export default {
           this.$message.error('文件下载失败')
         }
       }
-      if (command === 'publish') {
+      if (command === 'teacher' || command === 'student') {
         try {
-          await this.$store.dispatch('education/publishAsset', {
+          await this.$store.dispatch('education/setAssetVisibility', {
+            courseId: this.course.id,
+            assetId: asset.id,
+            visibilityScope: command === 'student' ? 'course_published' : 'course_teacher',
+          })
+          this.$message.success(command === 'student' ? '该课件已对课程学生可见' : '该课件已撤回为教师可见')
+        } catch (error) {
+          this.$message.error('权限修改失败')
+        }
+      }
+      if (command === 'delete') {
+        try {
+          await this.$confirm(
+            `删除“${asset.title}”后将从课程文件柜隐藏。已被正式作业或知识资源引用的文件不会被删除。`,
+            '删除课件',
+            { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+          )
+          await this.$store.dispatch('education/archiveAsset', {
             courseId: this.course.id,
             assetId: asset.id,
           })
-          this.$message.success('该课件已对课程学生可见')
+          this.$message.success('课件已删除')
         } catch (error) {
-          this.$message.error('发布失败')
+          if (error === 'cancel' || error === 'close') return
+          this.$message.error(educationErrorMessage(error, '删除失败，请检查文件是否仍被正式内容引用'))
         }
       }
     },
@@ -568,6 +608,7 @@ export default {
     async loadSelectedContext(lessonId) {
       if (!lessonId) return
       this.selectedLessonId = lessonId
+      this.rememberLessonId(this.course.id, lessonId)
       this.agentForm.lesson_id = lessonId
       this.contextLoading = true
       try {
@@ -580,6 +621,21 @@ export default {
     },
     selectLesson(lesson) {
       this.loadSelectedContext(lesson.id)
+    },
+    rememberedLessonId(courseId) {
+      try {
+        return window.localStorage.getItem(`education:last-courseware-lesson:${courseId}`) || ''
+      } catch (error) {
+        return ''
+      }
+    },
+    rememberLessonId(courseId, lessonId) {
+      if (!courseId || !lessonId) return
+      try {
+        window.localStorage.setItem(`education:last-courseware-lesson:${courseId}`, lessonId)
+      } catch (error) {
+        // Courseware remains usable when browser storage is unavailable.
+      }
     },
     async startCoursewareAgent() {
       try {
@@ -816,6 +872,7 @@ export default {
       }
     },
     openLesson(lesson) {
+      if (!lesson) return
       this.$router.push(`/education/courses/${this.course.id}/lessons/${lesson.id}`)
     },
     openTeachingSpace() {
@@ -979,11 +1036,22 @@ export default {
 .format-actions .el-button { margin: 0; min-width: 48px; }
 .studio-panel > header { margin-bottom: 16px; border-bottom: 1px solid #edf1f0; padding-bottom: 14px; }
 .studio-panel > header > div { display: flex; align-items: center; gap: 8px; }
+.studio-panel > header > .panel-tools {
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+.panel-tools small { max-width: 440px; }
 .studio-panel h3 { margin: 0; color: #2c3d3a; font-size: 16px; }
 .studio-panel header small { display: block; margin-top: 7px; color: #8a9996; line-height: 1.5; }
 .panel-index { color: #36897e; font-family: Georgia, serif; font-size: 11px; }
 .lesson-context-picker { display: grid; gap: 6px; margin-bottom: 11px; }
 .lesson-context-picker label { color: #788985; font-size: 9px; font-weight: 700; }
+.selected-lesson-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: #f4f8f7; color: #72837f; font-size: 10px;
+}
 .context-sheet {
   margin-bottom: 13px; padding: 14px; border: 1px solid #d9e8e4;
   border-radius: 11px; background: linear-gradient(140deg, #fbfdfc, #f0f7f5);

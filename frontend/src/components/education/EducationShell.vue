@@ -71,17 +71,20 @@ export default {
 .education-header {
   min-height: 92px;
   padding: 18px 26px;
-  display: flex;
+  display: grid;
+  grid-template-areas: "title context actions";
+  grid-template-columns: minmax(260px, 1fr) minmax(360px, 520px) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 24px;
   border-bottom: 1px solid #e8edf3;
 }
 
 .title-block {
+  grid-area: title;
   min-width: 0;
-  flex: 1;
 }
+
+.education-header > :deep(.course-context) { grid-area: context; }
 
 .eyebrow {
   color: #27887e;
@@ -92,7 +95,12 @@ export default {
 }
 
 h1 {
-  display: inline;
+  display: -webkit-inline-box;
+  max-width: calc(100% - 150px);
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  vertical-align: top;
   margin: 0 0 0 8px;
   color: #18212f;
   font-size: 23px;
@@ -112,9 +120,11 @@ p {
 }
 
 .header-actions {
-  flex-shrink: 0;
-  display: flex;
+  grid-area: actions;
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
   align-items: center;
+  justify-content: end;
   gap: 8px;
 }
 
@@ -131,16 +141,24 @@ p {
 
 @media (max-width: 1280px) {
   .education-header {
-    flex-wrap: wrap;
+    grid-template-areas:
+      "title context"
+      "title actions";
+    grid-template-columns: minmax(280px, 1fr) minmax(360px, auto);
   }
-  .title-block { flex: 1 1 300px; }
-  .header-actions { margin-left: auto; }
 }
 
 @media (max-width: 900px) {
   .education-page { padding: 0; gap: 0; }
   .education-main { border-radius: 0; }
-  .education-header { padding: 15px 18px; align-items: stretch; }
+  .education-header {
+    padding: 15px 18px;
+    align-items: stretch;
+    grid-template-areas: "title" "context" "actions";
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .header-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .header-actions :deep(.el-button), .header-actions :deep(.el-tag) { margin: 0; }
   .education-content { padding: 18px; }
 }
 </style>

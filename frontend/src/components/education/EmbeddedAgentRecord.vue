@@ -16,7 +16,7 @@
       <button v-if="adoptedObject" type="button" @click="previewLatestArtifact">
         <i class="el-icon-view"></i> 预览最新产物
       </button>
-      <button v-if="run.business_route" type="button" @click="openBusinessPage">
+      <button v-if="canOpenBusinessPage" type="button" @click="openBusinessPage">
         <i class="el-icon-link"></i> 返回业务页面
       </button>
       <button type="button" @click="historyExpanded = !historyExpanded">
@@ -76,6 +76,16 @@ export default {
     adoptedObject() {
       return (this.run && this.run.output && this.run.output.adopted_object) || null
     },
+    businessTarget() {
+      if (!this.run || !this.run.business_route) return ''
+      const route = this.run.business_route
+      return typeof route === 'string'
+        ? this.$router.resolve(route).route.fullPath
+        : this.$router.resolve(route).route.fullPath
+    },
+    canOpenBusinessPage() {
+      return Boolean(this.businessTarget && this.$route.fullPath !== this.businessTarget)
+    },
     statusLabel() {
       if (this.run && this.run.status === 'partial') return '部分完成'
       const labels = {
@@ -108,17 +118,13 @@ export default {
         query: { conversation_id: item.conversation_id },
       })
     },
+    openBusinessPage() {
+      if (!this.canOpenBusinessPage) return
+      this.$router.push(this.run.business_route)
+    },
     previewLatestArtifact() {
       if (!this.adoptedObject) return
       this.$emit('preview', { run: this.run, adoptedObject: this.adoptedObject })
-    },
-    openBusinessPage() {
-      if (!this.run || !this.run.business_route) return
-      const route = this.run.business_route
-      const target = typeof route === 'string'
-        ? route
-        : this.$router.resolve(route).route.fullPath
-      if (this.$route.fullPath !== target) this.$router.push(route)
     },
     formatDate(value) {
       if (!value) return '时间待记录'

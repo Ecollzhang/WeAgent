@@ -35,7 +35,7 @@
     <el-skeleton v-if="!course" :rows="8" animated />
     <template v-else>
       <EmbeddedAgentRecord
-        title="AI 名单导入记录"
+        title="AI 生成记录"
         v-if="isTeacher"
         :run="productAgentRun"
         @terminal="handleRosterAgentTerminal"
@@ -170,7 +170,7 @@
               <span>{{ dueLabel(assignment.due_at) }}</span>
             </div>
             <h3>{{ assignment.title }}</h3>
-            <p>{{ instructionText(assignment) }}</p>
+            <p class="assignment-card-body">{{ instructionText(assignment) }}</p>
             <footer>
               <span>{{ statusLabel(assignment.status) }}</span>
               <b>{{ isTeacher ? '查看提交' : '开始作答' }} <i class="el-icon-right"></i></b>
@@ -518,12 +518,19 @@ export default {
     members() { return this.$store.getters['education/members'] || [] },
     analytics() { return this.$store.getters['education/analytics'] || {} },
     productAgentRun() { return this.$store.getters['education/productAgentRun'] },
-    assets() { return this.$store.getters['education/assets'] || [] },
+    assets() {
+      return (this.$store.getters['education/assets'] || [])
+        .filter(asset => ['courseware', 'lesson_material'].includes(asset.purpose))
+    },
     weakness() { return this.$store.getters['education/weakness'] || {} },
     weaknessReady() { return this.weakness.data_state === 'ready' },
     weaknessItems() { return this.weakness.weaknesses || [] },
     rosterAgentRunning() {
-      return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
+      return Boolean(
+        this.productAgentRun
+        && this.productAgentRun.product_code === 'roster_import'
+        && ['pending', 'running'].includes(this.productAgentRun.status)
+      )
     },
     tabs() {
       if (!this.isTeacher) {
@@ -596,7 +603,6 @@ export default {
       if (this.isTeacher) {
         await this.$store.dispatch('education/restoreProductAgentRun', {
           courseId: this.courseId,
-          productCode: 'roster_import',
         })
       } else {
         this.activeTab = ['materials', 'assignments', 'weaknesses'].includes(this.$route.query.tab)
@@ -930,7 +936,19 @@ export default {
 .assignment-card:hover { border-color: #75b9b2; box-shadow: 0 10px 24px rgba(39,136,126,.09); }
 .assignment-card > div, .assignment-card footer { display: flex; align-items: center; justify-content: space-between; color: #8a96a6; font-size: 11px; }
 .assignment-card h3 { margin: 14px 0 7px; color: #293647; }
-.assignment-card p { min-height: 42px; color: #6c7888; font-size: 12px; line-height: 1.6; }
+.assignment-card-body {
+  min-height: 76px;
+  max-height: 76px;
+  margin: 0;
+  overflow-y: auto;
+  padding-right: 5px;
+  color: #6c7888;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+  scrollbar-color: #c7d7d3 transparent;
+}
 .assignment-card footer { margin-top: 15px; }
 .assignment-card footer b { color: #27887e; }
 .small-empty { min-height: 210px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #8b98a8; border: 1px dashed #d5dfe7; border-radius: 11px; grid-column: 1/-1; }

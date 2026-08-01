@@ -64,12 +64,6 @@ export default {
         this.selectedCourseId = course ? course.id : ''
       },
     },
-    '$route.fullPath'() {
-      this.bootstrapCourse()
-    },
-  },
-  created() {
-    this.bootstrapCourse()
   },
   methods: {
     roleLabel(role) {
@@ -80,26 +74,6 @@ export default {
     },
     routeCourseId() {
       return this.$route.params.courseId || this.$route.query.courseId || ''
-    },
-    async bootstrapCourse() {
-      try {
-        if (!this.courses.length) {
-          await this.$store.dispatch('education/fetchCourses')
-        }
-        const routeCourseId = this.routeCourseId()
-        const activeId = this.activeCourse && this.activeCourse.id
-        const candidate = this.courses.find(course => course.id === routeCourseId)
-          || this.courses.find(course => course.id === activeId)
-          || this.courses.find(course => (
-            !this.requestedRole || course.membership_role === this.requestedRole
-          ))
-          || this.courses[0]
-        if (candidate && (!this.activeCourse || this.activeCourse.id !== candidate.id)) {
-          await this.$store.dispatch('education/selectCourse', candidate.id)
-        }
-      } catch (error) {
-        // Page-level empty and authorization states own user-facing messages.
-      }
     },
     openAllCourses() {
       if (this.$route.name !== 'EducationHome') this.$router.push('/education')

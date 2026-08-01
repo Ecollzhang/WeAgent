@@ -101,16 +101,24 @@
             </el-button>
             <small>上传后先作为教师草稿，随课时发布后学生才可下载。</small>
           </div>
-          <div v-if="materials.length" class="material-files">
-            <article v-for="material in materials" :key="material.id">
+          <div v-if="lessonAssets.length" class="material-files">
+            <article v-for="asset in lessonAssets" :key="asset.id">
               <div>
-                <b>{{ material.title }}</b>
-                <small>{{ material.original_filename }} · {{ fileSizeLabel(material.file_size) }}</small>
+                <b>{{ asset.title }}</b>
+                <small>{{ asset.original_filename }} · {{ fileSizeLabel(asset.byte_size) }}</small>
               </div>
-              <el-tag size="mini" :type="material.status === 'published' ? 'success' : 'info'">
-                {{ material.status === 'published' ? '已发布' : '草稿' }}
+              <el-tag size="mini" :type="asset.visibility_scope === 'course_published' ? 'success' : 'info'">
+                {{ asset.visibility_scope === 'course_published' ? '学生可见' : '教师可见' }}
               </el-tag>
-              <el-button size="mini" @click="downloadMaterial(material)">下载</el-button>
+              <el-button size="mini" @click="downloadAsset(asset)">下载</el-button>
+              <el-dropdown v-if="isTeacher" trigger="click" @command="handleAssetCommand($event, asset)">
+                <el-button size="mini" icon="el-icon-more"></el-button>
+                <el-dropdown-menu slot="dropdown">
+                  <el-dropdown-item command="teacher" :disabled="asset.visibility_scope === 'course_teacher'">教师可见</el-dropdown-item>
+                  <el-dropdown-item command="student" :disabled="asset.visibility_scope === 'course_published'">学生可见</el-dropdown-item>
+                  <el-dropdown-item command="delete" icon="el-icon-delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </el-dropdown>
             </article>
           </div>
         </div>
@@ -419,6 +427,12 @@ export default {
     saving() { return this.$store.getters['education/saving'] },
     activities() { return (this.lesson && this.lesson.activities) || [] },
     materials() { return (this.lesson && this.lesson.materials) || [] },
+    lessonAssets() {
+      return (this.$store.getters['education/assets'] || []).filter(asset => (
+        asset.lesson_id === this.lessonId
+        && ['courseware', 'lesson_material'].includes(asset.purpose)
+      ))
+    },
     visibleSections() {
       return this.sections.filter(item => !item.teacherOnly || this.isTeacher)
     },
@@ -480,6 +494,10 @@ export default {
         await this.$store.dispatch('education/fetchCourseOverview', this.courseId)
       }
       const lesson = await this.$store.dispatch('education/fetchLesson', this.lessonId)
+      await this.$store.dispatch('education/fetchAssets', {
+        courseId: this.courseId,
+        params: { lesson_id: this.lessonId, purpose: 'courseware,lesson_material' },
+      })
       const version = lesson.current_version || lesson.published_version || lesson.publication || {}
       const content = version.source_json || version.content || version.content_json || lesson.content || {}
       const stages = Array.isArray(content.stages) ? content.stages : []
@@ -886,6 +904,10 @@ export default {
           file,
           title: file.name.replace(/\.[^.]+$/, ''),
         })
+        await this.$store.dispatch('education/fetchAssets', {
+          courseId: this.courseId,
+          params: { lesson_id: this.lessonId, purpose: 'courseware,lesson_material' },
+        })
         this.$message.success('材料已上传，将在发布课时后对学生可见')
       } catch (error) {
         this.$message.error(educationErrorMessage(error, '材料上传失败'))
@@ -905,6 +927,46 @@ export default {
         URL.revokeObjectURL(href)
       } catch (error) {
         this.$message.error('材料下载失败或尚未发布')
+      }
+    },
+    async downloadAsset(asset) {
+      try {
+        const response = await this.$store.dispatch('education/downloadAsset', asset)
+        const blob = response instanceof Blob ? response : response.data
+        const href = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = href
+        link.download = asset.original_filename || asset.title
+        link.click()
+        URL.revokeObjectURL(href)
+      } catch (error) {
+        this.$message.error('文件下载失败或尚未发布')
+      }
+    },
+    async handleAssetCommand(command, asset) {
+      try {
+        if (command === 'delete') {
+          await this.$confirm(
+            `删除“${asset.title}”后将从该课时和课件文件柜同时隐藏。`,
+            '删除课件或材料',
+            { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+          )
+          await this.$store.dispatch('education/archiveAsset', {
+            courseId: this.courseId,
+            assetId: asset.id,
+          })
+          this.$message.success('文件已删除')
+          return
+        }
+        await this.$store.dispatch('education/setAssetVisibility', {
+          courseId: this.courseId,
+          assetId: asset.id,
+          visibilityScope: command === 'student' ? 'course_published' : 'course_teacher',
+        })
+        this.$message.success(command === 'student' ? '学生现在可以查看该文件' : '文件已改为仅教师可见')
+      } catch (error) {
+        if (error === 'cancel' || error === 'close') return
+        this.$message.error(educationErrorMessage(error, '文件权限修改失败'))
       }
     },
     fileSizeLabel(bytes) {

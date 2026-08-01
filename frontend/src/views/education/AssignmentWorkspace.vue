@@ -7,11 +7,11 @@
     <template #actions>
       <el-tag v-if="assignment">{{ statusLabel(assignment.status) }}</el-tag>
       <el-button
-        v-if="isTeacher && assignment && assignment.status === 'draft'"
+        v-if="isTeacher && assignment && (assignment.status === 'draft' || assignment.has_unpublished_changes)"
         data-testid="publish-assignment"
         type="primary"
         @click="handlePublishAssignment"
-      >发布作业</el-button>
+      >{{ assignment.status === 'published' ? '发布新版本' : '发布作业' }}</el-button>
       <el-button
         v-if="isTeacher && nextReviewSubmission"
         type="primary"
@@ -115,34 +115,84 @@
       </section>
 
       <section v-else-if="activeTab === 'content'" class="overview-panel content-view">
-        <h2>作业内容</h2>
-        <p class="instruction">{{ instructionText }}</p>
-        <div
-          v-if="assignment.source_assets && assignment.source_assets.length"
-          class="assignment-source-assets"
-          data-testid="assignment-source-assets"
-        >
-          <button
-            v-for="asset in assignment.source_assets"
-            :key="asset.id"
-            type="button"
-            @click="downloadAssignmentAsset(asset)"
-          >
-            <i class="el-icon-document"></i>
-            <span>{{ asset.title || asset.original_filename }}</span>
-            <i class="el-icon-download"></i>
-          </button>
-        </div>
-        <h3>评分标准</h3>
-        <div class="rubric-list">
-          <div v-for="item in readableRubric" :key="item.label">
-            <span>{{ item.label }}</span><b>{{ item.score }} 分</b>
+        <header class="content-heading">
+          <div>
+            <h2>作业内容</h2>
+            <p>
+              当前草稿 v{{ currentVersionNumber }}
+              <span v-if="assignment.published_version">· 学生版本 v{{ assignment.published_version.version_number }}</span>
+              <el-tag v-if="assignment.has_unpublished_changes" size="mini" type="warning">有未发布修改</el-tag>
+            </p>
           </div>
-        </div>
-        <details v-if="teacherReference">
-          <summary>教师参考答案 / 说明</summary>
-          <p>{{ teacherReference }}</p>
-        </details>
+          <div>
+            <el-button v-if="!editingContent" icon="el-icon-edit" @click="beginContentEdit">编辑</el-button>
+            <template v-else>
+              <el-button @click="cancelContentEdit">取消</el-button>
+              <el-button type="primary" :loading="savingAssignment" @click="saveAssignmentVersion">保存新版本</el-button>
+            </template>
+          </div>
+        </header>
+
+        <template v-if="editingContent">
+          <section class="assignment-content-section assignment-meta-editor">
+            <el-input v-model.trim="assignmentDraft.title" maxlength="200" show-word-limit placeholder="作业标题" />
+            <el-select v-model="assignmentDraft.kind" aria-label="作业类型">
+              <el-option label="阅读练习" value="quiz" />
+              <el-option label="写作" value="writing" />
+              <el-option label="阅读与写作" value="mixed" />
+            </el-select>
+          </section>
+          <section class="assignment-content-section">
+            <h3>任务正文</h3>
+            <RichMaterialEditor v-model="assignmentDraft.instructionHtml" @change="markAssignmentDirty" />
+          </section>
+          <section class="assignment-content-section assignment-settings-editor">
+            <h3>提交与评分设置</h3>
+            <el-input-number v-model="assignmentDraft.maxScore" :min="1" :max="10000" />
+            <span>满分</span>
+            <el-input-number v-model="assignmentDraft.maxAttempts" :min="1" :max="20" />
+            <span>最多提交次数</span>
+            <el-switch v-model="assignmentDraft.allowRevision" />
+            <span>反馈后允许订正</span>
+          </section>
+        </template>
+        <section v-else class="assignment-content-section">
+          <div class="instruction" v-html="instructionHtml"></div>
+        </section>
+
+        <section class="assignment-content-section">
+          <h3>附件</h3>
+          <div
+            v-if="assignment.source_assets && assignment.source_assets.length"
+            class="assignment-source-assets"
+            data-testid="assignment-source-assets"
+          >
+            <button
+              v-for="asset in assignment.source_assets"
+              :key="asset.id"
+              type="button"
+              @click="downloadAssignmentAsset(asset)"
+            >
+              <i class="el-icon-document"></i>
+              <span>{{ asset.title || asset.original_filename }}</span>
+              <i class="el-icon-download"></i>
+            </button>
+          </div>
+          <el-empty v-else :image-size="60" description="暂无附件" />
+        </section>
+
+        <section class="assignment-content-section">
+          <h3>评分标准</h3>
+          <div class="rubric-list">
+            <div v-for="item in readableRubric" :key="item.label">
+              <span>{{ item.label }}</span><b>{{ item.score }} 分</b>
+            </div>
+          </div>
+          <details v-if="teacherReference">
+            <summary>教师参考答案 / 说明</summary>
+            <p>{{ teacherReference }}</p>
+          </details>
+        </section>
       </section>
 
       <section v-else-if="activeTab === 'settings'" class="overview-panel settings-view">
@@ -169,7 +219,7 @@
     <div v-else class="student-assignment">
       <section class="assignment-brief">
         <div class="brief-label">任务要求</div>
-        <p>{{ instructionText }}</p>
+        <p class="instruction">{{ instructionText }}</p>
         <dl>
           <div><dt>任务类型</dt><dd>{{ kindLabel(assignment.kind) }}</dd></div>
           <div><dt>截止时间</dt><dd>长期有效</dd></div>
@@ -240,10 +290,11 @@
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
+import RichMaterialEditor from '../../components/education/RichMaterialEditor.vue'
 
 export default {
   name: 'EducationAssignmentWorkspace',
-  components: { EducationShell },
+  components: { EducationShell, RichMaterialEditor },
   data() {
     return {
       activeTab: 'submissions',
@@ -253,6 +304,13 @@ export default {
       answer: '',
       ownSubmissionRecord: null,
       releasedFeedback: [],
+      editingContent: false,
+      savingAssignment: false,
+      assignmentDraft: {
+        title: '', kind: 'writing', instructionHtml: '', maxScore: 100,
+        maxAttempts: 1, allowRevision: true,
+      },
+      initialDraftSnapshot: '',
       overviewTabs: [
         { key: 'submissions', label: '提交与批改' },
         { key: 'content', label: '作业内容' },
@@ -271,11 +329,30 @@ export default {
     metrics() { return this.overview.metrics || {} },
     students() { return this.overview.students || [] },
     isTeacher() { return this.$store.getters['education/isTeacher'] },
+    currentVersionNumber() {
+      return this.assignment && this.assignment.current_version
+        ? this.assignment.current_version.version_number
+        : 1
+    },
+    instructionHtml() {
+      const value = (this.assignment && this.assignment.instruction_json) || {}
+      const html = typeof value === 'object' && value.html
+        ? String(value.html)
+        : this.escapeHtml(this.instructionText).replace(/\n/g, '<br>')
+      return html
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '')
+        .replace(/javascript\s*:/gi, '')
+    },
+    hasUnsavedChanges() {
+      return this.editingContent
+        && JSON.stringify(this.assignmentDraft) !== this.initialDraftSnapshot
+    },
     instructionText() {
       const value = this.assignment.instruction_json
       return typeof value === 'string'
         ? value
-        : (value && (value.text || value.instructions)) || '暂无文字要求，请查看作业附件。'
+        : (value && (value.text || value.instructions || this.htmlToText(value.html))) || '暂无文字要求，请查看作业附件。'
     },
     readableRubric() {
       const rubric = this.assignment.evaluation_json && this.assignment.evaluation_json.rubric
@@ -374,7 +451,98 @@ export default {
       this.$router.replace(`/education/courses/${this.courseId}`)
     }
   },
+  mounted() {
+    window.addEventListener('keydown', this.handleAssignmentShortcut)
+    window.addEventListener('beforeunload', this.handleBeforeUnload)
+  },
+  beforeDestroy() {
+    window.removeEventListener('keydown', this.handleAssignmentShortcut)
+    window.removeEventListener('beforeunload', this.handleBeforeUnload)
+  },
   methods: {
+    escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+    },
+    htmlToText(value) {
+      if (!value) return ''
+      const node = document.createElement('div')
+      node.innerHTML = String(value)
+      return (node.textContent || '').trim()
+    },
+    beginContentEdit() {
+      const instruction = this.assignment.instruction_json || {}
+      this.assignmentDraft = {
+        title: this.assignment.title,
+        kind: this.assignment.kind,
+        instructionHtml: instruction.html || `<p>${this.escapeHtml(this.instructionText).replace(/\n/g, '<br>')}</p>`,
+        maxScore: Number(this.assignment.max_score || 100),
+        maxAttempts: Number(this.assignment.max_attempts || 1),
+        allowRevision: Boolean(this.assignment.allow_revision_after_feedback),
+      }
+      this.initialDraftSnapshot = JSON.stringify(this.assignmentDraft)
+      this.editingContent = true
+    },
+    cancelContentEdit() {
+      this.editingContent = false
+      this.initialDraftSnapshot = ''
+    },
+    markAssignmentDirty() {
+      // Dirty state is derived from the isolated draft snapshot.
+    },
+    async saveAssignmentVersion() {
+      if (!this.assignmentDraft.title || !this.htmlToText(this.assignmentDraft.instructionHtml)) {
+        this.$message.warning('请填写作业标题和任务正文')
+        return false
+      }
+      this.savingAssignment = true
+      try {
+        await this.$store.dispatch('education/saveAssignmentVersion', {
+          assignmentId: this.assignmentId,
+          assignment: {
+            current_version_id: this.assignment.current_version && this.assignment.current_version.id,
+            title: this.assignmentDraft.title,
+            kind: this.assignmentDraft.kind,
+            instruction_json: {
+              html: this.assignmentDraft.instructionHtml,
+              text: this.htmlToText(this.assignmentDraft.instructionHtml),
+            },
+            evaluation_json: this.assignment.evaluation_json || {},
+            source_asset_ids: (this.assignment.source_assets || []).map(asset => asset.id),
+            max_score: this.assignmentDraft.maxScore,
+            max_attempts: this.assignmentDraft.maxAttempts,
+            allow_revision_after_feedback: this.assignmentDraft.allowRevision,
+          },
+        })
+        await this.$store.dispatch('education/fetchAssignmentOverview', this.assignmentId)
+        this.editingContent = false
+        this.initialDraftSnapshot = ''
+        this.$message.success('作业新版本已保存，学生仍看到上一次发布版本')
+        return true
+      } catch (error) {
+        const data = error.response && error.response.data
+        this.$message.error((data && (data.error_code || data.error)) || '作业保存失败')
+        return false
+      } finally {
+        this.savingAssignment = false
+      }
+    },
+    handleAssignmentShortcut(event) {
+      if (!this.editingContent) return
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        this.saveAssignmentVersion()
+      }
+    },
+    handleBeforeUnload(event) {
+      if (!this.hasUnsavedChanges) return
+      event.preventDefault()
+      event.returnValue = ''
+    },
     statusLabel(value) {
       return ({ draft: '草稿', published: '进行中', closed: '已截止', archived: '已归档' })[value] || value
     },
@@ -424,9 +592,26 @@ export default {
     },
     async handlePublishAssignment() {
       try {
+        if (this.hasUnsavedChanges) {
+          try {
+            await this.$msgbox({
+              title: '存在未保存修改',
+              message: '先保存本次修改再发布，还是放弃未保存修改并发布当前版本？',
+              confirmButtonText: '保存并发布',
+              cancelButtonText: '放弃修改并发布',
+              showCancelButton: true,
+              distinguishCancelAndClose: true,
+              type: 'warning',
+            })
+            if (!await this.saveAssignmentVersion()) return
+          } catch (choice) {
+            if (choice === 'close') return
+            this.cancelContentEdit()
+          }
+        }
         await this.$store.dispatch('education/publishAssignment', this.assignmentId)
         await this.$store.dispatch('education/fetchAssignmentOverview', this.assignmentId)
-        this.$message.success('作业已发布')
+        this.$message.success('作业版本已发布给学生')
       } catch (error) {
         this.$message.error('作业发布失败')
       }
@@ -502,9 +687,20 @@ export default {
 .submission-toolbar { display: grid; grid-template-columns: 1fr 150px 150px; gap: 10px; margin-bottom: 12px; }
 .student-cell { display: flex; align-items: center; gap: 9px; }
 .student-cell span { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; background: #e1f0ec; color: #27786f; font-size: 10px; }
-.content-view { max-width: 900px; }
+.content-view { max-width: 980px; }
+.content-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.content-heading h2 { margin: 0; }
+.content-heading p { margin: 6px 0 0; color: #7a8796; font-size: 12px; }
+.content-heading .el-tag { margin-left: 8px; }
+.assignment-content-section { margin-top: 24px; }
+.assignment-content-section + .assignment-content-section { padding-top: 24px; border-top: 1px solid #edf1f3; }
+.assignment-content-section h3 { margin: 0 0 12px; }
+.assignment-meta-editor { display: grid; grid-template-columns: minmax(280px, 1fr) 180px; gap: 12px; }
+.assignment-settings-editor { display: grid; grid-template-columns: auto auto auto auto auto 1fr; align-items: center; gap: 10px; }
 .content-view h2, .content-view h3, .settings-view h2, .analytics-view h2 { color: #273548; }
-.instruction { padding: 16px; border-radius: 9px; background: #f6f8fa; color: #4d5a6b; line-height: 1.8; white-space: pre-wrap; }
+.instruction { max-height: 420px; overflow-y: auto; padding: 18px; border-radius: 9px; background: #f6f8fa; color: #4d5a6b; line-height: 1.8; white-space: normal; }
+.instruction ::v-deep p:first-child { margin-top: 0; }
+.instruction ::v-deep p:last-child { margin-bottom: 0; }
 .rubric-list { display: grid; gap: 8px; }
 .rubric-list div { display: flex; justify-content: space-between; padding: 11px 13px; border: 1px solid #e5ebef; border-radius: 8px; }
 .content-view details { margin-top: 16px; padding: 12px; border: 1px solid #e6e9ed; border-radius: 8px; }
@@ -513,7 +709,8 @@ dl { margin: 14px 0 0; }
 dl div { display: grid; grid-template-columns: 140px 1fr; padding: 11px 0; border-bottom: 1px solid #edf1f4; }
 dt { color: #8b96a5; font-size: 11px; }
 dd { margin: 0; color: #364456; font-size: 13px; }
-.score-summary { display: grid; grid-template-columns: repeat(3, minmax(140px, 220px)); gap: 12px; }
+.analytics-view h2 { margin-bottom: 24px; }
+.score-summary { display: grid; grid-template-columns: repeat(3, minmax(140px, 220px)); gap: 12px; margin-bottom: 24px; }
 .score-summary div { padding: 18px; border-radius: 10px; background: #eef7f5; }
 .score-summary span, .score-summary b { display: block; }
 .score-summary span { color: #6d817d; font-size: 11px; }
@@ -538,5 +735,6 @@ dd { margin: 0; color: #364456; font-size: 13px; }
 @media (max-width: 1050px) {
   .overview-metrics { grid-template-columns: repeat(2, 1fr); }
   .student-assignment { grid-template-columns: 1fr; }
+  .assignment-settings-editor { grid-template-columns: auto 1fr; }
 }
 </style>

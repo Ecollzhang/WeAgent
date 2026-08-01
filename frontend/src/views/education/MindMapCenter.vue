@@ -8,20 +8,12 @@
         icon="el-icon-edit"
         :disabled="!activeMap"
         @click="openEditor"
-      >编辑结构</el-button>
+      >{{ editing ? '正在编辑' : '编辑导图' }}</el-button>
       <el-button
-        icon="el-icon-magic-stick"
-        :loading="generating"
+        icon="el-icon-plus"
         :disabled="!course"
-        @click="generate"
-      >规则快速生成</el-button>
-      <el-button
-        type="primary"
-        icon="el-icon-cpu"
-        :loading="agentRunning"
-        :disabled="!course"
-        @click="generateWithAgent"
-      >Agent 生成导图</el-button>
+        @click="createDialog = true"
+      >新建导图</el-button>
     </template>
 
     <el-alert
@@ -85,9 +77,23 @@
                 <div><dt>更新时间</dt><dd>{{ shortDate(activeMap.current_version.created_at) }}</dd></div>
               </dl>
             </header>
+            <div class="map-scope-line">
+              <el-tag size="mini" effect="plain">{{ scopeLabel(activeMap.scope_type) }}</el-tag>
+              <span v-if="activeMap.lesson_ids.length">关联 {{ activeMap.lesson_ids.length }} 个课时</span>
+              <el-button type="text" icon="el-icon-time" @click="openVersionHistory">历史版本</el-button>
+            </div>
             <div class="tree-viewport">
-              <div class="canvas-grid"></div>
-              <MindMapTree :node="activeMap.current_version.tree" />
+              <MindMapGraphEditor
+                v-if="editDocument.root"
+                v-model="editDocument"
+                :editable="editing"
+                @change="dirty = true"
+              />
+              <div v-if="editing" class="map-save-bar">
+                <el-input v-model.trim="changeSummary" maxlength="200" placeholder="本次修改说明" />
+                <el-button @click="cancelEditor">取消</el-button>
+                <el-button type="primary" :loading="saving" @click="saveMindMapVersion">保存新版本</el-button>
+              </div>
             </div>
           </template>
           <div v-else class="blank-map">
@@ -102,49 +108,68 @@
       </section>
     </template>
 
-    <el-dialog title="编辑思维导图结构" :visible.sync="editorVisible" width="780px">
-      <el-alert
-        title="编辑 JSON 源结构会创建一个新版本；节点需包含唯一 id、label 和 children。"
-        type="info"
-        :closable="false"
-        show-icon
-      />
-      <el-input
-        v-model="editJson"
-        class="json-editor"
-        type="textarea"
-        :rows="18"
-        spellcheck="false"
-      />
-      <el-input
-        v-model.trim="changeSummary"
-        placeholder="本次修改说明"
-        maxlength="200"
-      />
+    <el-dialog title="新建课程思维导图" :visible.sync="createDialog" width="600px">
+      <el-form label-position="top">
+        <el-form-item label="导图名称"><el-input v-model.trim="createForm.title" maxlength="200" /></el-form-item>
+        <el-form-item label="导图范围">
+          <el-radio-group v-model="createForm.scopeType">
+            <el-radio-button label="course">课程总览</el-radio-button>
+            <el-radio-button label="lesson">单个课时</el-radio-button>
+            <el-radio-button label="custom">多个课时</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="createForm.scopeType === 'lesson'" label="选择课时">
+          <el-select v-model="createForm.lessonId" style="width:100%" placeholder="选择一个已发布课时">
+            <el-option v-for="lesson in lessons" :key="lesson.id" :label="lesson.title" :value="lesson.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="createForm.scopeType === 'custom'" label="选择多个课时">
+          <el-select v-model="createForm.lessonIds" multiple style="width:100%" placeholder="选择已发布课时">
+            <el-option v-for="lesson in lessons" :key="lesson.id" :label="lesson.title" :value="lesson.id" />
+          </el-select>
+        </el-form-item>
+        <el-alert title="规则生成会立即创建基础结构；Agent 生成会结合课程知识资料形成更细的草稿。" type="info" :closable="false" />
+      </el-form>
       <template #footer>
-        <el-button @click="editorVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveMindMapVersion">保存新版本</el-button>
+        <el-button @click="createDialog = false">取消</el-button>
+        <el-button :loading="generating" @click="generate">规则快速生成</el-button>
+        <el-button type="primary" :loading="agentRunning" @click="generateWithAgent">Agent 生成</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer title="导图历史版本" :visible.sync="historyVisible" size="380px">
+      <div class="versionHistory">
+        <article v-for="version in versionHistory" :key="version.id">
+          <div><b>v{{ version.version_number }}</b><span>{{ shortDateTime(version.created_at) }}</span></div>
+          <p>{{ version.change_summary || '未填写修改说明' }}</p>
+          <el-button size="mini" @click="restoreVersion(version)">恢复为新版本</el-button>
+        </article>
+      </div>
+    </el-drawer>
   </EducationShell>
 </template>
 
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
-import MindMapTree from '../../components/education/MindMapTree.vue'
+import MindMapGraphEditor from '../../components/education/MindMapGraphEditor.vue'
 import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.vue'
 
 export default {
   name: 'MindMapCenter',
-  components: { EducationShell, MindMapTree, EmbeddedAgentRecord },
+  components: { EducationShell, MindMapGraphEditor, EmbeddedAgentRecord },
   data() {
     return {
       roleError: false,
       generating: false,
       saving: false,
-      editorVisible: false,
-      editJson: '',
+      createDialog: false,
+      historyVisible: false,
+      editing: false,
+      dirty: false,
+      editDocument: {},
+      versionHistory: [],
       changeSummary: '',
+      createForm: { title: '', scopeType: 'course', lessonId: '', lessonIds: [] },
     }
   },
   computed: {
@@ -155,10 +180,21 @@ export default {
     agentRunning() {
       return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status))
     },
+    lessons() {
+      return (this.$store.getters['education/units'] || []).flatMap(unit => unit.lessons || [])
+    },
   },
   watch: {
     'course.id'(next, previous) {
       if (next && next !== previous) this.load(next)
+    },
+    activeMap: {
+      immediate: true,
+      handler(value) {
+        this.editDocument = this.documentFor(value)
+        this.editing = false
+        this.dirty = false
+      },
     },
   },
   created() {
@@ -189,12 +225,20 @@ export default {
       }
     },
     async generate() {
+      const lessonIds = this.selectedLessonIds()
+      if (!lessonIds) return
       this.generating = true
       try {
-        await this.$store.dispatch('education/createMindMap', {
+        const created = await this.$store.dispatch('education/createMindMap', {
           courseId: this.course.id,
-          data: { title: `${this.course.title} · 我的导图` },
+          data: {
+            title: this.createForm.title || this.defaultMapTitle(),
+            scope_type: this.createForm.scopeType,
+            lesson_ids: lessonIds,
+          },
         })
+        this.$store.commit('education/SET_ACTIVE_MIND_MAP', created)
+        this.createDialog = false
         this.$message.success('已从课程来源生成导图')
       } catch (error) {
         this.$message.error('导图生成失败')
@@ -203,12 +247,19 @@ export default {
       }
     },
     async generateWithAgent() {
+      const lessonIds = this.selectedLessonIds()
+      if (!lessonIds) return
       try {
         await this.$store.dispatch('education/startProductAgentRun', {
           course_id: this.course.id,
           product_code: 'course_mind_map',
-          options: { title: `${this.course.title} · 我的导图` },
+          options: {
+            title: this.createForm.title || this.defaultMapTitle(),
+            scope_type: this.createForm.scopeType,
+            lesson_ids: lessonIds,
+          },
         })
+        this.createDialog = false
         this.$message.success('笔记整理与学习规划 Agent 已启动')
       } catch (error) {
         const detail = error.response && error.response.data && error.response.data.error
@@ -231,40 +282,94 @@ export default {
       this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
     },
     selectMap(mindMap) {
+      if (this.dirty) {
+        this.$confirm('当前导图有未保存修改，仍要切换吗？', '未保存修改', { type: 'warning' })
+          .then(() => this.$store.commit('education/SET_ACTIVE_MIND_MAP', mindMap))
+          .catch(() => {})
+        return
+      }
       this.$store.commit('education/SET_ACTIVE_MIND_MAP', mindMap)
     },
     openEditor() {
       if (!this.activeMap) return
-      this.editJson = JSON.stringify(this.activeMap.current_version.tree, null, 2)
+      this.editDocument = this.documentFor(this.activeMap)
       this.changeSummary = ''
-      this.editorVisible = true
+      this.editing = true
+      this.dirty = false
+    },
+    cancelEditor() {
+      this.editDocument = this.documentFor(this.activeMap)
+      this.editing = false
+      this.dirty = false
+      this.changeSummary = ''
     },
     async saveMindMapVersion() {
-      let tree
-      try {
-        tree = JSON.parse(this.editJson)
-      } catch (error) {
-        this.$message.error('JSON 格式无效，请检查逗号和引号')
-        return
-      }
       this.saving = true
       try {
         await this.$store.dispatch('education/saveMindMapVersion', {
           courseId: this.course.id,
           mindMapId: this.activeMap.id,
           data: {
-            tree,
-            source_refs: this.collectSourceRefs(tree),
-            change_summary: this.changeSummary || '学生编辑结构',
+            document: this.editDocument,
+            source_refs: this.collectSourceRefs(this.editDocument.root),
+            change_summary: this.changeSummary || '学生可视化编辑',
           },
         })
-        this.editorVisible = false
+        this.editing = false
+        this.dirty = false
+        this.changeSummary = ''
         this.$message.success('思维导图新版本已保存')
       } catch (error) {
         this.$message.error('导图结构未通过校验')
       } finally {
         this.saving = false
       }
+    },
+    documentFor(mindMap) {
+      if (!mindMap || !mindMap.current_version) return {}
+      const version = mindMap.current_version
+      if (version.document) return JSON.parse(JSON.stringify(version.document))
+      return {
+        schema_name: 'education_mind_map_v2',
+        scope_type: mindMap.scope_type || 'course',
+        lesson_ids: mindMap.lesson_ids || [],
+        root: JSON.parse(JSON.stringify(version.tree)),
+        relations: version.relations || [],
+        view: { direction: 'right', theme: 'education_clear' },
+      }
+    },
+    selectedLessonIds() {
+      if (this.createForm.scopeType === 'course') return []
+      const ids = this.createForm.scopeType === 'lesson'
+        ? (this.createForm.lessonId ? [this.createForm.lessonId] : [])
+        : this.createForm.lessonIds
+      if (!ids.length) {
+        this.$message.warning('请选择导图关联的课时')
+        return null
+      }
+      return ids
+    },
+    defaultMapTitle() {
+      if (this.createForm.scopeType === 'lesson') {
+        const lesson = this.lessons.find(row => row.id === this.createForm.lessonId)
+        if (lesson) return `${lesson.title} · 我的导图`
+      }
+      return `${this.course.title} · 我的导图`
+    },
+    scopeLabel(value) {
+      return ({ course: '课程总览', lesson: '课时导图', custom: '多课时导图' })[value] || value
+    },
+    async openVersionHistory() {
+      this.versionHistory = await this.$store.dispatch('education/fetchMindMapVersions', this.activeMap.id)
+      this.historyVisible = true
+    },
+    async restoreVersion(version) {
+      this.editDocument = JSON.parse(JSON.stringify(version.document))
+      this.changeSummary = `从 v${version.version_number} 恢复`
+      this.editing = true
+      this.dirty = true
+      this.historyVisible = false
+      await this.saveMindMapVersion()
     },
     collectSourceRefs(node) {
       if (!node || typeof node !== 'object') return []
@@ -283,6 +388,9 @@ export default {
       if (!value) return '—'
       return new Date(value).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
     },
+    shortDateTime(value) {
+      return value ? new Date(value).toLocaleString('zh-CN') : '—'
+    },
   },
 }
 </script>
@@ -298,9 +406,11 @@ export default {
 .map-canvas { min-width: 0; overflow: hidden; border: 1px solid #dce6e3; border-radius: 14px; background: #fff; }
 .canvas-header { min-height: 94px; display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid #e4ebe9; background: #fbfdfc; }.canvas-header > div > span { color: #3c897e; font-size: 8px; font-weight: 800; letter-spacing: .13em; }.canvas-header h2 { margin: 5px 0 3px; color: #334843; font-size: 16px; }.canvas-header p { margin: 0; color: #929e9b; font-size: 9px; }
 .canvas-header dl { display: flex; margin: 0; }.canvas-header dl div { min-width: 65px; padding: 0 12px; border-left: 1px solid #dfe7e5; text-align: center; }.canvas-header dt { color: #939f9c; font-size: 8px; }.canvas-header dd { margin: 4px 0 0; color: #397b72; font-family: Georgia, serif; font-size: 15px; }
-.tree-viewport { min-height: 544px; padding: 42px; overflow: auto; position: relative; }.tree-viewport > .mind-node { position: relative; z-index: 1; }.canvas-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(72, 120, 111, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(72, 120, 111, .045) 1px, transparent 1px); background-size: 24px 24px; }
+.map-scope-line { display: flex; align-items: center; gap: 9px; padding: 8px 18px; border-bottom: 1px solid #e8eeec; color: #82908d; font-size: 10px; }.map-scope-line .el-button { margin-left: auto; }
+.tree-viewport { min-height: 544px; padding: 12px; overflow: auto; position: relative; }
+.map-save-bar { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid #dce7e4; border-radius: 10px; background: #f8fbfa; }
 .blank-map { min-height: 640px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle at center, #f3f8f6, #fff 48%); text-align: center; }.map-symbol { width: 110px; height: 90px; position: relative; display: grid; place-items: center; color: #3a857a; font-size: 28px; }.map-symbol span { position: absolute; width: 25px; height: 25px; border: 1px solid #9dbdb6; border-radius: 7px; }.map-symbol span:nth-child(1) { left: 0; top: 5px; }.map-symbol span:nth-child(2) { right: 0; top: 5px; }.map-symbol span:nth-child(3) { left: 42px; bottom: 0; }.blank-map h2 { margin: 17px 0 7px; color: #4a625c; font-family: 'Noto Serif SC', 'Songti SC', SimSun, serif; font-size: 17px; }.blank-map p { max-width: 430px; margin: 0 0 17px; color: #8b9895; font-size: 10px; line-height: 1.6; }
-.json-editor { margin: 14px 0 10px; }.json-editor :deep(textarea) { font-family: Consolas, 'Courier New', monospace; font-size: 11px; line-height: 1.55; }
-@media (max-width: 900px) { .map-shell { grid-template-columns: 190px 1fr; }.tree-viewport { padding: 28px; } }
+.versionHistory { display: grid; gap: 9px; padding: 0 18px 22px; }.versionHistory article { padding: 13px; border: 1px solid #e0e9e6; border-radius: 10px; background: #f9fbfa; }.versionHistory article > div { display: flex; justify-content: space-between; }.versionHistory b { color: #2f7d73; }.versionHistory span { color: #919e9b; font-size: 9px; }.versionHistory p { color: #687a76; font-size: 10px; }
+@media (max-width: 900px) { .map-shell { grid-template-columns: 190px 1fr; }.tree-viewport { padding: 8px; } }
 @media (max-width: 700px) { .map-shell { grid-template-columns: 1fr; }.map-list { display: none; }.canvas-header dl { display: none; } }
 </style>

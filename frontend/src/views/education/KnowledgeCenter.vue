@@ -8,10 +8,20 @@
       <el-button icon="el-icon-refresh" :loading="loading" @click="load">刷新</el-button>
       <el-button
         v-if="activeTab === 'questions'"
+        icon="el-icon-cpu"
+        @click="questionAgentDialog = true"
+      >AI 生成题目</el-button>
+      <el-button
+        v-if="activeTab === 'questions'"
         type="primary"
         icon="el-icon-plus"
         @click="questionDialog = true"
       >新建题目</el-button>
+      <el-button
+        v-if="activeTab === 'papers'"
+        icon="el-icon-cpu"
+        @click="paperAgentDialog = true"
+      >AI 智能组卷</el-button>
       <el-button
         v-if="activeTab === 'papers'"
         type="primary"
@@ -19,6 +29,11 @@
         :disabled="!selectedQuestionIds.length"
         @click="paperDialog = true"
       >从所选题目组卷</el-button>
+      <el-button
+        v-if="activeTab === 'resources'"
+        icon="el-icon-search"
+        @click="researchDialog = true"
+      >联网补充资料</el-button>
       <el-button
         v-if="activeTab === 'resources'"
         type="primary"
@@ -34,6 +49,12 @@
       accept=".pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.txt,.md"
       @change="uploadKnowledgeFile"
     >
+
+    <ProductAgentRunPanel
+      :run="productAgentRun"
+      @terminal="handleAgentTerminal"
+      @close="closeAgentRun"
+    />
 
     <section class="knowledge-summary">
       <div class="summary-title">
@@ -239,12 +260,71 @@
         <el-button type="primary" :loading="saving" @click="composePaper">生成试卷草稿</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog title="AI 生成题目" :visible.sync="questionAgentDialog" width="560px">
+      <el-form label-position="top">
+        <div class="two-columns">
+          <el-form-item label="题目数量"><el-input-number v-model="questionAgentForm.questionCount" :min="1" :max="30" /></el-form-item>
+          <el-form-item label="难度">
+            <el-select v-model="questionAgentForm.difficulty" style="width:100%">
+              <el-option label="简单" value="easy" /><el-option label="中等" value="medium" /><el-option label="困难" value="hard" />
+            </el-select>
+          </el-form-item>
+        </div>
+        <el-form-item label="知识点"><el-input v-model.trim="questionAgentForm.knowledgePoint" placeholder="例如：文本证据、人物情感推断" /></el-form-item>
+        <el-form-item label="补充要求"><el-input v-model="questionAgentForm.requirements" type="textarea" :rows="3" /></el-form-item>
+        <el-alert title="Agent 只写入题库草稿，不会自动发布答案给学生。" type="info" :closable="false" />
+      </el-form>
+      <template #footer>
+        <el-button @click="questionAgentDialog = false">取消</el-button>
+        <el-button type="primary" :loading="agentRunning" @click="startQuestionAgent">启动 Agent 团队</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog title="AI 智能组卷" :visible.sync="paperAgentDialog" width="560px">
+      <el-form label-position="top">
+        <el-form-item label="试卷名称"><el-input v-model.trim="paperAgentForm.title" /></el-form-item>
+        <div class="two-columns">
+          <el-form-item label="题目数量"><el-input-number v-model="paperAgentForm.questionCount" :min="1" :max="30" /></el-form-item>
+          <el-form-item label="建议时长"><el-input-number v-model="paperAgentForm.duration" :min="5" :max="180" /></el-form-item>
+        </div>
+        <el-alert title="只从已发布题目中冻结版本；题量不足时 Agent 会报告缺口。" type="info" :closable="false" />
+      </el-form>
+      <template #footer>
+        <el-button @click="paperAgentDialog = false">取消</el-button>
+        <el-button type="primary" :loading="agentRunning" @click="startPaperAgent">启动 Agent 团队</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog title="联网补充课程资料" :visible.sync="researchDialog" width="760px">
+      <el-form label-position="top">
+        <el-form-item label="搜索主题"><el-input v-model.trim="researchForm.query" placeholder="输入课程主题、课文或知识点" /></el-form-item>
+        <el-form-item label="来源许可说明"><el-input v-model.trim="researchForm.licenseNote" placeholder="例如：CC BY 4.0 / 公共领域 / 已获教学使用许可" /></el-form-item>
+        <el-checkbox v-model="researchForm.teacherConfirmedRights" class="rights-check">
+          我已核对所选来源的许可与教学使用权；系统将重新抓取正文，不会把搜索摘要当作全文。
+        </el-checkbox>
+        <div class="research-actions">
+          <el-button :loading="researching" icon="el-icon-search" @click="searchWebResources">搜索并读取正文</el-button>
+          <el-button type="primary" :loading="agentRunning" icon="el-icon-cpu" @click="startKnowledgeAgent">让 Agent 搜索并采纳</el-button>
+        </div>
+      </el-form>
+      <div v-if="researchDiagnostics.length" class="research-diagnostics">
+        搜索链路已记录 {{ researchDiagnostics.length }} 条 fallback / 抓取诊断。
+      </div>
+      <div class="research-results">
+        <article v-for="result in researchResults" :key="result.url">
+          <div><b>{{ result.title }}</b><small>{{ result.url }}</small><p>{{ result.search_excerpt || '已读取正文，搜索服务未提供摘要。' }}</p></div>
+          <el-button size="mini" type="primary" plain @click="adoptResearchResult(result)">采纳为教师资料</el-button>
+        </article>
+      </div>
+    </el-dialog>
   </EducationShell>
 </template>
 
 <script>
 import { downloadCourseAsset } from '../../api/education'
 import EducationShell from '../../components/education/EducationShell.vue'
+import ProductAgentRunPanel from '../../components/education/ProductAgentRunPanel.vue'
 import { educationErrorMessage } from '../../utils/educationErrors'
 
 const EmptyLibrary = {
@@ -261,7 +341,7 @@ const EmptyLibrary = {
 
 export default {
   name: 'KnowledgeCenter',
-  components: { EducationShell, EmptyLibrary },
+  components: { EducationShell, EmptyLibrary, ProductAgentRunPanel },
   data() {
     return {
       activeTab: 'questions',
@@ -270,6 +350,12 @@ export default {
       saving: false,
       questionDialog: false,
       paperDialog: false,
+      questionAgentDialog: false,
+      paperAgentDialog: false,
+      researchDialog: false,
+      researching: false,
+      researchResults: [],
+      researchDiagnostics: [],
       selectedQuestionIds: [],
       tabs: [
         { key: 'questions', label: '题库', caption: '规范题目与答案版本', icon: 'el-icon-edit-outline' },
@@ -287,6 +373,9 @@ export default {
         explanation: '',
       },
       paperForm: { title: '', purpose: 'mock_exam', duration: 30 },
+      questionAgentForm: { questionCount: 5, difficulty: 'medium', knowledgePoint: '', requirements: '' },
+      paperAgentForm: { title: '课程诊断试卷', questionCount: 5, duration: 30 },
+      researchForm: { query: '', licenseNote: '', teacherConfirmedRights: false },
     }
   },
   computed: {
@@ -295,6 +384,8 @@ export default {
     questions() { return this.$store.getters['education/questions'] || [] },
     papers() { return this.$store.getters['education/papers'] || [] },
     resources() { return this.$store.getters['education/knowledgeResources'] || [] },
+    productAgentRun() { return this.$store.getters['education/productAgentRun'] },
+    agentRunning() { return Boolean(this.productAgentRun && ['pending', 'running'].includes(this.productAgentRun.status)) },
   },
   created() {
     this.bootstrap()
@@ -318,6 +409,7 @@ export default {
       this.loading = true
       try {
         await this.$store.dispatch('education/fetchKnowledgeCenter', courseId)
+        await this.$store.dispatch('education/restoreProductAgentRun', { courseId })
       } catch (error) {
         this.$message.error('知识中心加载失败')
       } finally {
@@ -325,6 +417,99 @@ export default {
       }
     },
     count(key) { return this.summary.counts[key] || 0 },
+    async startQuestionAgent() {
+      const started = await this.startKnowledgeProduct('question_generation', {
+        question_count: this.questionAgentForm.questionCount,
+        difficulty: this.questionAgentForm.difficulty,
+        knowledge_points: this.questionAgentForm.knowledgePoint ? [this.questionAgentForm.knowledgePoint] : [],
+        requirements: this.questionAgentForm.requirements,
+      })
+      if (started) this.questionAgentDialog = false
+    },
+    async startPaperAgent() {
+      if (!this.paperAgentForm.title) return this.$message.warning('请输入试卷名称')
+      const started = await this.startKnowledgeProduct('paper_generation', {
+        title: this.paperAgentForm.title,
+        question_count: this.paperAgentForm.questionCount,
+        duration_minutes: this.paperAgentForm.duration,
+      })
+      if (started) this.paperAgentDialog = false
+    },
+    async startKnowledgeAgent() {
+      if (!this.validResearchForm()) return
+      const started = await this.startKnowledgeProduct('knowledge_research', {
+        query: this.researchForm.query,
+        license_note: this.researchForm.licenseNote,
+        teacher_confirmed_rights: true,
+      })
+      if (started) this.researchDialog = false
+    },
+    async startKnowledgeProduct(productCode, options) {
+      try {
+        await this.$store.dispatch('education/startProductAgentRun', {
+          course_id: this.course.id,
+          product_code: productCode,
+          options,
+        })
+        this.$message.success('Agent 团队已启动，进度会显示在知识中心')
+        return true
+      } catch (error) {
+        const data = error.response && error.response.data
+        this.$message.error((data && data.error) || 'Agent 启动失败')
+        return false
+      }
+    },
+    validResearchForm() {
+      if (!this.researchForm.query || !this.researchForm.licenseNote || !this.researchForm.teacherConfirmedRights) {
+        this.$message.warning('请填写搜索主题、许可说明并确认使用权')
+        return false
+      }
+      return true
+    },
+    async searchWebResources() {
+      if (!this.validResearchForm()) return
+      this.researching = true
+      try {
+        const result = await this.$store.dispatch('education/searchResources', {
+          course_id: this.course.id,
+          query: this.researchForm.query,
+          limit: 6,
+        })
+        this.researchResults = result.results || []
+        this.researchDiagnostics = result.diagnostics || []
+        if (!this.researchResults.length) this.$message.warning('搜索 provider 已完成 fallback，但没有可采纳正文')
+      } catch (error) {
+        this.$message.error('联网搜索失败')
+      } finally {
+        this.researching = false
+      }
+    },
+    async adoptResearchResult(result) {
+      if (!this.validResearchForm()) return
+      try {
+        await this.$store.dispatch('education/adoptWebKnowledgeResource', {
+          courseId: this.course.id,
+          resource: {
+            url: result.url,
+            title: result.title,
+            search_excerpt: result.search_excerpt || '',
+            license_note: this.researchForm.licenseNote,
+            teacher_confirmed_rights: this.researchForm.teacherConfirmedRights,
+          },
+        })
+        this.activeTab = 'resources'
+        this.$message.success('网页正文已重新抓取并保存为教师可见知识资料')
+      } catch (error) {
+        const data = error.response && error.response.data
+        this.$message.error((data && (data.error_code || data.error)) || '资料采纳失败')
+      }
+    },
+    async handleAgentTerminal(run) {
+      if (run.status === 'completed') await this.load(this.course.id)
+    },
+    closeAgentRun() {
+      this.$store.commit('education/SET_PRODUCT_AGENT_RUN', null)
+    },
     optionLetter(index) { return String.fromCharCode(65 + index) },
     difficultyLabel(value) { return ({ easy: '简单', medium: '中等', hard: '困难' })[value] || value },
     purposeLabel(value) { return ({ mock_exam: '模拟', diagnostic: '诊断', assignment: '作业', practice: '练习' })[value] || '试卷' },
@@ -512,6 +697,15 @@ export default {
 .empty-library { min-height: 330px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #8b9a96; text-align: center; }
 .empty-library i { font-size: 32px; color: #6f9b93; }.empty-library h3 { margin: 11px 0 5px; color: #526661; }.empty-library p { max-width: 420px; margin: 0; font-size: 10px; line-height: 1.6; }
 .two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }.three-columns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 13px; }
+.rights-check { display: flex; align-items: flex-start; white-space: normal; line-height: 1.6; }
+.research-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.research-diagnostics { margin: 16px 0 8px; padding: 9px 12px; border-radius: 8px; background: #f4f7f8; color: #75848a; font-size: 11px; }
+.research-results { display: grid; gap: 9px; max-height: 360px; overflow-y: auto; margin-top: 12px; }
+.research-results article { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 13px; border: 1px solid #dfe8e5; border-radius: 10px; background: #f9fbfa; }
+.research-results b, .research-results small { display: block; }
+.research-results b { color: #334b46; }
+.research-results small { margin-top: 3px; overflow: hidden; color: #85928f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.research-results p { margin: 7px 0 0; color: #687a76; font-size: 11px; line-height: 1.55; }
 @media (max-width: 900px) {
   .knowledge-summary { grid-template-columns: 1fr repeat(3, 75px); }
   .summary-title p { display: none; }
