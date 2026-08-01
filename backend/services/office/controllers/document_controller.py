@@ -76,3 +76,12 @@ def publish_document(document_id):
     if error:
         return error_response(error, code=400)
     return success_response(result, message='Document published')
+
+
+@document_bp.route('/<document_id>/confirm-receipt', methods=['POST'])
+@jwt_required()
+def confirm_receipt(document_id):
+    result, error = document_service.confirm_receipt(document_id, get_jwt_identity())
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message='Receipt confirmed')

@@ -40,11 +40,14 @@ if __name__ == '__main__':
         import models  # noqa: F401
         db.create_all()
         columns = {item['name'] for item in inspect(db.engine).get_columns('office_meetings')}
+        document_columns = {item['name'] for item in inspect(db.engine).get_columns('office_documents')}
         if 'meeting_link' not in columns:
             db.session.execute(text("ALTER TABLE office_meetings ADD COLUMN meeting_link VARCHAR(1000) DEFAULT ''"))
         if 'materials' not in columns:
             db.session.execute(text("ALTER TABLE office_meetings ADD COLUMN materials JSON NULL"))
-        if 'meeting_link' not in columns or 'materials' not in columns:
+        if 'recipients' not in document_columns:
+            db.session.execute(text("ALTER TABLE office_documents ADD COLUMN recipients JSON NULL"))
+        if 'meeting_link' not in columns or 'materials' not in columns or 'recipients' not in document_columns:
             db.session.commit()
         from seed_data import seed_system_templates
         seed_system_templates()

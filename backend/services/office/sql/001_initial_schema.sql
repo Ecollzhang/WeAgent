@@ -32,10 +32,18 @@ CREATE TABLE IF NOT EXISTS office_schedules (
 CREATE TABLE IF NOT EXISTS office_documents (
   id VARCHAR(36) PRIMARY KEY, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
   workspace_id VARCHAR(36) NOT NULL, user_id VARCHAR(36) NOT NULL, meeting_id VARCHAR(36), title VARCHAR(200) NOT NULL,
-  document_type ENUM('notice','report','request','letter','minutes','other') NOT NULL, content TEXT,
+  document_type ENUM('notice','report','request','letter','minutes','other') NOT NULL, content TEXT, recipients JSON,
   template_id VARCHAR(36), status ENUM('draft','reviewing','approved','published','archived') NOT NULL DEFAULT 'draft',
   reviewer_id VARCHAR(36), review_comment TEXT, published_at DATETIME,
   INDEX ix_office_documents_workspace_id (workspace_id), INDEX ix_office_documents_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS office_document_receipts (
+  id VARCHAR(36) PRIMARY KEY, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+  document_id VARCHAR(36) NOT NULL, workspace_id VARCHAR(36) NOT NULL,
+  recipient_id VARCHAR(36) NOT NULL, recipient_name VARCHAR(100),
+  read_at DATETIME NULL, confirmed_at DATETIME NULL,
+  INDEX ix_document_receipt_document (document_id), INDEX ix_document_receipt_recipient (recipient_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS office_doc_templates (

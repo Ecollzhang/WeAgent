@@ -49,6 +49,7 @@ export default {
     async createDocument({ dispatch }, data) { const r = await api.createDocument(data); await dispatch('loadDocuments', data.workspace_id); return r },
     async submitDocument({ dispatch }, { id, data, workspaceId }) { const r = await api.submitDocument(id, data); await Promise.all([dispatch('loadDocuments', workspaceId), dispatch('loadApprovals', workspaceId)]); return r },
     async publishDocument({ dispatch }, { id, workspaceId }) { const r = await api.publishDocument(id); await dispatch('loadDocuments', workspaceId); return r },
+    async confirmDocumentReceipt({ dispatch }, { id, workspaceId }) { const r = await api.confirmDocumentReceipt(id); await dispatch('loadDocuments', workspaceId); return r },
     async approve({ dispatch }, { id, data, workspaceId }) { const r = await api.approveApproval(id, data); await Promise.all([dispatch('loadApprovals', workspaceId), dispatch('loadDocuments', workspaceId)]); return r },
     async reject({ dispatch }, { id, data, workspaceId }) { const r = await api.rejectApproval(id, data); await Promise.all([dispatch('loadApprovals', workspaceId), dispatch('loadDocuments', workspaceId)]); return r },
   },

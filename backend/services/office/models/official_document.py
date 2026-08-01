@@ -16,6 +16,7 @@ class OfficialDocument(OfficeBaseModel):
         nullable=False,
     )
     content = db.Column(db.Text, default='')
+    recipients = db.Column(db.JSON, default=list)
     template_id = db.Column(db.String(36), nullable=True)
     status = db.Column(
         db.Enum('draft', 'reviewing', 'approved', 'published', 'archived', name='office_document_status'),

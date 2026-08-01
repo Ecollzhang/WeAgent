@@ -28,6 +28,14 @@ class ApprovalService:
                 continue
             data = item.to_dict()
             data['can_handle'] = item.status == 'pending' and self._current_approver(item) == user_id
+            initiator = organization_service.member(workspace_id, item.initiator_id)
+            data['submitter_name'] = initiator.display_name if initiator else ''
+            document = OfficialDocument.query.get(item.document_id) if item.document_id else None
+            data['recipient_names'] = [
+                row.get('display_name') or row.get('name') or '成员'
+                for row in ((document.recipients if document else None) or [])
+                if isinstance(row, dict)
+            ]
             items.append(data)
         return {'items': items, 'total': pagination.total, 'page': page, 'page_size': page_size}, None
 

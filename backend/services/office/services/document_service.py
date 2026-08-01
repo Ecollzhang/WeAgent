@@ -4,6 +4,7 @@ from datetime import datetime
 from extensions import db
 from models.approval import Approval
 from models.document_template import DocumentTemplate
+from models.document_receipt import DocumentReceipt
 from models.meeting import Meeting
 from models.official_document import OfficialDocument
 from services.helpers import page_args
@@ -13,6 +14,24 @@ from services.organization_service import organization_service
 class DocumentService:
     """Manage office documents, templates and submission for approval."""
     VALID_TYPES = ('notice', 'report', 'request', 'letter', 'minutes', 'other')
+
+    @staticmethod
+    def _recipient_ids(document):
+        return [item.get('user_id') for item in (document.recipients or []) if isinstance(item, dict) and item.get('user_id')]
+
+    @staticmethod
+    def _recipient_summary(document, receipts=None):
+        recipients = document.recipients or []
+        names = [item.get('display_name') or item.get('name') or '成员' for item in recipients if isinstance(item, dict)]
+        confirmed = sum(1 for item in (receipts or []) if item.confirmed_at)
+        return {'names': names, 'total': len(names), 'confirmed': confirmed}
+
+    @staticmethod
+    def _reviewer_name(document):
+        if not document.reviewer_id:
+            return ''
+        member = organization_service.member(document.workspace_id, document.reviewer_id)
+        return member.display_name if member else ''
 
     def list_documents(self, user_id, params):
         workspace_id = (params.get('workspace_id') or '').strip()
@@ -27,8 +46,15 @@ class DocumentService:
         pagination = query.order_by(OfficialDocument.updated_at.desc()).paginate(
             page=page, per_page=page_size, error_out=False
         )
+        items = []
+        for item in pagination.items:
+            data = item.to_dict()
+            receipts = DocumentReceipt.query.filter_by(document_id=item.id).all() if item.status == 'published' else []
+            data['recipient_summary'] = self._recipient_summary(item, receipts)
+            data['reviewer_name'] = self._reviewer_name(item)
+            items.append(data)
         return {
-            'items': [item.to_dict() for item in pagination.items],
+            'items': items,
             'total': pagination.total,
             'page': page,
             'page_size': page_size,
@@ -43,6 +69,10 @@ class DocumentService:
         if not document:
             return None, 'Document not found'
         result = document.to_dict()
+        receipts = DocumentReceipt.query.filter_by(document_id=document.id).order_by(DocumentReceipt.created_at).all()
+        result['receipts'] = [item.to_dict() for item in receipts]
+        result['recipient_summary'] = self._recipient_summary(document, receipts)
+        result['reviewer_name'] = self._reviewer_name(document)
         result['approvals'] = [
             item.to_dict()
             for item in Approval.query.filter_by(document_id=document.id).order_by(Approval.created_at.desc()).all()
@@ -71,7 +101,8 @@ class DocumentService:
             content = template.content
         document = OfficialDocument(
             workspace_id=workspace_id, user_id=user_id, meeting_id=data.get('meeting_id'),
-            title=title, document_type=document_type, content=content, template_id=template_id,
+            title=title, document_type=document_type, content=content,
+            recipients=data.get('recipients') or [], template_id=template_id,
         )
         db.session.add(document)
         db.session.commit()
@@ -98,7 +129,7 @@ class DocumentService:
             return None, 'Document not found'
         if document.status in ('published', 'archived'):
             return None, 'Published or archived documents cannot be edited'
-        for field in ('title', 'content', 'template_id', 'meeting_id'):
+        for field in ('title', 'content', 'template_id', 'meeting_id', 'recipients'):
             if field in data:
                 setattr(document, field, data[field])
         if 'document_type' in data:
@@ -202,8 +233,34 @@ class DocumentService:
             return None, 'Only approved documents can be published'
         document.status = 'published'
         document.published_at = datetime.utcnow()
+        for recipient in document.recipients or []:
+            if not isinstance(recipient, dict) or not recipient.get('user_id'):
+                continue
+            receipt = DocumentReceipt.query.filter_by(document_id=document.id, recipient_id=recipient['user_id']).first()
+            if not receipt:
+                receipt = DocumentReceipt(
+                    document_id=document.id, workspace_id=document.workspace_id,
+                    recipient_id=recipient['user_id'], recipient_name=recipient.get('display_name', ''),
+                )
+                db.session.add(receipt)
+            organization_service.notify(document.workspace_id, recipient['user_id'], 'document_delivery',
+                f'已发布公文：{document.title}', '请查看公文正文并确认已知悉。', 'document', document.id)
         db.session.commit()
         return document.to_dict(), None
+
+    def confirm_receipt(self, document_id, user_id):
+        document = OfficialDocument.query.get(document_id)
+        if not document or document.status != 'published':
+            return None, 'Published document not found'
+        receipt = DocumentReceipt.query.filter_by(document_id=document_id, recipient_id=user_id).first()
+        if not receipt:
+            return None, 'You are not a recipient of this document'
+        now = datetime.utcnow()
+        if not receipt.read_at:
+            receipt.read_at = now
+        receipt.confirmed_at = receipt.confirmed_at or now
+        db.session.commit()
+        return receipt.to_dict(), None
 
 
 document_service = DocumentService()
