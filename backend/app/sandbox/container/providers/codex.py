@@ -302,7 +302,13 @@ class CodexRunner(ProviderRunner):
                 f"base_url = {self._toml_string(base_url)}",
             ])
         servers = self._bound_mcp_servers()
-        if self._has_bound_tools():
+        # DeepSeek's OpenAI-compatible Responses endpoint does not reliably
+        # expose dynamically registered MCP tools to Codex.  Leaving the
+        # bridge enabled gives the model resource helpers without the actual
+        # callable tool, which makes it probe read_mcp_resource until timeout.
+        # WeAgent's audited literal tool loop is the supported transport for
+        # this provider; native OpenAI/Codex runs keep the MCP bridge.
+        if self._has_bound_tools() and provider_name != "deepseek":
             used_names = {server["config_name"] for server in servers}
             config_name = "weagent_tools"
             suffix = 2
@@ -337,6 +343,8 @@ class CodexRunner(ProviderRunner):
 
     def tool_preflight(self, required_tools: list[str]) -> dict:
         """Prove that projected tools are visible through Codex's MCP bridge."""
+        if self._provider_name(self._codex_base_url()) == "deepseek":
+            return super().tool_preflight(required_tools)
         required = sorted(set(str(item) for item in required_tools if item))
         config_path = os.path.join(self.home_dir, "config.toml")
         try:

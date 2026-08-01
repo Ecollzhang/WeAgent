@@ -115,6 +115,32 @@ def test_server_defined_workflow_rejects_untrusted_finalizer():
     ) is None
 
 
+def test_server_defined_workflow_accepts_bounded_question_finalizer():
+    workflow = {
+        "execution_mode": "server_defined",
+        "nodes": [
+            {
+                "id": "questions",
+                "type": "agent_task",
+                "agent_id": "_edu_3",
+                "agent_role": "exercise_generator",
+                "finalizer": {"type": "education_questions_from_agent_reply"},
+            },
+        ],
+        "edges": [],
+    }
+
+    plan = MessageService._server_defined_workflow_plan(
+        workflow,
+        [_worker("_edu_3", "Exercise generator")],
+    )
+
+    assert plan is not None
+    assert plan["tasks"][0]["finalizer"] == {
+        "type": "education_questions_from_agent_reply"
+    }
+
+
 def test_courseware_finalizer_adopts_the_designated_agents_validated_files():
     class FakeManager:
         def __init__(self):
@@ -243,6 +269,184 @@ def test_submission_review_reviewer_finalizer_requires_a_real_conclusion():
     assert "not adoptable" in progress_only["error"]
 
 
+def test_question_finalizer_validates_json_and_adopts_draft_questions():
+    class FakeManager:
+        def __init__(self):
+            self.executed = []
+
+        def execute_tool(self, session_id, agent_id, tool_name, args):
+            self.executed.append((session_id, agent_id, tool_name, args))
+            return {
+                "status": "ok",
+                "result": {
+                    "status": "ok",
+                    "result": {"items": [{"id": "question-1", "status": "draft"}]},
+                },
+            }
+
+    questions = {
+        "questions": [
+            {
+                "title": "Evidence and inference",
+                "question_type": "single_choice",
+                "prompt": "Which detail best supports the inference?",
+                "options": ["Detail one", "Detail two", "Detail three"],
+                "correct_answer": 1,
+                "explanation": "Detail two directly supports the inference.",
+                "difficulty": "medium",
+                "score": 5,
+                "knowledge_points": ["text evidence"],
+                "grade_band": "senior_high",
+                "source_context": {"kind": "teacher_requirement"},
+            }
+        ]
+    }
+    manager = FakeManager()
+
+    result = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_3",
+        {"type": "education_questions_from_agent_reply"},
+        reply=json.dumps(questions),
+    )
+
+    assert result["status"] == "ok"
+    _, agent_id, tool_name, args = manager.executed[0]
+    assert agent_id == "_edu_3"
+    assert tool_name == "education_action"
+    assert args["action"] == "edu.question_bank.upsert"
+    assert args["arguments"] == {"questions": questions["questions"], "publish": False}
+    assert args["idempotency_key"].startswith("product-question-generation-")
+
+
+def test_paper_finalizer_searches_real_published_questions_before_composing():
+    class FakeManager:
+        def __init__(self):
+            self.executed = []
+
+        def execute_tool(self, session_id, agent_id, tool_name, args):
+            self.executed.append((session_id, agent_id, tool_name, args))
+            if args["action"] == "edu.question_bank.search":
+                return {
+                    "status": "ok",
+                    "result": {
+                        "status": "ok",
+                        "result": {
+                            "items": [
+                                {
+                                    "id": "question-1",
+                                    "status": "published",
+                                    "current_version": {
+                                        "difficulty": "medium",
+                                        "knowledge_points": ["text evidence"],
+                                    },
+                                },
+                                {
+                                    "id": "question-2",
+                                    "status": "published",
+                                    "current_version": {
+                                        "difficulty": "medium",
+                                        "knowledge_points": ["inference"],
+                                    },
+                                },
+                            ]
+                        },
+                    },
+                }
+            return {
+                "status": "ok",
+                "result": {
+                    "status": "ok",
+                    "result": {"id": "paper-1", "status": "draft"},
+                },
+            }
+
+    request = {
+        "title": "Reading diagnostic",
+        "question_count": 2,
+        "duration_minutes": 30,
+        "purpose": "diagnostic",
+        "difficulty": "medium",
+        "knowledge_points": [],
+    }
+    manager = FakeManager()
+
+    result = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_3",
+        {"type": "education_paper_from_agent_reply"},
+        reply=json.dumps(request),
+    )
+
+    assert result["status"] == "ok"
+    assert [entry[3]["action"] for entry in manager.executed] == [
+        "edu.question_bank.search",
+        "edu.paper.compose",
+    ]
+    compose_args = manager.executed[1][3]
+    assert compose_args["arguments"]["item_ids"] == ["question-1", "question-2"]
+    assert compose_args["arguments"]["purpose"] == "diagnostic"
+
+
+def test_knowledge_finalizer_researches_then_refetches_selected_source():
+    class FakeManager:
+        def __init__(self):
+            self.executed = []
+
+        def execute_tool(self, session_id, agent_id, tool_name, args):
+            self.executed.append((session_id, agent_id, tool_name, args))
+            if args["action"] == "edu.web.research":
+                return {
+                    "status": "ok",
+                    "result": {
+                        "status": "ok",
+                        "result": {
+                            "results": [
+                                {
+                                    "url": "https://example.org/evidence",
+                                    "title": "Evidence-based reading",
+                                    "search_excerpt": "A teaching reference",
+                                    "score": 0.9,
+                                }
+                            ]
+                        },
+                    },
+                }
+            return {
+                "status": "ok",
+                "result": {
+                    "status": "ok",
+                    "result": {"id": "resource-1", "status": "active"},
+                },
+            }
+
+    request = {
+        "query": "evidence-based reading instruction",
+        "license_note": "CC BY-SA 4.0; teacher verified classroom use",
+        "teacher_confirmed_rights": True,
+    }
+    manager = FakeManager()
+
+    result = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_8",
+        {"type": "education_knowledge_from_agent_reply"},
+        reply=json.dumps(request),
+    )
+
+    assert result["status"] == "ok"
+    assert [entry[3]["action"] for entry in manager.executed] == [
+        "edu.web.research",
+        "edu.knowledge.resource.adopt",
+    ]
+    adoption = manager.executed[1][3]["arguments"]
+    assert adoption["url"] == "https://example.org/evidence"
+    assert adoption["teacher_confirmed_rights"] is True
+
+
 def test_dependency_context_contains_only_completed_predecessor_replies():
     task = {"depends_on": ["step-1", "missing"]}
     results = {
@@ -255,3 +459,39 @@ def test_dependency_context_contains_only_completed_predecessor_replies():
     assert "step-1" in context
     assert '{"summary":"analysis"}' in context
     assert "do not include" not in context
+
+
+def test_dependency_context_includes_bounded_trusted_finalizer_result():
+    task = {"depends_on": ["step-1"]}
+    results = {
+        "step-1": {
+            "status": "done",
+            "reply": '{"questions":[]}',
+            "finalizer_result": {
+                "status": "ok",
+                "result": {"items": [{"id": "question-1", "status": "draft"}]},
+            },
+        }
+    }
+
+    context = MessageService._trusted_dependency_context(task, results)
+
+    assert "trusted_finalizer_result" in context
+    assert "question-1" in context
+
+
+def test_insufficient_balance_does_not_trigger_misleading_model_config_retry():
+    service = MessageService.__new__(MessageService)
+    original = {
+        "status": "error",
+        "error": "stream disconnected: Insufficient Balance",
+    }
+
+    returned = service._retry_agent_after_model_error(
+        SimpleNamespace(owner_id="owner-1", sandbox_session_id="sandbox-1"),
+        "_edu_1",
+        "generate slides",
+        original,
+    )
+
+    assert returned is original

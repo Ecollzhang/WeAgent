@@ -632,6 +632,21 @@ class MessageService:
                         }
                         and agent_id == '_edu_9'
                     )
+                    or (
+                        finalizer
+                        == {'type': 'education_questions_from_agent_reply'}
+                        and agent_id == '_edu_3'
+                    )
+                    or (
+                        finalizer
+                        == {'type': 'education_paper_from_agent_reply'}
+                        and agent_id == '_edu_3'
+                    )
+                    or (
+                        finalizer
+                        == {'type': 'education_knowledge_from_agent_reply'}
+                        and agent_id == '_edu_8'
+                    )
                 )
                 if not trusted_finalizer:
                     return None
@@ -1915,6 +1930,25 @@ class MessageService:
             bounded = reply[:min(12000, remaining)]
             sections.append(f'[{dependency_id}]\n{bounded}')
             total += len(bounded)
+            finalizer = result.get('finalizer_result')
+            if (
+                isinstance(finalizer, dict)
+                and finalizer.get('status') == 'ok'
+                and finalizer.get('result') is not None
+                and total < 24000
+            ):
+                trusted_result = json.dumps(
+                    finalizer.get('result'),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                )
+                remaining = max(0, 24000 - total)
+                bounded_result = trusted_result[:min(12000, remaining)]
+                sections.append(
+                    f'[{dependency_id}:trusted_finalizer_result]\n{bounded_result}'
+                )
+                total += len(bounded_result)
         return '\n\n'.join(sections)
 
     def _execute_worker_plan(self, conversation, round_id, user_message_id,
@@ -1972,6 +2006,230 @@ class MessageService:
         This is intentionally a bounded allowlist. Workflow JSON cannot name
         arbitrary files, tools, actions, or idempotency keys.
         """
+        def parse_exact_json(required_fields, *, max_bytes=500_000):
+            source_text = str(reply or '').strip()
+            if len(source_text.encode('utf-8')) > max_bytes:
+                raise ValueError('Agent JSON exceeds the size limit')
+            source = json.loads(source_text)
+            if not isinstance(source, dict) or set(source) != set(required_fields):
+                raise ValueError(
+                    'root object must contain exactly: '
+                    + ', '.join(sorted(required_fields))
+                )
+            return source
+
+        def invoke_education(action, arguments, idempotency_key=None):
+            payload = {'action': action, 'arguments': arguments}
+            if idempotency_key:
+                payload['idempotency_key'] = idempotency_key
+            response = manager.execute_tool(
+                session_id,
+                agent_id,
+                'education_action',
+                payload,
+            )
+            envelope = (
+                response.get('result')
+                if isinstance(response, dict) and response.get('status') == 'ok'
+                else None
+            )
+            if not isinstance(envelope, dict) or envelope.get('status') != 'ok':
+                error = (
+                    envelope.get('error')
+                    if isinstance(envelope, dict)
+                    else response.get('error')
+                    if isinstance(response, dict)
+                    else response
+                )
+                raise ValueError(str(error or f'{action} failed')[:1000])
+            return envelope.get('result')
+
+        if (
+            finalizer == {'type': 'education_questions_from_agent_reply'}
+            and agent_id == '_edu_3'
+        ):
+            try:
+                source = parse_exact_json({'questions'})
+                questions = source['questions']
+                if not isinstance(questions, list) or not 1 <= len(questions) <= 30:
+                    raise ValueError('questions must contain 1 to 30 objects')
+                source_bytes = json.dumps(
+                    source,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                ).encode('utf-8')
+                result = invoke_education(
+                    'edu.question_bank.upsert',
+                    {'questions': questions, 'publish': False},
+                    'product-question-generation-'
+                    + hashlib.sha256(source_bytes).hexdigest()[:16],
+                )
+            except Exception as error:
+                return {
+                    'status': 'error',
+                    'error': f'Question batch is not adoptable: {error}',
+                }
+            return {'status': 'ok', 'result': result}
+
+        if (
+            finalizer == {'type': 'education_paper_from_agent_reply'}
+            and agent_id == '_edu_3'
+        ):
+            try:
+                source = parse_exact_json(
+                    {
+                        'title',
+                        'question_count',
+                        'duration_minutes',
+                        'purpose',
+                        'difficulty',
+                        'knowledge_points',
+                    },
+                    max_bytes=100_000,
+                )
+                title = str(source['title'] or '').strip()
+                question_count = int(source['question_count'])
+                duration = int(source['duration_minutes'])
+                purpose = str(source['purpose'] or 'practice').strip()
+                difficulty = str(source['difficulty'] or '').strip()
+                knowledge_points = source['knowledge_points']
+                if not title or not 1 <= question_count <= 30:
+                    raise ValueError('title and question_count (1..30) are required')
+                if not 5 <= duration <= 180:
+                    raise ValueError('duration_minutes must be between 5 and 180')
+                if purpose not in {'practice', 'assignment', 'mock_exam', 'diagnostic'}:
+                    raise ValueError('purpose is invalid')
+                if difficulty not in {'', 'easy', 'medium', 'hard'}:
+                    raise ValueError('difficulty is invalid')
+                if not isinstance(knowledge_points, list) or any(
+                    not isinstance(item, str) for item in knowledge_points
+                ):
+                    raise ValueError('knowledge_points must be a string array')
+                search_arguments = {'limit': 100}
+                if difficulty:
+                    search_arguments['difficulty'] = difficulty
+                search_result = invoke_education(
+                    'edu.question_bank.search',
+                    search_arguments,
+                )
+                rows = (
+                    search_result.get('items')
+                    if isinstance(search_result, dict)
+                    else None
+                ) or []
+                requested_points = {
+                    item.strip() for item in knowledge_points if item.strip()
+                }
+                eligible = []
+                for row in rows:
+                    if not isinstance(row, dict) or row.get('status') != 'published':
+                        continue
+                    version = row.get('current_version') or {}
+                    row_points = {
+                        str(item).strip()
+                        for item in (version.get('knowledge_points') or [])
+                        if str(item).strip()
+                    }
+                    if requested_points and not requested_points.intersection(row_points):
+                        continue
+                    eligible.append(row)
+                if len(eligible) < question_count:
+                    raise ValueError(
+                        f'only {len(eligible)} published questions match; '
+                        f'{question_count} required'
+                    )
+                item_ids = [str(row['id']) for row in eligible[:question_count]]
+                compose_arguments = {
+                    'title': title,
+                    'purpose': purpose,
+                    'duration_minutes': duration,
+                    'item_ids': item_ids,
+                    'sections': [],
+                }
+                compose_bytes = json.dumps(
+                    compose_arguments,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                ).encode('utf-8')
+                result = invoke_education(
+                    'edu.paper.compose',
+                    compose_arguments,
+                    'product-paper-generation-'
+                    + hashlib.sha256(compose_bytes).hexdigest()[:16],
+                )
+            except Exception as error:
+                return {
+                    'status': 'error',
+                    'error': f'Paper request is not adoptable: {error}',
+                }
+            return {'status': 'ok', 'result': result}
+
+        if (
+            finalizer == {'type': 'education_knowledge_from_agent_reply'}
+            and agent_id == '_edu_8'
+        ):
+            try:
+                source = parse_exact_json(
+                    {'query', 'license_note', 'teacher_confirmed_rights'},
+                    max_bytes=50_000,
+                )
+                query = str(source['query'] or '').strip()
+                license_note = str(source['license_note'] or '').strip()
+                confirmed = source['teacher_confirmed_rights'] is True
+                if not query:
+                    raise ValueError('query is required')
+                if not license_note or not confirmed:
+                    raise ValueError(
+                        'license_note and explicit teacher rights confirmation are required'
+                    )
+                research = invoke_education(
+                    'edu.web.research',
+                    {'query': query, 'limit': 5},
+                )
+                candidates = (
+                    research.get('results') if isinstance(research, dict) else None
+                ) or []
+                candidate = next(
+                    (
+                        item for item in candidates
+                        if isinstance(item, dict)
+                        and str(item.get('url') or '').strip()
+                        and str(item.get('title') or '').strip()
+                    ),
+                    None,
+                )
+                if not candidate:
+                    raise ValueError('research returned no adoptable candidate')
+                adoption_arguments = {
+                    'url': str(candidate['url']).strip(),
+                    'title': str(candidate['title']).strip()[:200],
+                    'search_excerpt': str(
+                        candidate.get('search_excerpt') or ''
+                    )[:2000],
+                    'license_note': license_note[:500],
+                    'teacher_confirmed_rights': True,
+                }
+                adoption_bytes = json.dumps(
+                    adoption_arguments,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                ).encode('utf-8')
+                result = invoke_education(
+                    'edu.knowledge.resource.adopt',
+                    adoption_arguments,
+                    'product-knowledge-research-'
+                    + hashlib.sha256(adoption_bytes).hexdigest()[:16],
+                )
+            except Exception as error:
+                return {
+                    'status': 'error',
+                    'error': f'Knowledge research request is not adoptable: {error}',
+                }
+            return {'status': 'ok', 'result': result}
+
         if (
             finalizer
             == {
@@ -2268,6 +2526,39 @@ class MessageService:
                                     '三个检查说明必须是非空字符串；required_changes '
                                     '必须是字符串数组。'
                                 )
+                            elif finalizer == {
+                                'type': 'education_questions_from_agent_reply'
+                            }:
+                                repair_prompt = (
+                                    'The trusted question finalizer rejected your JSON. '
+                                    f'Exact error: {finalizer_result.get("error")}\n'
+                                    'Return only one complete JSON object with exactly the '
+                                    'root field questions. questions must be an array of '
+                                    'canonical question objects. Do not use Markdown, tools, '
+                                    'progress commands, explanations, or wrapper fields.'
+                                )
+                            elif finalizer == {
+                                'type': 'education_paper_from_agent_reply'
+                            }:
+                                repair_prompt = (
+                                    'The trusted paper finalizer rejected your JSON. '
+                                    f'Exact error: {finalizer_result.get("error")}\n'
+                                    'Return only one complete JSON object with exactly title, '
+                                    'question_count, duration_minutes, purpose, difficulty, '
+                                    'and knowledge_points. Do not use Markdown, tools, '
+                                    'progress commands, explanations, or wrapper fields.'
+                                )
+                            elif finalizer == {
+                                'type': 'education_knowledge_from_agent_reply'
+                            }:
+                                repair_prompt = (
+                                    'The trusted knowledge finalizer rejected your JSON. '
+                                    f'Exact error: {finalizer_result.get("error")}\n'
+                                    'Return only one complete JSON object with exactly query, '
+                                    'license_note, and teacher_confirmed_rights. Do not use '
+                                    'Markdown, tools, progress commands, explanations, or '
+                                    'wrapper fields.'
+                                )
                             else:
                                 repair_prompt = (
                                     '系统已校验你生成的课件文件，但尚不能采纳。'
@@ -2293,7 +2584,7 @@ class MessageService:
                             reply = repair.get('reply') or reply
                         if finalizer_result.get('status') != 'ok':
                             error = finalizer_result.get('error') or (
-                                'Agent courseware finalizer failed'
+                                'Trusted Agent product finalizer failed'
                             )
                             self._mark_agent_message_failed(
                                 agent_msg.id,
@@ -2334,6 +2625,8 @@ class MessageService:
     def _retry_agent_after_model_error(self, conversation, agent_id, message, result):
         error = (result or {}).get('error') or (result or {}).get('reply') or ''
         if not self._is_model_runtime_error(error):
+            return result
+        if self._is_non_config_model_error(error):
             return result
         try:
             from app.services.settings_service import settings_service
@@ -2378,6 +2671,19 @@ class MessageService:
             'baseurl',
             'anthropic',
             'claude',
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _is_non_config_model_error(error):
+        """Return model failures that cannot be repaired by reloading credentials."""
+        text = str(error or '').lower()
+        markers = (
+            'insufficient balance',
+            'rate limit',
+            'too many requests',
+            '402',
+            '429',
         )
         return any(marker in text for marker in markers)
 

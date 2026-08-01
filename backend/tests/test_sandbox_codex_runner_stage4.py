@@ -240,6 +240,70 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn("startup_timeout_sec = 10", config)
         self.assertIn("tool_timeout_sec = 120", config)
 
+    def test_deepseek_uses_audited_text_tool_loop_instead_of_native_mcp_bridge(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+        projection = {
+            "schema_version": "weagent.capability_projection/v1",
+            "session_id": "session-1",
+            "capabilities": {},
+            "skills": {},
+            "mcp": {},
+            "plugins": {},
+            "tools": {},
+            "agents": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "capabilities": [
+                        {
+                            "type": "tool",
+                            "status": "implemented",
+                            "name": "Education actions",
+                            "tool_names": ["education_action"],
+                            "manifest": {"tool_names": ["education_action"]},
+                        }
+                    ],
+                    "skill_index": [],
+                    "tool_index": [],
+                    "permissions": {"agent_id": "agent-1", "grants": []},
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "courseware")
+            write_projection(projection, workspace_root=tmpdir)
+            with patch("app.sandbox.container.providers.codex.log_agent"), patch.dict(
+                "os.environ",
+                {
+                    "DEEPSEEK_API_KEY": "sk-test",
+                    "DEEPSEEK_BASE_URL": "https://api.deepseek.com/v1",
+                    "DEEPSEEK_MODEL": "deepseek-chat",
+                    "WEAGENT_WORKSPACE_ROOT": tmpdir,
+                },
+                clear=True,
+            ), patch.object(
+                runtime.provider_runner,
+                "_ensure_relay",
+                return_value="http://127.0.0.1:4446/v1",
+            ):
+                runtime.provider_runner.setup()
+                preflight = runtime.tool_preflight(["education_action"])
+
+            with open(
+                os.path.join(runtime.provider_runner.home_dir, "config.toml"),
+                "r",
+                encoding="utf-8",
+            ) as handle:
+                config = handle.read()
+
+        self.assertNotIn("weagent-tools-mcp", config)
+        self.assertTrue(preflight["ready"], preflight)
+        self.assertEqual("text_tool_loop", preflight["transport"])
+        self.assertEqual(["education_action"], preflight["available_tools"])
+        self.assertEqual([], preflight["missing_tools"])
+
     def test_courseware_tool_preflight_proves_bridge_catalog_before_model_run(self):
         runtime = AgentRuntime(
             "agent-1", "Courseware", "system", "courseware", provider_name="codex"
