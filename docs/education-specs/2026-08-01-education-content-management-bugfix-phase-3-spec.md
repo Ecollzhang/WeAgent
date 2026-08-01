@@ -3,12 +3,21 @@
 ## 0. 文档状态
 
 - 日期：2026-08-01
-- 状态：问题与根因已确认，方案待用户确认；确认后进入独立 Goal 实施
+- 状态：Phase 3A/3B/3C 已实现并完成自动化、真实 HTTP 双用户与内置浏览器 UAT；可交付用户验收
 - 文档类型：Bugfix / Product Completion Phase Spec
 - 基线分支：`feature/education`
 - 基线提交：`c747bdd fix(education): harden review workflow and session isolation`
 - 前置文档：`2026-07-31-education-bugfix-phase-2-spec.md`
 - 本文范围：只定义问题、数据契约、最小方案、阶段边界和 UAT；形成本文时不修改业务代码
+
+### 0.1 实施结论（2026-08-01）
+
+- BUG-301 至 BUG-308 均已按本文的数据边界实现；Education 数据库仍是课程、文件、版本、权限和发布状态的权威来源。
+- 习题、试卷与联网知识 Agent 改为“严格 JSON 回复 + 可信服务终结器”：模型不直接猜测内部工具，服务端校验后以指定 Agent 身份调用正式 Education 工具，失败会定向返回同一 Agent 修复。
+- 已完成高中英语与小学语文两门隔离课程、每门三课时的真实 HTTP 验收；资产权限、软删除与依赖 409、作业不可变发布快照、题库/试卷库/知识库和三种思维导图范围均通过。
+- 已使用教师/学生真实账号完成内置浏览器验收；课件上传、全课程筛选、逐页视觉预览、结构化导出、作业批改总览、长内容滚动、会话双向关联和学生导图均可操作。
+- 真实课件 Agent 已成功生成 `dark_focus` 结构化课件并通过逐页视觉检查与 HTML/PPTX/PDF 导出。最终复验时上游 DeepSeek 返回 `Insufficient Balance`；该外部余额事件已保留原始错误且不再被误报为“缺少 API Key”，不影响已持久化业务数据和普通课程功能。
+- 详细证据见 `implementation/PHASE-3-UAT-REPORT.md`。
 
 ## 1. 本阶段目标
 
