@@ -25,4 +25,5 @@ class Schedule(OfficeBaseModel):
         default='pending', nullable=False, index=True,
     )
     meeting_id = db.Column(db.String(36), nullable=True, index=True)
+    document_id = db.Column(db.String(36), nullable=True, index=True)
     action_item_id = db.Column(db.String(36), nullable=True, index=True)

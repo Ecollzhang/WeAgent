@@ -57,7 +57,7 @@ class ScheduleService:
             description=data.get('description', ''), event_type=event_type,
             start_time=start_time, end_time=end_time,
             priority=data.get('priority', 'medium'),
-            meeting_id=data.get('meeting_id'), action_item_id=data.get('action_item_id'),
+            meeting_id=data.get('meeting_id'), document_id=data.get('document_id'), action_item_id=data.get('action_item_id'),
         )
         conflicts = self._conflicts(user_id, workspace_id, start_time, end_time)
         db.session.add(schedule)
@@ -79,7 +79,7 @@ class ScheduleService:
             return None, str(error)
         if schedule.end_time < schedule.start_time:
             return None, 'end_time must not be earlier than start_time'
-        for field in ('title', 'description', 'priority', 'meeting_id', 'action_item_id'):
+        for field in ('title', 'description', 'priority', 'meeting_id', 'document_id', 'action_item_id'):
             if field in data:
                 setattr(schedule, field, data[field])
         if 'event_type' in data:

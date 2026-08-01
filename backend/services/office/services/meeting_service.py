@@ -79,6 +79,12 @@ class MeetingService:
             description=data.get('agenda', ''), event_type='meeting',
             start_time=start_time, end_time=end_time, meeting_id=meeting.id,
         ))
+        db.session.add(Schedule(
+            workspace_id=workspace_id, user_id=user_id,
+            title=f'会后维护：{title}', description='[meeting_followup]请完善会议纪要、记录与行动项',
+            event_type='task', start_time=end_time, end_time=end_time + timedelta(hours=1),
+            priority='high', meeting_id=meeting.id,
+        ))
         for participant_id in self._participant_ids(meeting):
             if participant_id == user_id:
                 continue
@@ -89,6 +95,20 @@ class MeetingService:
                 f'会议邀请：{title}', f'{start_time:%Y-%m-%d %H:%M}，地点：{meeting.location or "待定"}', 'meeting', meeting.id)
         db.session.commit()
         return meeting.to_dict(), None
+
+    @staticmethod
+    def _sync_followup_task(meeting):
+        followup = Schedule.query.filter(
+            Schedule.meeting_id == meeting.id,
+            Schedule.user_id == meeting.organizer_id,
+            Schedule.event_type == 'task',
+            Schedule.description.like('[meeting_followup]%'),
+        ).first()
+        if not followup:
+            return
+        has_minutes = bool((meeting.minutes or '').strip())
+        has_actions = ActionItem.query.filter_by(meeting_id=meeting.id).count() > 0
+        followup.status = 'done' if has_minutes and has_actions else 'pending'
 
     def update(self, meeting_id, user_id, data):
         meeting = Meeting.query.filter_by(id=meeting_id, organizer_id=user_id).first()
@@ -110,6 +130,7 @@ class MeetingService:
             if data['status'] not in self.VALID_STATUSES:
                 return None, 'Invalid meeting status'
             meeting.status = data['status']
+        self._sync_followup_task(meeting)
         schedule = Schedule.query.filter_by(
             meeting_id=meeting.id, user_id=user_id, event_type='meeting'
         ).first()
@@ -177,6 +198,7 @@ class MeetingService:
         if action_item.assignee_id and action_item.assignee_id != user_id:
             organization_service.notify(meeting.workspace_id, action_item.assignee_id, 'action_item',
                 f'新的行动项：{title}', f'截止时间：{due_date.strftime("%Y-%m-%d %H:%M") if due_date else "未设置"}', 'action_item', action_item.id)
+        self._sync_followup_task(meeting)
         db.session.commit()
         return action_item.to_dict(), None
 
