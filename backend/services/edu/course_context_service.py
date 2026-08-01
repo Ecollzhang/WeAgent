@@ -3,6 +3,7 @@
 import hashlib
 import json
 
+from .asset_models import EducationAsset
 from .content_models import (
     EducationContent,
     EducationContentVersion,
@@ -85,6 +86,21 @@ def _material_projection(material):
     }
 
 
+def _asset_material_projection(asset):
+    filename = str(asset.original_filename or "")
+    return {
+        "id": asset.id,
+        "asset_id": asset.id,
+        "title": asset.title,
+        "original_filename": filename,
+        "extension": filename.rsplit(".", 1)[-1].lower() if "." in filename else "",
+        "mime_type": asset.media_type,
+        "file_size": asset.byte_size,
+        "status": asset.status,
+        "visibility_scope": asset.visibility_scope,
+    }
+
+
 def build_courseware_context(course_id, lesson_id):
     """Return the reproducible, teacher-private context for one lesson."""
     course = Course.query.filter_by(id=course_id, status="active").first()
@@ -115,12 +131,32 @@ def build_courseware_context(course_id, lesson_id):
         .order_by(LessonActivity.position.asc(), LessonActivity.created_at.asc())
         .all()
     )
-    materials = (
+    canonical_assets = (
+        EducationAsset.query.filter_by(
+            course_id=course_id,
+            lesson_id=lesson_id,
+            status="active",
+        )
+        .filter(EducationAsset.purpose.in_(("courseware", "lesson_material")))
+        .order_by(EducationAsset.created_at.desc())
+        .all()
+    )
+    canonical_asset_ids = {item.id for item in canonical_assets}
+    legacy_materials = (
         EducationMaterial.query.filter_by(course_id=course_id, lesson_id=lesson_id)
         .filter(EducationMaterial.status != "archived")
         .order_by(EducationMaterial.created_at.desc())
         .all()
     )
+    legacy_materials = [
+        item
+        for item in legacy_materials
+        if not item.asset_id or item.asset_id not in canonical_asset_ids
+    ]
+    materials = [
+        *[_asset_material_projection(item) for item in canonical_assets],
+        *[_material_projection(item) for item in legacy_materials],
+    ]
     resources = (
         KnowledgeResource.query.filter_by(course_id=course_id, status="active")
         .order_by(KnowledgeResource.updated_at.desc())
@@ -132,7 +168,7 @@ def build_courseware_context(course_id, lesson_id):
         "lesson_plan_version_id": lesson_plan["version_id"] if lesson_plan else None,
         "slide_version_ids": [item["version_id"] for item in slide_documents],
         "activity_ids": [item.id for item in activities],
-        "material_ids": [item.id for item in materials],
+        "material_ids": [item["asset_id"] or item["id"] for item in materials],
         "knowledge_resource_ids": [item.id for item in resources],
     }
     checksum = hashlib.sha256(
@@ -146,7 +182,7 @@ def build_courseware_context(course_id, lesson_id):
         "lesson_plan": lesson_plan,
         "slide_documents": slide_documents,
         "activities": [_activity_projection(item) for item in activities],
-        "materials": [_material_projection(item) for item in materials],
+        "materials": materials,
         "knowledge_resources": [
             knowledge_resource_to_dict(item) for item in resources
         ],

@@ -9,8 +9,10 @@ from sqlalchemy.exc import DataError
 from .access import active_membership
 from .asset_models import EducationAsset
 from .asset_service import (
+    ASSET_PURPOSES,
     ASSET_VISIBILITY,
     AssetServiceError,
+    asset_dependencies,
     asset_storage_capacity_error,
     adopt_legacy_material,
     asset_to_dict,
@@ -86,6 +88,32 @@ def list_assets(course_id):
                 ),
             )
         )
+    purpose_value = str(request.args.get("purpose") or "").strip()
+    if purpose_value:
+        purposes = {
+            item.strip() for item in purpose_value.split(",") if item.strip()
+        }
+        if not purposes or not purposes.issubset(ASSET_PURPOSES):
+            return jsonify(
+                {
+                    "error": "unsupported asset purpose",
+                    "error_code": "invalid_purpose",
+                }
+            ), 400
+        query = query.filter(EducationAsset.purpose.in_(sorted(purposes)))
+    lesson_id = str(request.args.get("lesson_id") or "").strip()
+    if lesson_id:
+        query = query.filter(EducationAsset.lesson_id == lesson_id)
+    visibility = str(request.args.get("visibility_scope") or "").strip()
+    if visibility:
+        if visibility not in ASSET_VISIBILITY:
+            return jsonify(
+                {
+                    "error": "unsupported visibility_scope",
+                    "error_code": "invalid_visibility",
+                }
+            ), 400
+        query = query.filter(EducationAsset.visibility_scope == visibility)
     rows = query.order_by(EducationAsset.created_at.desc()).all()
     return jsonify({"items": [asset_to_dict(row) for row in rows]})
 
@@ -129,6 +157,30 @@ def update_asset(asset_id):
         if not title:
             return jsonify({"error": "title is required"}), 400
         asset.title = title
+    db.session.commit()
+    return jsonify(asset_to_dict(asset))
+
+
+@education_asset_api.delete("/assets/<asset_id>")
+@jwt_required()
+def archive_asset(asset_id):
+    asset = EducationAsset.query.filter_by(id=asset_id, status="active").first()
+    if not asset:
+        return jsonify({"error": "asset not found"}), 404
+    try:
+        validate_asset_access(asset, get_jwt_identity(), write=True)
+    except AssetServiceError as error:
+        return _asset_error(error)
+    dependencies = asset_dependencies(asset)
+    if dependencies:
+        return jsonify(
+            {
+                "error": "asset is referenced by durable Education content",
+                "error_code": "asset_in_use",
+                "dependencies": dependencies,
+            }
+        ), 409
+    asset.archive()
     db.session.commit()
     return jsonify(asset_to_dict(asset))
 

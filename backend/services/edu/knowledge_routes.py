@@ -1,10 +1,11 @@
 """Course Knowledge Center HTTP API."""
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from .access import active_membership
 from .extensions import db
+from .asset_service import AssetServiceError
 from .knowledge_models import (
     AssessmentItem,
     AssessmentPaper,
@@ -22,6 +23,7 @@ from .knowledge_service import (
     publish_question,
     question_to_dict,
 )
+from .web_resource_service import WebResourceAdoptionError, adopt_web_knowledge_resource
 
 
 education_knowledge_api = Blueprint("education_knowledge_api", __name__)
@@ -170,6 +172,34 @@ def create_resource_route(course_id):
         db.session.commit()
     except KnowledgeServiceError as error:
         return _service_error(error)
+    return jsonify(knowledge_resource_to_dict(resource)), 201
+
+
+@education_knowledge_api.post("/courses/<course_id>/knowledge-resources/adopt-url")
+@jwt_required()
+def adopt_web_resource(course_id):
+    actor = get_jwt_identity()
+    membership = active_membership(course_id, actor)
+    if not membership or membership.role != "teacher":
+        return jsonify({"error": "course not found"}), 404
+    try:
+        resource = adopt_web_knowledge_resource(
+            course_id=course_id,
+            actor=actor,
+            data=request.get_json(silent=True) or {},
+            fetcher=current_app.config.get("EDUCATION_CONTENT_FETCHER"),
+        )
+        db.session.commit()
+    except (AssetServiceError, KnowledgeServiceError) as error:
+        return _service_error(error)
+    except WebResourceAdoptionError as error:
+        db.session.rollback()
+        return jsonify(
+            {"error": error.message, "error_code": error.error_code}
+        ), error.status_code
+    except Exception as error:
+        db.session.rollback()
+        return jsonify({"error": str(error)[:500], "error_code": "web_resource_fetch_failed"}), 422
     return jsonify(knowledge_resource_to_dict(resource)), 201
 
 

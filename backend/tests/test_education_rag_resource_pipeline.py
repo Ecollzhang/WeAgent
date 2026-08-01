@@ -15,6 +15,7 @@ EducationResourcePipeline = resource_pipeline.EducationResourcePipeline
 ResourceScope = resource_pipeline.ResourceScope
 SearchCandidate = resource_pipeline.SearchCandidate
 SafeWebPageReader = resource_pipeline.SafeWebPageReader
+WikipediaSearchProvider = resource_pipeline.WikipediaSearchProvider
 
 
 class _BrokenSearch:
@@ -116,3 +117,21 @@ def test_web_page_reader_rejects_http_error_pages_as_content():
 
     with pytest.raises(RuntimeError, match="HTTP 404"):
         reader.fetch(SearchCandidate("https://example.edu/missing", "Missing"))
+
+
+def test_wikipedia_search_provider_keeps_excerpt_as_discovery_metadata():
+    provider = WikipediaSearchProvider(
+        language="en",
+        fetch=lambda url, max_bytes: {
+            "status_code": 200,
+            "body_preview": (
+                '{"query":{"pages":{"7":{"title":"Reading comprehension",'
+                '"fullurl":"https://en.wikipedia.org/wiki/Reading_comprehension",'
+                '"extract":"A short search extract."}}}}'
+            ),
+        },
+    )
+    results = provider.search("reading comprehension", 3)
+    assert len(results) == 1
+    assert results[0].url == "https://en.wikipedia.org/wiki/Reading_comprehension"
+    assert results[0].excerpt == "A short search extract."

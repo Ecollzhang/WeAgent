@@ -129,6 +129,188 @@ def test_database_asset_upload_download_and_course_visibility(app):
     assert student_download.data == "A durable text".encode()
 
 
+def test_asset_list_filters_by_purpose_and_lesson(app):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    course = create_course(client, teacher)
+    first_lesson = create_lesson(client, teacher, course["id"])
+    second_lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Second lesson",
+            "learning_domain": "writing",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+
+    def upload(filename, purpose, lesson_id):
+        response = client.post(
+            f"/api/edu/courses/{course['id']}/assets",
+            headers=teacher,
+            data={
+                "purpose": purpose,
+                "lesson_id": lesson_id,
+                "file": (BytesIO(filename.encode()), filename),
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 201
+        return response.get_json()
+
+    expected = upload("first.pptx", "courseware", first_lesson["id"])
+    upload("assignment.pdf", "assignment_source", first_lesson["id"])
+    upload("second.pptx", "courseware", second_lesson["id"])
+
+    response = client.get(
+        f"/api/edu/courses/{course['id']}/assets",
+        headers=teacher,
+        query_string={
+            "purpose": "courseware",
+            "lesson_id": first_lesson["id"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.get_json()["items"]] == [expected["id"]]
+
+
+def test_courseware_context_reads_canonical_lesson_assets_without_duplicates(app):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    course = create_course(client, teacher)
+    lesson = create_lesson(client, teacher, course["id"])
+    asset = client.post(
+        f"/api/edu/courses/{course['id']}/assets",
+        headers=teacher,
+        data={
+            "title": "Canonical slides",
+            "purpose": "lesson_material",
+            "visibility_scope": "course_teacher",
+            "lesson_id": lesson["id"],
+            "file": (BytesIO(b"slides"), "slides.pptx"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+
+    context = client.get(
+        f"/api/edu/lessons/{lesson['id']}/courseware-context",
+        headers=teacher,
+    )
+
+    assert context.status_code == 200
+    assert [row["asset_id"] for row in context.get_json()["materials"]] == [
+        asset["id"]
+    ]
+
+
+def test_teacher_can_soft_delete_unreferenced_asset(app):
+    from services.edu.asset_models import EducationAsset
+
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    student = headers(app, "student")
+    course = create_course(client, teacher)
+    add_student(client, teacher, student, course["id"])
+    uploaded = client.post(
+        f"/api/edu/courses/{course['id']}/assets",
+        headers=teacher,
+        data={
+            "purpose": "courseware",
+            "visibility_scope": "course_published",
+            "file": (BytesIO(b"slides"), "slides.pptx"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+
+    assert client.delete(
+        f"/api/edu/assets/{uploaded['id']}",
+        headers=student,
+    ).status_code == 404
+    deleted = client.delete(
+        f"/api/edu/assets/{uploaded['id']}",
+        headers=teacher,
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.get_json()["status"] == "archived"
+    assert client.get(uploaded["download_url"], headers=teacher).status_code == 404
+    with app.app_context():
+        asset = EducationAsset.query.get(uploaded["id"])
+        assert asset.status == "archived"
+        assert asset.archived_at is not None
+
+
+def test_published_assignment_asset_cannot_be_deleted(app):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    course = create_course(client, teacher)
+    lesson = create_lesson(client, teacher, course["id"])
+    uploaded = client.post(
+        f"/api/edu/courses/{course['id']}/assets",
+        headers=teacher,
+        data={
+            "purpose": "assignment_source",
+            "lesson_id": lesson["id"],
+            "file": (BytesIO(b"worksheet"), "worksheet.pdf"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Worksheet",
+            "kind": "writing",
+            "instruction_json": {"text": "Complete the worksheet."},
+            "source_asset_ids": [uploaded["id"]],
+        },
+    ).get_json()
+    assert client.post(
+        f"/api/edu/assignments/{assignment['id']}/publish",
+        headers=teacher,
+    ).status_code == 200
+
+    response = client.delete(
+        f"/api/edu/assets/{uploaded['id']}",
+        headers=teacher,
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error_code"] == "asset_in_use"
+    assert response.get_json()["dependencies"] == [
+        {
+            "id": assignment["id"],
+            "title": "Worksheet",
+            "type": "published_assignment",
+        }
+    ]
+
+
+def test_assignment_import_assets_use_assignment_source_purpose(app):
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    course = create_course(client, teacher)
+    lesson = create_lesson(client, teacher, course["id"])
+
+    response = client.post(
+        f"/api/edu/courses/{course['id']}/assignment-imports",
+        headers=teacher,
+        data={
+            "lesson_id": lesson["id"],
+            "mode": "attachment",
+            "file": (BytesIO(b"%PDF-1.4\nworksheet"), "worksheet.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["source_asset"]["purpose"] == "assignment_source"
+
+
 def test_asset_binary_column_uses_mysql_longblob():
     from services.edu.asset_models import EducationAsset
 
@@ -291,3 +473,55 @@ def test_existing_material_table_schema_upgrade_is_idempotent():
         ]
         assert second == []
         assert "asset_id" in columns
+
+
+def test_schema_upgrade_backfills_assignment_versions_and_source_asset_purpose(app):
+    from services.edu.asset_models import EducationAsset
+    from services.edu.content_models import Assignment, AssignmentContentVersion
+    from services.edu.schema_maintenance import migrate_existing_education_schema
+
+    client = app.test_client()
+    teacher = headers(app, "teacher")
+    course = create_course(client, teacher)
+    lesson = create_lesson(client, teacher, course["id"])
+    imported = client.post(
+        f"/api/edu/courses/{course['id']}/assignment-imports",
+        headers=teacher,
+        data={
+            "lesson_id": lesson["id"],
+            "mode": "attachment",
+            "file": (BytesIO(b"legacy source"), "legacy.png"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Legacy assignment",
+            "kind": "writing",
+            "instruction_json": {"text": "Legacy"},
+            "source_asset_ids": [imported["source_asset"]["id"]],
+        },
+    ).get_json()
+    with app.app_context():
+        row = Assignment.query.filter_by(id=assignment["id"]).one()
+        AssignmentContentVersion.query.filter_by(assignment_id=row.id).delete()
+        row.current_version_id = None
+        row.published_version_id = None
+        asset = EducationAsset.query.filter_by(id=imported["source_asset"]["id"]).one()
+        asset.purpose = "course_material"
+        db.session.commit()
+
+        first = migrate_existing_education_schema()
+        second = migrate_existing_education_schema()
+        db.session.expire_all()
+        row = Assignment.query.filter_by(id=assignment["id"]).one()
+        asset = EducationAsset.query.filter_by(id=asset.id).one()
+
+        assert "edu_assignments.content_versions_backfilled" in first
+        assert "edu_assets.assignment_source_migrated" in first
+        assert second == []
+        assert row.current_version_id
+        assert AssignmentContentVersion.query.filter_by(assignment_id=row.id).count() == 1
+        assert asset.purpose == "assignment_source"

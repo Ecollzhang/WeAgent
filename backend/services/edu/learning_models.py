@@ -64,6 +64,8 @@ class CourseMindMap(TimestampMixin, db.Model):
     )
     owner_user_id = db.Column(db.String(100), nullable=False, index=True)
     title = db.Column(db.String(200), nullable=False)
+    scope_type = db.Column(db.String(20), nullable=False, default="course", index=True)
+    lesson_ids = db.Column(db.JSON, nullable=False, default=list)
     current_version_id = db.Column(db.String(36), nullable=True)
     status = db.Column(db.String(20), nullable=False, default="active", index=True)
 
@@ -112,4 +114,3 @@ class StudentInsightSnapshot(db.Model):
     recommendations_json = db.Column(db.JSON, nullable=False, default=list)
     generated_by_user_id = db.Column(db.String(100), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-

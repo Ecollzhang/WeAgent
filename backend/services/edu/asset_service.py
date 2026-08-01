@@ -13,6 +13,7 @@ ASSET_VISIBILITY = {"owner_private", "course_teacher", "course_published"}
 ASSET_PURPOSES = {
     "course_material",
     "lesson_material",
+    "assignment_source",
     "knowledge_resource",
     "courseware",
     "roster",
@@ -71,6 +72,58 @@ def validate_asset_access(asset, actor_user_id, *, write=False):
     if asset.visibility_scope == "owner_private" and asset.owner_user_id == actor_user_id:
         return membership
     raise AssetServiceError("asset not found", 404, "asset_not_found")
+
+
+def asset_dependencies(asset):
+    """Return durable business objects that make an asset unsafe to archive."""
+    from .content_models import Assignment, AssignmentImportJob, EducationMaterial
+    from .knowledge_models import KnowledgeResource
+
+    dependencies = []
+    for assignment in Assignment.query.filter_by(
+        course_id=asset.course_id,
+        status="published",
+    ).all():
+        if asset.id in (assignment.source_asset_ids or []):
+            dependencies.append(
+                {
+                    "type": "published_assignment",
+                    "id": assignment.id,
+                    "title": assignment.title,
+                }
+            )
+    for resource in KnowledgeResource.query.filter_by(
+        asset_id=asset.id,
+        status="active",
+    ).all():
+        dependencies.append(
+            {
+                "type": "knowledge_resource",
+                "id": resource.id,
+                "title": resource.title,
+            }
+        )
+    for material in EducationMaterial.query.filter_by(
+        asset_id=asset.id,
+        status="published",
+    ).all():
+        dependencies.append(
+            {
+                "type": "published_lesson_material",
+                "id": material.id,
+                "title": material.title,
+            }
+        )
+    for job in AssignmentImportJob.query.filter_by(source_asset_id=asset.id).all():
+        if job.status not in {"failed", "cancelled"}:
+            dependencies.append(
+                {
+                    "type": "assignment_import",
+                    "id": job.id,
+                    "title": asset.title,
+                }
+            )
+    return sorted(dependencies, key=lambda item: (item["type"], item["id"]))
 
 
 def create_database_asset(

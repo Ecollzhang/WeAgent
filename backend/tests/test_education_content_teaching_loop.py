@@ -252,6 +252,102 @@ def test_assignment_detail_hides_evaluation_from_students(setup):
     ).status_code == 404
 
 
+def test_published_assignment_edits_are_versioned_until_teacher_republishes(setup):
+    app, client, teacher, student_a, student_b, outsider, course, lesson = setup
+    created = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Version one",
+            "kind": "writing",
+            "instruction_json": {"html": "<p>Write the first ending.</p>"},
+            "evaluation_json": {"rubric": {"clarity": 10}},
+        },
+    )
+    assert created.status_code == 201
+    assignment = created.get_json()
+    assert assignment["current_version"]["version_number"] == 1
+    assert assignment["published_version"] is None
+
+    published = client.post(
+        f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher
+    )
+    assert published.status_code == 200
+    assert published.get_json()["published_version"]["version_number"] == 1
+
+    updated = client.patch(
+        f"/api/edu/assignments/{assignment['id']}",
+        headers=teacher,
+        json={
+            "current_version_id": published.get_json()["current_version"]["id"],
+            "title": "Version two",
+            "instruction_json": {"html": "<p>Write a revised ending.</p>"},
+        },
+    )
+    assert updated.status_code == 200
+    teacher_view = updated.get_json()
+    assert teacher_view["title"] == "Version two"
+    assert teacher_view["current_version"]["version_number"] == 2
+    assert teacher_view["published_version"]["version_number"] == 1
+    assert teacher_view["has_unpublished_changes"] is True
+
+    student_before_republish = client.get(
+        f"/api/edu/assignments/{assignment['id']}", headers=student_a
+    ).get_json()
+    assert student_before_republish["title"] == "Version one"
+    assert student_before_republish["instruction_json"]["html"] == "<p>Write the first ending.</p>"
+    assert "evaluation_json" not in student_before_republish
+
+    republished = client.post(
+        f"/api/edu/assignments/{assignment['id']}/publish", headers=teacher
+    )
+    assert republished.status_code == 200
+    assert republished.get_json()["published_version"]["version_number"] == 2
+    student_after_republish = client.get(
+        f"/api/edu/assignments/{assignment['id']}", headers=student_a
+    ).get_json()
+    assert student_after_republish["title"] == "Version two"
+    assert student_after_republish["instruction_json"]["html"] == "<p>Write a revised ending.</p>"
+
+
+def test_assignment_version_update_rejects_students_and_stale_teacher_state(setup):
+    app, client, teacher, student_a, student_b, outsider, course, lesson = setup
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Concurrent edit",
+            "kind": "writing",
+            "instruction_json": {"text": "First"},
+            "evaluation_json": {"rubric": {"content": 10}},
+        },
+    ).get_json()
+    current_id = assignment["current_version"]["id"]
+    assert client.patch(
+        f"/api/edu/assignments/{assignment['id']}",
+        headers=student_a,
+        json={"current_version_id": current_id, "title": "Student edit"},
+    ).status_code == 404
+    first_save = client.patch(
+        f"/api/edu/assignments/{assignment['id']}",
+        headers=teacher,
+        json={"current_version_id": current_id, "title": "Teacher edit"},
+    )
+    assert first_save.status_code == 200
+    stale = client.patch(
+        f"/api/edu/assignments/{assignment['id']}",
+        headers=teacher,
+        json={"current_version_id": current_id, "title": "Stale edit"},
+    )
+    assert stale.status_code == 409
+    assert stale.get_json()["error_code"] == "assignment_version_conflict"
+    versions = client.get(
+        f"/api/edu/assignments/{assignment['id']}/versions", headers=teacher
+    )
+    assert versions.status_code == 200
+    assert [row["version_number"] for row in versions.get_json()["items"]] == [2, 1]
+
+
 def test_student_draft_survives_refresh_and_submit_freezes_visible_version(setup):
     app, client, teacher, student_a, student_b, outsider, course, lesson = setup
     assignment = client.post(

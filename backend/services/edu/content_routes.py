@@ -22,6 +22,7 @@ from .asset_service import (
 )
 from .content_models import (
     Assignment,
+    AssignmentContentVersion,
     AssignmentImportJob,
     CourseUnit,
     EducationContent,
@@ -1019,29 +1020,112 @@ def _assets_for_ids(asset_ids, course_id):
     return [by_id[item] for item in ordered_ids if item in by_id]
 
 
-def _assignment_dict(assignment, include_evaluation=False):
+def _assignment_version_dict(version):
+    if not version:
+        return None
+    return {
+        "id": version.id,
+        "version_number": version.version_number,
+        "created_by": version.created_by,
+        "created_at": version.created_at.isoformat() if version.created_at else None,
+        "published_at": version.published_at.isoformat() if version.published_at else None,
+    }
+
+
+def _assignment_version(assignment, version_id):
+    if not version_id:
+        return None
+    return AssignmentContentVersion.query.filter_by(
+        id=version_id, assignment_id=assignment.id
+    ).first()
+
+
+def _new_assignment_version(assignment, actor_user_id, version_number=None, **overrides):
+    if version_number is None:
+        latest = (
+            AssignmentContentVersion.query.filter_by(assignment_id=assignment.id)
+            .order_by(AssignmentContentVersion.version_number.desc())
+            .first()
+        )
+        version_number = (latest.version_number if latest else 0) + 1
+    values = {
+        "title": assignment.title,
+        "kind": assignment.kind,
+        "instruction_json": assignment.instruction_json,
+        "evaluation_json": assignment.evaluation_json or {},
+        "source_asset_ids": assignment.source_asset_ids or [],
+        "max_score": assignment.max_score,
+        "max_attempts": assignment.max_attempts,
+        "allow_revision_after_feedback": assignment.allow_revision_after_feedback,
+    }
+    values.update(overrides)
+    version = AssignmentContentVersion(
+        assignment_id=assignment.id,
+        version_number=version_number,
+        created_by=actor_user_id,
+        **values,
+    )
+    db.session.add(version)
+    db.session.flush()
+    assignment.current_version_id = version.id
+    return version
+
+
+def _ensure_assignment_version(assignment, actor_user_id="system"):
+    current = _assignment_version(assignment, assignment.current_version_id)
+    if current:
+        return current
+    current = _new_assignment_version(assignment, actor_user_id, version_number=1)
+    if assignment.status == "published":
+        current.published_at = assignment.published_at or datetime.utcnow()
+        assignment.published_version_id = current.id
+    return current
+
+
+def _apply_assignment_version(assignment, version):
+    assignment.title = version.title
+    assignment.kind = version.kind
+    assignment.instruction_json = version.instruction_json
+    assignment.evaluation_json = version.evaluation_json or {}
+    assignment.source_asset_ids = version.source_asset_ids or []
+    assignment.max_score = version.max_score
+    assignment.max_attempts = version.max_attempts
+    assignment.allow_revision_after_feedback = version.allow_revision_after_feedback
+
+
+def _assignment_dict(assignment, include_evaluation=False, version=None):
+    current_version = _assignment_version(assignment, assignment.current_version_id)
+    published_version = _assignment_version(assignment, assignment.published_version_id)
+    version = version or current_version
+    payload = version or assignment
     source_assets = _assets_for_ids(
-        assignment.source_asset_ids,
+        payload.source_asset_ids,
         assignment.course_id,
     )
     result = {
         "id": assignment.id,
         "course_id": assignment.course_id,
         "lesson_id": assignment.lesson_id,
-        "title": assignment.title,
-        "kind": assignment.kind,
-        "instruction_json": assignment.instruction_json,
+        "title": payload.title,
+        "kind": payload.kind,
+        "instruction_json": payload.instruction_json,
         "source_assets": [asset_to_dict(asset) for asset in source_assets],
-        "max_score": assignment.max_score,
-        "max_attempts": assignment.max_attempts,
-        "allow_revision_after_feedback": assignment.allow_revision_after_feedback,
+        "max_score": payload.max_score,
+        "max_attempts": payload.max_attempts,
+        "allow_revision_after_feedback": payload.allow_revision_after_feedback,
         "status": assignment.status,
+        "current_version": _assignment_version_dict(current_version),
+        "published_version": _assignment_version_dict(published_version),
+        "has_unpublished_changes": bool(
+            current_version
+            and (not published_version or current_version.id != published_version.id)
+        ),
         "published_at": (
             assignment.published_at.isoformat() if assignment.published_at else None
         ),
     }
     if include_evaluation:
-        result["evaluation_json"] = assignment.evaluation_json
+        result["evaluation_json"] = payload.evaluation_json
     return result
 
 
@@ -1117,7 +1201,7 @@ def create_assignment_import(course_id):
             original_filename=filename,
             media_type=media_type,
             title=str(request.form.get("title") or uploaded.filename).strip(),
-            purpose="course_material",
+            purpose="assignment_source",
             visibility_scope="course_teacher",
         )
         draft = {}
@@ -1253,10 +1337,17 @@ def get_assignment(assignment_id):
     membership = _membership(assignment.course_id, user_id)
     if membership.role != "teacher" and assignment.status != "published":
         return jsonify({"error": "assignment not found"}), 404
+    current = _ensure_assignment_version(assignment, user_id)
+    published = _assignment_version(assignment, assignment.published_version_id)
+    if membership.role != "teacher" and not published:
+        return jsonify({"error": "assignment not found"}), 404
+    if db.session.is_modified(assignment):
+        db.session.commit()
     return jsonify(
         _assignment_dict(
             assignment,
             include_evaluation=membership.role == "teacher",
+            version=current if membership.role == "teacher" else published,
         )
     )
 
@@ -1325,8 +1416,99 @@ def create_assignment(lesson_id):
         ),
     )
     db.session.add(assignment)
+    db.session.flush()
+    _new_assignment_version(assignment, user_id, version_number=1)
     db.session.commit()
     return jsonify(_assignment_dict(assignment, include_evaluation=False)), 201
+
+
+@education_content_api.patch("/assignments/<assignment_id>")
+@jwt_required()
+def update_assignment(assignment_id):
+    user_id = get_jwt_identity()
+    assignment = _assignment_for_member(assignment_id, user_id, "teacher")
+    if not assignment:
+        return jsonify({"error": "assignment not found"}), 404
+    data = request.get_json(silent=True) or {}
+    current = _ensure_assignment_version(assignment, user_id)
+    expected_version_id = str(data.get("current_version_id") or "").strip()
+    if expected_version_id and expected_version_id != current.id:
+        db.session.rollback()
+        return jsonify(
+            {
+                "error": "assignment changed in another session",
+                "error_code": "assignment_version_conflict",
+                "current_version_id": current.id,
+            }
+        ), 409
+
+    title = str(data.get("title", current.title) or "").strip()
+    kind = str(data.get("kind", current.kind) or "").strip()
+    instruction = data.get("instruction_json", current.instruction_json)
+    evaluation = data.get("evaluation_json", current.evaluation_json) or {}
+    if not title or len(title) > 200 or kind not in {"quiz", "writing", "mixed"}:
+        return jsonify({"error": "valid title and kind are required"}), 400
+    if not isinstance(instruction, dict) or not instruction:
+        return jsonify({"error": "instruction_json is required"}), 400
+    if not isinstance(evaluation, dict):
+        return jsonify({"error": "evaluation_json must be an object"}), 400
+    source_asset_ids = data.get("source_asset_ids", current.source_asset_ids) or []
+    if not isinstance(source_asset_ids, list) or len(source_asset_ids) > 20:
+        return jsonify({"error": "source_asset_ids must be a list of at most 20 items"}), 400
+    source_asset_ids = list(dict.fromkeys(str(item) for item in source_asset_ids if item))
+    if len(_assets_for_ids(source_asset_ids, assignment.course_id)) != len(source_asset_ids):
+        return jsonify({"error": "one or more source assets are unavailable"}), 400
+    try:
+        max_score = float(data.get("max_score", current.max_score))
+        max_attempts = int(data.get("max_attempts", current.max_attempts))
+    except (TypeError, ValueError):
+        return jsonify({"error": "score and attempts must be numeric"}), 400
+    if not 0 < max_score <= 10000 or not 1 <= max_attempts <= 20:
+        return jsonify({"error": "invalid score or attempts"}), 400
+    values = {
+        "title": title,
+        "kind": kind,
+        "instruction_json": instruction,
+        "evaluation_json": evaluation,
+        "source_asset_ids": source_asset_ids,
+        "max_score": max_score,
+        "max_attempts": max_attempts,
+        "allow_revision_after_feedback": bool(
+            data.get(
+                "allow_revision_after_feedback",
+                current.allow_revision_after_feedback,
+            )
+        ),
+    }
+    comparable = {
+        key: getattr(current, key)
+        for key in values
+    }
+    if comparable == values:
+        if db.session.is_modified(assignment):
+            db.session.commit()
+        return jsonify(_assignment_dict(assignment, include_evaluation=True))
+    version = _new_assignment_version(assignment, user_id, **values)
+    if assignment.status != "published":
+        _apply_assignment_version(assignment, version)
+    db.session.commit()
+    return jsonify(_assignment_dict(assignment, include_evaluation=True))
+
+
+@education_content_api.get("/assignments/<assignment_id>/versions")
+@jwt_required()
+def list_assignment_versions(assignment_id):
+    assignment = _assignment_for_member(assignment_id, get_jwt_identity(), "teacher")
+    if not assignment:
+        return jsonify({"error": "assignment not found"}), 404
+    _ensure_assignment_version(assignment, get_jwt_identity())
+    db.session.commit()
+    rows = (
+        AssignmentContentVersion.query.filter_by(assignment_id=assignment.id)
+        .order_by(AssignmentContentVersion.version_number.desc())
+        .all()
+    )
+    return jsonify({"items": [_assignment_version_dict(row) for row in rows]})
 
 
 @education_content_api.post("/assignments/<assignment_id>/publish")
@@ -1336,10 +1518,15 @@ def publish_assignment(assignment_id):
     assignment = _assignment_for_member(assignment_id, user_id, "teacher")
     if not assignment:
         return jsonify({"error": "assignment not found"}), 404
-    if assignment.status != "published":
+    current = _ensure_assignment_version(assignment, user_id)
+    if assignment.published_version_id != current.id:
+        now = datetime.utcnow()
         assignment.status = "published"
         assignment.published_by = user_id
-        assignment.published_at = datetime.utcnow()
+        assignment.published_at = now
+        assignment.published_version_id = current.id
+        current.published_at = now
+        _apply_assignment_version(assignment, current)
         _event(
             assignment.course_id,
             user_id,
@@ -1348,7 +1535,7 @@ def publish_assignment(assignment_id):
             assignment.id,
         )
         for asset in _assets_for_ids(
-            assignment.source_asset_ids,
+            current.source_asset_ids,
             assignment.course_id,
         ):
             asset.visibility_scope = "course_published"
@@ -1367,10 +1554,21 @@ def list_assignments(course_id):
     if membership.role != "teacher":
         query = query.filter_by(status="published")
     assignments = query.order_by(Assignment.created_at.asc()).all()
+    for assignment in assignments:
+        _ensure_assignment_version(assignment, user_id)
+    db.session.commit()
     return jsonify(
         {
             "items": [
-                _assignment_dict(row, include_evaluation=membership.role == "teacher")
+                _assignment_dict(
+                    row,
+                    include_evaluation=membership.role == "teacher",
+                    version=(
+                        _assignment_version(row, row.current_version_id)
+                        if membership.role == "teacher"
+                        else _assignment_version(row, row.published_version_id)
+                    ),
+                )
                 for row in assignments
             ]
         }

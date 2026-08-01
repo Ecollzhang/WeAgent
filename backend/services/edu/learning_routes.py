@@ -7,6 +7,7 @@ from .access import active_membership
 from .extensions import db
 from .learning_models import (
     CourseMindMap,
+    CourseMindMapVersion,
     MockExamAttempt,
     StudentInsightSnapshot,
     WeaknessAnalysisSnapshot,
@@ -21,6 +22,7 @@ from .learning_service import (
     create_weakness_snapshot,
     insight_to_dict,
     mind_map_to_dict,
+    mind_map_version_to_dict,
     refresh_student_insights,
     save_mock_answers,
     submit_mock_exam,
@@ -208,6 +210,24 @@ def add_mind_map_version_route(mind_map_id):
     except LearningServiceError as error:
         return _error(error)
     return jsonify(mind_map_to_dict(mind_map)), 201
+
+
+@education_learning_api.get("/mind-maps/<mind_map_id>/versions")
+@jwt_required()
+def list_mind_map_versions(mind_map_id):
+    actor = get_jwt_identity()
+    mind_map = CourseMindMap.query.filter_by(id=mind_map_id, status="active").first()
+    membership = active_membership(mind_map.course_id, actor) if mind_map else None
+    if not mind_map or not membership or (
+        membership.role != "teacher" and mind_map.owner_user_id != actor
+    ):
+        return jsonify({"error": "mind map not found"}), 404
+    rows = (
+        CourseMindMapVersion.query.filter_by(mind_map_id=mind_map.id)
+        .order_by(CourseMindMapVersion.version_number.desc())
+        .all()
+    )
+    return jsonify({"items": [mind_map_version_to_dict(mind_map, row) for row in rows]})
 
 
 @education_learning_api.post("/courses/<course_id>/student-insights/refresh")

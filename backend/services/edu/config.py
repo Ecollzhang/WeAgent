@@ -41,3 +41,6 @@ class Config:
     EDUCATION_TOOL_GRANT_TTL_SECONDS = int(
         os.getenv('EDUCATION_TOOL_GRANT_TTL_SECONDS', '1800')
     )
+    EDUCATION_ENABLE_PUBLIC_SEARCH = os.getenv(
+        'EDUCATION_ENABLE_PUBLIC_SEARCH', 'true'
+    ).lower() in ('1', 'true', 'yes', 'on')

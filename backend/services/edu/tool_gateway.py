@@ -58,6 +58,8 @@ from .learning_service import (
 )
 from .models import Course, CourseMemberProfile, CourseMembership
 from .tool_models import EducationToolCall, EducationToolGrant
+from .resource_pipeline import ResourceScope
+from .web_resource_service import WebResourceAdoptionError, adopt_web_knowledge_resource
 
 
 TEACHER = "teacher"
@@ -181,6 +183,15 @@ TOOL_CATALOG = {
                 "query": {"type": "string"},
                 "limit": {"type": "integer"},
             }
+        ),
+    },
+    "edu.web.research": {
+        "description": "Search public sources, fetch candidate bodies, retrieve and rerank them.",
+        "roles": [TEACHER],
+        "mode": "read",
+        "input_schema": _object_schema(
+            {"query": {"type": "string"}, "limit": {"type": "integer"}},
+            ["query"],
         ),
     },
     "edu.course.create": {
@@ -339,6 +350,21 @@ TOOL_CATALOG = {
             ["title", "duration_minutes", "item_ids"],
         ),
     },
+    "edu.knowledge.resource.adopt": {
+        "description": "Refetch and adopt one rights-confirmed public source as a teacher draft.",
+        "roles": [TEACHER],
+        "mode": "write",
+        "input_schema": _object_schema(
+            {
+                "url": {"type": "string"},
+                "title": {"type": "string"},
+                "search_excerpt": {"type": "string"},
+                "license_note": {"type": "string"},
+                "teacher_confirmed_rights": {"type": "boolean"},
+            },
+            ["url", "title", "license_note", "teacher_confirmed_rights"],
+        ),
+    },
     "edu.student_insight.refresh": {
         "description": "Refresh evidence-backed student insight snapshots.",
         "roles": [TEACHER],
@@ -397,6 +423,9 @@ TOOL_CATALOG = {
         "input_schema": _object_schema(
             {
                 "title": {"type": "string"},
+                "scope_type": {"type": "string", "enum": ["course", "lesson", "custom"]},
+                "lesson_ids": {"type": "array", "items": {"type": "string"}},
+                "document": {"type": "object"},
                 "tree": {"type": "object"},
                 "source_refs": {
                     "type": "array",
@@ -1259,6 +1288,41 @@ def _paper_compose(grant, arguments):
     return paper_to_dict(paper)
 
 
+def _web_research(grant, arguments):
+    pipeline = current_app.config.get("EDUCATION_RESOURCE_PIPELINE")
+    if pipeline is None:
+        raise ToolGatewayError(
+            "public search is not configured", 503, "resource_search_unconfigured"
+        )
+    try:
+        return pipeline.research(
+            str(arguments.get("query") or ""),
+            scope=ResourceScope(
+                user_id=grant.actor_user_id,
+                domain="edu",
+                course_ids=(grant.course_id,),
+            ),
+            limit=arguments.get("limit") or 5,
+        )
+    except (TypeError, ValueError) as error:
+        raise ToolGatewayError(str(error), 400, "invalid_research_request") from error
+
+
+def _adopt_web_resource(grant, arguments):
+    try:
+        resource = adopt_web_knowledge_resource(
+            course_id=grant.course_id,
+            actor=grant.actor_user_id,
+            data=arguments,
+            fetcher=current_app.config.get("EDUCATION_CONTENT_FETCHER"),
+        )
+    except WebResourceAdoptionError as error:
+        raise ToolGatewayError(
+            error.message, error.status_code, error.error_code
+        ) from error
+    return knowledge_resource_to_dict(resource)
+
+
 def _submission_review_scope(grant, submission_id):
     if not str(submission_id or "").strip() and grant.agent_run_id:
         from .workflow_models import EducationAgentRun
@@ -1449,6 +1513,7 @@ DISPATCH = {
     "edu.course.context.get": _course_context,
     "edu.question_bank.search": _question_search,
     "edu.knowledge.search": _knowledge_search,
+    "edu.web.research": _web_research,
     "edu.course.create": _create_course,
     "edu.course.members.import": _import_members,
     "edu.lesson.create": _create_lesson,
@@ -1456,6 +1521,7 @@ DISPATCH = {
     "edu.asset.attach": _attach_asset,
     "edu.question_bank.upsert": _question_upsert,
     "edu.paper.compose": _paper_compose,
+    "edu.knowledge.resource.adopt": _adopt_web_resource,
     "edu.submission_review.context.get": _submission_review_context,
     "edu.submission_review.analysis.create": _submission_review_analysis,
     "edu.student_insight.refresh": _student_insight,
@@ -1467,6 +1533,9 @@ DISPATCH = {
 PRODUCT_WRITE_AGENT = {
     ("product.roster_import", "edu.course.members.import"): "_edu_1",
     ("product.courseware", "edu.courseware.create"): "_edu_2",
+    ("product.question_generation", "edu.question_bank.upsert"): "_edu_3",
+    ("product.paper_generation", "edu.paper.compose"): "_edu_3",
+    ("product.knowledge_research", "edu.knowledge.resource.adopt"): "_edu_8",
     ("product.student_insight", "edu.student_insight.refresh"): "_edu_4",
     ("product.submission_review", "edu.submission_review.analysis.create"): "_edu_4",
     ("product.mock_exam", "edu.mock_exam.create"): "_edu_6",

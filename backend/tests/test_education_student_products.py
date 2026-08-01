@@ -365,6 +365,85 @@ def test_student_mind_map_is_versioned_editable_and_source_linked(app):
     ).status_code == 404
 
 
+def test_lesson_mind_map_v2_validates_relations_and_exposes_version_history(app):
+    from services.edu.content_models import Lesson
+
+    client = app.test_client()
+    teacher, student, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Evidence and inference",
+            "learning_domain": "reading",
+            "theme_code": "growth",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    with app.app_context():
+        Lesson.query.filter_by(id=lesson["id"]).one().status = "published"
+        db.session.commit()
+
+    created = client.post(
+        f"/api/edu/courses/{course['id']}/mind-maps",
+        headers=student,
+        json={
+            "title": "Lesson map",
+            "scope_type": "lesson",
+            "lesson_ids": [lesson["id"]],
+        },
+    )
+    assert created.status_code == 201
+    mind_map = created.get_json()
+    assert mind_map["scope_type"] == "lesson"
+    assert mind_map["lesson_ids"] == [lesson["id"]]
+    assert mind_map["current_version"]["document"]["schema_name"] == "education_mind_map_v2"
+    assert mind_map["current_version"]["document"]["scope_type"] == "lesson"
+
+    document = {
+        "schema_name": "education_mind_map_v2",
+        "scope_type": "lesson",
+        "lesson_ids": [lesson["id"]],
+        "root": {
+            "id": "root",
+            "label": "Evidence",
+            "children": [
+                {"id": "quote", "label": "Quote", "children": []},
+                {"id": "inference", "label": "Inference", "children": []},
+            ],
+        },
+        "relations": [
+            {"id": "r1", "from": "quote", "to": "inference", "label": "supports", "type": "cross_link"}
+        ],
+        "view": {"direction": "right", "theme": "education_clear"},
+    }
+    saved = client.post(
+        f"/api/edu/mind-maps/{mind_map['id']}/versions",
+        headers=student,
+        json={"document": document, "source_refs": [], "change_summary": "Add evidence relation"},
+    )
+    assert saved.status_code == 201
+    assert saved.get_json()["current_version"]["version_number"] == 2
+    assert saved.get_json()["current_version"]["relations"][0]["from"] == "quote"
+
+    invalid = {**document, "relations": [{"id": "bad", "from": "quote", "to": "missing", "label": "bad", "type": "cross_link"}]}
+    rejected = client.post(
+        f"/api/edu/mind-maps/{mind_map['id']}/versions",
+        headers=student,
+        json={"document": invalid, "source_refs": []},
+    )
+    assert rejected.status_code == 400
+    assert rejected.get_json()["error_code"] == "invalid_mind_map_relations"
+
+    history = client.get(
+        f"/api/edu/mind-maps/{mind_map['id']}/versions", headers=student
+    )
+    assert history.status_code == 200
+    assert [row["version_number"] for row in history.get_json()["items"]] == [2, 1]
+
+
 def test_teacher_insight_reports_insufficient_data_without_fabricated_scores(app):
     client = app.test_client()
     teacher, _, course = setup_course(client, app)

@@ -645,11 +645,87 @@ def _validate_tree(tree):
             visit(child, depth + 1)
 
     visit(tree, 0)
-    return tree
+    return tree, seen
 
 
-def _create_mind_map_version(mind_map, actor, tree, source_refs, change_summary):
-    _validate_tree(tree)
+def _normalize_mind_map_document(mind_map, value):
+    if isinstance(value, dict) and value.get("schema_name") == "education_mind_map_v2":
+        document = dict(value)
+        root = document.get("root")
+    else:
+        document = {
+            "schema_name": "education_mind_map_v2",
+            "scope_type": mind_map.scope_type or "course",
+            "lesson_ids": mind_map.lesson_ids or [],
+            "root": value,
+            "relations": [],
+            "view": {"direction": "right", "theme": "education_clear"},
+        }
+        root = value
+    root, node_ids = _validate_tree(root)
+    scope_type = str(document.get("scope_type") or mind_map.scope_type or "course")
+    lesson_ids = document.get("lesson_ids") or []
+    if scope_type != mind_map.scope_type or list(lesson_ids) != list(mind_map.lesson_ids or []):
+        raise LearningServiceError(
+            "mind-map scope cannot change inside a content version",
+            400,
+            "invalid_mind_map_scope",
+        )
+    relations = document.get("relations") or []
+    if not isinstance(relations, list) or len(relations) > 1000:
+        raise LearningServiceError(
+            "relations must be a list of at most 1000 edges",
+            400,
+            "invalid_mind_map_relations",
+        )
+    relation_ids = set()
+    normalized_relations = []
+    for relation in relations:
+        if not isinstance(relation, dict):
+            raise LearningServiceError(
+                "every relation must be an object", 400, "invalid_mind_map_relations"
+            )
+        relation_id = str(relation.get("id") or "").strip()
+        source = str(relation.get("from") or "").strip()
+        target = str(relation.get("to") or "").strip()
+        label = str(relation.get("label") or "").strip()[:100]
+        relation_type = str(relation.get("type") or "cross_link").strip()
+        if (
+            not relation_id
+            or relation_id in relation_ids
+            or source not in node_ids
+            or target not in node_ids
+            or source == target
+            or relation_type != "cross_link"
+        ):
+            raise LearningServiceError(
+                "relations require unique ids and existing distinct endpoints",
+                400,
+                "invalid_mind_map_relations",
+            )
+        relation_ids.add(relation_id)
+        normalized_relations.append(
+            {"id": relation_id, "from": source, "to": target, "label": label, "type": relation_type}
+        )
+    view = document.get("view") or {}
+    direction = str(view.get("direction") or "right")
+    theme = str(view.get("theme") or "education_clear")
+    if direction not in {"right", "both", "down"} or theme != "education_clear":
+        raise LearningServiceError(
+            "unsupported mind-map view", 400, "invalid_mind_map_view"
+        )
+    return {
+        "schema_name": "education_mind_map_v2",
+        "scope_type": scope_type,
+        "lesson_ids": list(lesson_ids),
+        "root": root,
+        "relations": normalized_relations,
+        "view": {"direction": direction, "theme": theme},
+    }
+
+
+def _create_mind_map_version(mind_map, actor, document, source_refs, change_summary):
+    document = _normalize_mind_map_document(mind_map, document)
     if not isinstance(source_refs, list) or not all(
         isinstance(value, str) for value in source_refs
     ):
@@ -666,10 +742,10 @@ def _create_mind_map_version(mind_map, actor, tree, source_refs, change_summary)
     version = CourseMindMapVersion(
         mind_map_id=mind_map.id,
         version_number=(previous.version_number + 1 if previous else 1),
-        tree_json=tree,
+        tree_json=document,
         source_refs=list(dict.fromkeys(source_refs)),
         change_summary=str(change_summary or "")[:500],
-        checksum=_checksum({"tree": tree, "source_refs": source_refs}),
+        checksum=_checksum({"document": document, "source_refs": source_refs}),
         created_by_user_id=actor,
     )
     db.session.add(version)
@@ -681,11 +757,31 @@ def _create_mind_map_version(mind_map, actor, tree, source_refs, change_summary)
 def create_mind_map(course_id, actor, data):
     _student(course_id, actor)
     course = Course.query.filter_by(id=course_id, status="active").one()
-    lessons = (
+    published_lessons = (
         Lesson.query.filter_by(course_id=course_id, status="published")
         .order_by(Lesson.position.asc(), Lesson.created_at.asc())
         .all()
     )
+    scope_type = str(data.get("scope_type") or "course").strip()
+    if scope_type not in {"course", "lesson", "custom"}:
+        raise LearningServiceError("unsupported mind-map scope", 400, "invalid_mind_map_scope")
+    requested_lesson_ids = data.get("lesson_ids") or []
+    if not isinstance(requested_lesson_ids, list):
+        raise LearningServiceError("lesson_ids must be a list", 400, "invalid_mind_map_scope")
+    published_by_id = {lesson.id: lesson for lesson in published_lessons}
+    if scope_type == "course":
+        lesson_ids = [lesson.id for lesson in published_lessons]
+    else:
+        lesson_ids = list(dict.fromkeys(str(value) for value in requested_lesson_ids if value))
+        if (scope_type == "lesson" and len(lesson_ids) != 1) or not lesson_ids:
+            raise LearningServiceError(
+                "lesson scope requires one published lesson", 400, "invalid_mind_map_scope"
+            )
+        if any(lesson_id not in published_by_id for lesson_id in lesson_ids):
+            raise LearningServiceError(
+                "one or more lessons are unavailable", 400, "invalid_mind_map_scope"
+            )
+    lessons = [published_by_id[lesson_id] for lesson_id in lesson_ids]
     resources = (
         KnowledgeResource.query.filter_by(
             course_id=course_id,
@@ -721,21 +817,33 @@ def create_mind_map(course_id, actor, data):
         course_id=course_id,
         owner_user_id=actor,
         title=str(data.get("title") or f"{course.title}思维导图").strip(),
+        scope_type=scope_type,
+        lesson_ids=lesson_ids,
     )
     db.session.add(mind_map)
     db.session.flush()
-    _create_mind_map_version(
-        mind_map,
-        actor,
-        {
+    generated_document = {
+        "schema_name": "education_mind_map_v2",
+        "scope_type": scope_type,
+        "lesson_ids": lesson_ids,
+        "root": {
             "id": f"course:{course.id}",
-            "label": course.title,
+            "label": (lessons[0].title if scope_type == "lesson" else course.title),
             "children": children,
             "source_ref": course.id,
             "source_type": "course",
         },
-        source_refs,
-        "Generated from published course sources",
+        "relations": [],
+        "view": {"direction": "right", "theme": "education_clear"},
+    }
+    supplied_document = data.get("document") or data.get("tree")
+    supplied_refs = data.get("source_refs")
+    _create_mind_map_version(
+        mind_map,
+        actor,
+        supplied_document or generated_document,
+        supplied_refs if isinstance(supplied_refs, list) else source_refs,
+        str(data.get("change_summary") or "Generated from published course sources"),
     )
     return mind_map
 
@@ -764,40 +872,44 @@ def add_mind_map_version(mind_map, actor, data):
     _create_mind_map_version(
         mind_map,
         actor,
-        data.get("tree"),
+        data.get("document") or data.get("tree"),
         data.get("source_refs") or [],
         data.get("change_summary") or "",
     )
     return mind_map
 
 
+def mind_map_version_to_dict(mind_map, version):
+    if not version:
+        return None
+    stored = version.tree_json or {}
+    document = _normalize_mind_map_document(mind_map, stored)
+    return {
+        "id": version.id,
+        "version_number": version.version_number,
+        "document": document,
+        "tree": document["root"],
+        "relations": document["relations"],
+        "source_refs": version.source_refs or [],
+        "change_summary": version.change_summary,
+        "checksum": version.checksum,
+        "created_by_user_id": version.created_by_user_id,
+        "created_at": version.created_at.isoformat() if version.created_at else None,
+    }
+
+
 def mind_map_to_dict(mind_map):
-    version = CourseMindMapVersion.query.filter_by(
-        id=mind_map.current_version_id
-    ).first()
+    version = CourseMindMapVersion.query.filter_by(id=mind_map.current_version_id).first()
     return {
         "id": mind_map.id,
         "course_id": mind_map.course_id,
         "owner_user_id": mind_map.owner_user_id,
         "title": mind_map.title,
+        "scope_type": mind_map.scope_type or "course",
+        "lesson_ids": mind_map.lesson_ids or [],
         "status": mind_map.status,
         "current_version_id": mind_map.current_version_id,
-        "current_version": (
-            {
-                "id": version.id,
-                "version_number": version.version_number,
-                "tree": version.tree_json,
-                "source_refs": version.source_refs or [],
-                "change_summary": version.change_summary,
-                "checksum": version.checksum,
-                "created_by_user_id": version.created_by_user_id,
-                "created_at": (
-                    version.created_at.isoformat() if version.created_at else None
-                ),
-            }
-            if version
-            else None
-        ),
+        "current_version": mind_map_version_to_dict(mind_map, version),
         "created_at": mind_map.created_at.isoformat() if mind_map.created_at else None,
         "updated_at": mind_map.updated_at.isoformat() if mind_map.updated_at else None,
     }

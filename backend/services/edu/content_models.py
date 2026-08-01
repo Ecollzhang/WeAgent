@@ -181,6 +181,42 @@ class Assignment(TimestampMixin, db.Model):
     status = db.Column(db.String(20), nullable=False, default="draft")
     published_by = db.Column(db.String(100))
     published_at = db.Column(db.DateTime)
+    current_version_id = db.Column(db.String(36), index=True)
+    published_version_id = db.Column(db.String(36), index=True)
+
+
+class AssignmentContentVersion(db.Model):
+    """Immutable teacher-authored assignment snapshot.
+
+    ``Assignment`` keeps compatibility mirror fields for analytics and older
+    integrations. Student delivery is resolved through ``published_version_id``
+    so a teacher can prepare the next draft without changing an active task.
+    """
+
+    __tablename__ = "edu_assignment_content_versions"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "assignment_id", "version_number", name="uq_edu_assignment_content_version"
+        ),
+    )
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    assignment_id = db.Column(
+        db.String(36), db.ForeignKey("edu_assignments.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    version_number = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    kind = db.Column(db.String(20), nullable=False)
+    instruction_json = db.Column(db.JSON, nullable=False)
+    evaluation_json = db.Column(db.JSON, nullable=False, default=dict)
+    source_asset_ids = db.Column(db.JSON, nullable=False, default=list)
+    max_score = db.Column(db.Float, nullable=False, default=100.0)
+    max_attempts = db.Column(db.Integer, nullable=False, default=1)
+    allow_revision_after_feedback = db.Column(db.Boolean, nullable=False, default=True)
+    created_by = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    published_at = db.Column(db.DateTime)
 
 
 class AssignmentImportJob(TimestampMixin, db.Model):

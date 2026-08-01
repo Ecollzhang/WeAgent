@@ -7,6 +7,9 @@ an immutable server-issued scope.
 
 from __future__ import annotations
 
+import json
+import re
+import urllib.parse
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Protocol, Sequence
@@ -60,6 +63,95 @@ class Reranker(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
+class WikipediaSearchProvider:
+    """Keyless public discovery provider with a stable JSON contract."""
+
+    def __init__(self, language="zh", fetch=None):
+        if fetch is None:
+            from app.sandbox.container.tools import _http_fetch
+
+            fetch = _http_fetch
+        self.language = language if language in {"zh", "en"} else "zh"
+        self._fetch = fetch
+
+    def search(self, query: str, limit: int) -> Sequence[SearchCandidate]:
+        params = urllib.parse.urlencode(
+            {
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": query,
+                "gsrlimit": max(1, min(int(limit or 5), 20)),
+                "prop": "info|extracts",
+                "inprop": "url",
+                "exintro": 1,
+                "explaintext": 1,
+                "exsentences": 2,
+                "format": "json",
+                "origin": "*",
+            }
+        )
+        response = self._fetch(
+            f"https://{self.language}.wikipedia.org/w/api.php?{params}",
+            max_bytes=120_000,
+        )
+        if int(response.get("status_code") or 0) != 200:
+            raise RuntimeError("Wikipedia search is unavailable")
+        payload = json.loads(response.get("body_preview") or "{}")
+        pages = ((payload.get("query") or {}).get("pages") or {}).values()
+        return [
+            SearchCandidate(
+                url=str(page.get("fullurl") or "").strip(),
+                title=str(page.get("title") or "").strip(),
+                excerpt=str(page.get("extract") or "").strip(),
+            )
+            for page in pages
+            if page.get("fullurl") and page.get("title")
+        ][:limit]
+
+
+class DuckDuckGoSearchProvider:
+    """Fallback discovery provider using the public Instant Answer API."""
+
+    def __init__(self, fetch=None):
+        if fetch is None:
+            from app.sandbox.container.tools import _http_fetch
+
+            fetch = _http_fetch
+        self._fetch = fetch
+
+    def search(self, query: str, limit: int) -> Sequence[SearchCandidate]:
+        params = urllib.parse.urlencode(
+            {"q": query, "format": "json", "no_html": 1, "skip_disambig": 1}
+        )
+        response = self._fetch(
+            f"https://api.duckduckgo.com/?{params}", max_bytes=120_000
+        )
+        if int(response.get("status_code") or 0) != 200:
+            raise RuntimeError("Fallback search is unavailable")
+        payload = json.loads(response.get("body_preview") or "{}")
+        rows = []
+        if payload.get("AbstractURL"):
+            rows.append(
+                SearchCandidate(
+                    url=payload["AbstractURL"],
+                    title=payload.get("Heading") or query,
+                    excerpt=payload.get("AbstractText") or "",
+                )
+            )
+        for topic in payload.get("RelatedTopics") or []:
+            nested = topic.get("Topics") if isinstance(topic, dict) else None
+            for item in (nested or [topic]):
+                if isinstance(item, dict) and item.get("FirstURL"):
+                    rows.append(
+                        SearchCandidate(
+                            url=item["FirstURL"],
+                            title=(item.get("Text") or query).split(" - ", 1)[0],
+                            excerpt=item.get("Text") or "",
+                        )
+                    )
+        return rows[: max(1, min(int(limit or 5), 20))]
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -111,6 +203,42 @@ class SafeWebPageReader:
             "text": text,
             "search_excerpt": candidate.excerpt,
         }
+
+
+class LexicalRetriever:
+    """Small deterministic retrieval adapter for freshly fetched documents."""
+
+    def retrieve(self, query, documents, scope, limit):
+        terms = set(re.findall(r"[\w\u4e00-\u9fff]+", query.lower()))
+        rows = []
+        for document in documents:
+            haystack = f"{document.get('title', '')} {document.get('text', '')}".lower()
+            hits = sum(1 for term in terms if term in haystack)
+            rows.append({**document, "retrieval_score": hits / max(1, len(terms))})
+        return sorted(rows, key=lambda row: row["retrieval_score"], reverse=True)[:limit]
+
+
+class ScoreReranker:
+    def rerank(self, query, results, limit):
+        return [
+            {**row, "score": round(float(row.get("retrieval_score") or 0), 4)}
+            for row in results[:limit]
+        ]
+
+
+def build_public_resource_pipeline():
+    """Build isolated provider adapters; business code never sees provider JSON."""
+
+    return EducationResourcePipeline(
+        search_providers=[
+            WikipediaSearchProvider("zh"),
+            WikipediaSearchProvider("en"),
+            DuckDuckGoSearchProvider(),
+        ],
+        content_fetcher=SafeWebPageReader(),
+        retriever=LexicalRetriever(),
+        reranker=ScoreReranker(),
+    )
 
 
 class EducationResourcePipeline:

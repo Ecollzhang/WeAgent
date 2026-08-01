@@ -14,6 +14,9 @@ def product_business_route(product_code, course_id, lesson_id=None, options=None
     routes = {
         "roster_import": f"/education/courses/{course_id}",
         "courseware": "/education/teacher/courseware",
+        "question_generation": f"/education/courses/{course_id}/knowledge",
+        "paper_generation": f"/education/courses/{course_id}/knowledge",
+        "knowledge_research": f"/education/courses/{course_id}/knowledge",
         "student_insight": "/education/teacher/insights",
         "submission_review": (
             f"/education/courses/{course_id}/assignments/"
@@ -40,6 +43,21 @@ PRODUCT_ADOPTED_OBJECTS = {
         "edu.courseware.create",
         "courseware",
         "slide_document",
+    ),
+    "product.question_generation": (
+        "edu.question_bank.upsert",
+        "question_bank",
+        "question_bank",
+    ),
+    "product.paper_generation": (
+        "edu.paper.compose",
+        "assessment_paper",
+        "assessment_paper",
+    ),
+    "product.knowledge_research": (
+        "edu.knowledge.resource.adopt",
+        "knowledge_resource",
+        "knowledge_resource",
     ),
     "product.student_insight": (
         "edu.student_insight.refresh",

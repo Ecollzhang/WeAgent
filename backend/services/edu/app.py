@@ -37,6 +37,15 @@ def create_edu_app(config_object=Config):
     app = service.app
     app.extensions["domain_service"] = service
     app.extensions["education_runtime_client"] = CoreRuntimeClient()
+    if app.config.get("EDUCATION_ENABLE_PUBLIC_SEARCH", False):
+        try:
+            from .resource_pipeline import build_public_resource_pipeline
+        except ImportError:  # Support ``python services/edu/app.py``.
+            from services.edu.resource_pipeline import build_public_resource_pipeline
+
+        resource_pipeline = build_public_resource_pipeline()
+        app.config["EDUCATION_RESOURCE_PIPELINE"] = resource_pipeline
+        app.config["EDUCATION_CONTENT_FETCHER"] = resource_pipeline.content_fetcher
 
     @app.before_request
     def enforce_feature_gate():
@@ -73,7 +82,10 @@ def create_edu_app(config_object=Config):
 
     @app.cli.command("migrate-education")
     def migrate_education_command():
-        from .schema_maintenance import migrate_existing_education_schema
+        try:
+            from .schema_maintenance import migrate_existing_education_schema
+        except ImportError:  # Support file-path entrypoint imports.
+            from services.edu.schema_maintenance import migrate_existing_education_schema
 
         db.create_all()
         changes = migrate_existing_education_schema()

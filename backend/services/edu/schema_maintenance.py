@@ -164,6 +164,151 @@ def migrate_existing_education_schema():
                     )
                 )
             changes.append("edu_assignments.source_asset_ids")
+        for column_name in ("current_version_id", "published_version_id"):
+            if column_name not in columns:
+                with db.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE edu_assignments "
+                            f"ADD COLUMN {column_name} VARCHAR(36) DEFAULT NULL"
+                        )
+                    )
+                changes.append(f"edu_assignments.{column_name}")
+
+        indexes = {
+            index["name"]
+            for index in inspect(db.engine).get_indexes("edu_assignments")
+        }
+        for column_name in ("current_version_id", "published_version_id"):
+            index_name = f"ix_edu_assignments_{column_name}"
+            if index_name not in indexes:
+                with db.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            f"CREATE INDEX {index_name} "
+                            f"ON edu_assignments ({column_name})"
+                        )
+                    )
+                changes.append(index_name)
+
+        # ``create_all`` creates the immutable version table before this
+        # compatibility pass. Backfill one canonical snapshot for legacy rows.
+        from .content_models import Assignment, AssignmentContentVersion
+
+        backfilled = 0
+        for assignment in Assignment.query.filter(
+            Assignment.current_version_id.is_(None)
+        ).all():
+            version = AssignmentContentVersion(
+                assignment_id=assignment.id,
+                version_number=1,
+                title=assignment.title,
+                kind=assignment.kind,
+                instruction_json=assignment.instruction_json,
+                evaluation_json=assignment.evaluation_json or {},
+                source_asset_ids=assignment.source_asset_ids or [],
+                max_score=assignment.max_score,
+                max_attempts=assignment.max_attempts,
+                allow_revision_after_feedback=assignment.allow_revision_after_feedback,
+                created_by=assignment.published_by or "schema_migration",
+                published_at=(
+                    assignment.published_at
+                    if assignment.status == "published"
+                    else None
+                ),
+            )
+            db.session.add(version)
+            db.session.flush()
+            assignment.current_version_id = version.id
+            if assignment.status == "published":
+                assignment.published_version_id = version.id
+            backfilled += 1
+        if backfilled:
+            db.session.commit()
+            changes.append("edu_assignments.content_versions_backfilled")
+
+        # Migrate only assets proven to be assignment sources. File extension
+        # heuristics are intentionally excluded.
+        from .asset_models import EducationAsset
+        from .content_models import AssignmentImportJob
+
+        assignment_source_ids = {
+            row.source_asset_id
+            for row in AssignmentImportJob.query.with_entities(
+                AssignmentImportJob.source_asset_id
+            ).all()
+            if row.source_asset_id
+        }
+        for assignment in Assignment.query.all():
+            assignment_source_ids.update(assignment.source_asset_ids or [])
+        migrated_assets = 0
+        if assignment_source_ids:
+            assets = EducationAsset.query.filter(
+                EducationAsset.id.in_(assignment_source_ids),
+                EducationAsset.purpose == "course_material",
+            ).all()
+            for asset in assets:
+                asset.purpose = "assignment_source"
+                migrated_assets += 1
+        if migrated_assets:
+            db.session.commit()
+            changes.append("edu_assets.assignment_source_migrated")
+    if "edu_course_mind_maps" in tables:
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns("edu_course_mind_maps")
+        }
+        if "scope_type" not in columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_course_mind_maps "
+                        "ADD COLUMN scope_type VARCHAR(20) NOT NULL DEFAULT 'course'"
+                    )
+                )
+            changes.append("edu_course_mind_maps.scope_type")
+        if "lesson_ids" not in columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_course_mind_maps "
+                        "ADD COLUMN lesson_ids JSON NULL"
+                    )
+                )
+                if db.engine.dialect.name == "mysql":
+                    connection.execute(
+                        text(
+                            "UPDATE edu_course_mind_maps SET lesson_ids = JSON_ARRAY() "
+                            "WHERE lesson_ids IS NULL"
+                        )
+                    )
+                    connection.execute(
+                        text(
+                            "ALTER TABLE edu_course_mind_maps "
+                            "MODIFY COLUMN lesson_ids JSON NOT NULL"
+                        )
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            "UPDATE edu_course_mind_maps SET lesson_ids = '[]' "
+                            "WHERE lesson_ids IS NULL"
+                        )
+                    )
+            changes.append("edu_course_mind_maps.lesson_ids")
+        indexes = {
+            index["name"]
+            for index in inspect(db.engine).get_indexes("edu_course_mind_maps")
+        }
+        if "ix_edu_course_mind_maps_scope_type" not in indexes:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE INDEX ix_edu_course_mind_maps_scope_type "
+                        "ON edu_course_mind_maps (scope_type)"
+                    )
+                )
+            changes.append("ix_edu_course_mind_maps_scope_type")
     if "edu_feedback" in tables:
         columns = {
             column["name"]
