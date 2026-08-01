@@ -12,7 +12,6 @@ export const updateActionItem = (id, data) => axios.put(`${root}/meetings/action
 export const listSchedules = params => axios.get(`${root}/schedules`, { params })
 export const createSchedule = data => axios.post(`${root}/schedules`, data)
 export const updateSchedule = (id, data) => axios.put(`${root}/schedules/${id}`, data)
-export const getDashboard = workspaceId => axios.get(`${root}/dashboard/summary`, { params: { workspace_id: workspaceId } })
 export const listDocuments = params => axios.get(`${root}/documents`, { params })
 export const getDocument = id => axios.get(`${root}/documents/${id}`)
 export const createDocument = data => axios.post(`${root}/documents`, data)

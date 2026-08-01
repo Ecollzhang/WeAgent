@@ -19,7 +19,6 @@ from sqlalchemy import inspect, text
 service = DomainServiceBase(Config, db_instance=db)
 app = service.app
 
-from controllers.dashboard_controller import dashboard_bp
 from controllers.approval_controller import approval_bp
 from controllers.document_controller import document_bp
 from controllers.meeting_controller import meeting_bp
@@ -29,7 +28,6 @@ from controllers.organization_controller import organization_bp
 
 app.register_blueprint(meeting_bp, url_prefix='/api/office/meetings')
 app.register_blueprint(schedule_bp, url_prefix='/api/office/schedules')
-app.register_blueprint(dashboard_bp, url_prefix='/api/office/dashboard')
 app.register_blueprint(document_bp, url_prefix='/api/office/documents')
 app.register_blueprint(template_bp, url_prefix='/api/office/document-templates')
 app.register_blueprint(approval_bp, url_prefix='/api/office/approvals')

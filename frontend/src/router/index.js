@@ -139,17 +139,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
-    path: '/reports',
-    name: 'reports',
-    component: () => import('../views/OfficeDashboardDense.vue'),
-    meta: { requiresAuth: true },
-  },
-  {
     path: '/schedules',
     name: 'schedules',
     component: () => import('../views/OfficeWorkspace.vue'),
     meta: { requiresAuth: true },
   },
+  { path: '/reports', redirect: '/meetings' },
   { path: '/tasks', redirect: '/meetings' },
   { path: '/organization', name: 'organization', component: () => import('../views/OfficeOrganizationCompact.vue'), meta: { requiresAuth: true } },
   { path: '/notifications', name: 'notifications', component: () => import('../views/OfficeNotifications.vue'), meta: { requiresAuth: true } },

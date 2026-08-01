@@ -103,7 +103,6 @@ const DOMAIN_NAV = {
     { key: 'organization', label: '组织协同', route: '/organization', activePath: '/organization', iconClass: 'el-icon-s-custom' },
     { key: 'ui.sidebar.meetings', label: '\u4f1a\u8bae\u4efb\u52a1', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
     { key: 'ui.sidebar.documents', label: '公文审批', route: '/documents', activePath: '/documents', iconClass: 'el-icon-document' },
-    { key: 'ui.sidebar.reports', label: '办公看板', route: '/reports', activePath: '/reports', iconClass: 'el-icon-data-line' },
   ],
 }
 
