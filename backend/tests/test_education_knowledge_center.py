@@ -307,6 +307,26 @@ def test_reading_stimulus_groups_questions_and_paper_preview_is_hydrated(app):
     assert grouped["stimuli"][0]["question_count"] == 2
     assert [row["current_version"]["stimulus_order"] for row in grouped["stimuli"][0]["questions"]] == [1, 2]
 
+    revised_stimulus = client.post(
+        f"/api/edu/stimuli/{stimulus['id']}/versions",
+        headers=teacher,
+        json={
+            "content": {
+                "paragraphs": [
+                    "Della counted the money three times. There was only one dollar and eighty-seven cents.",
+                    "She had been saving every penny she could for Jim's present.",
+                ]
+            },
+            "source_refs": stimulus["current_version"]["source_refs"],
+            "language": "en",
+        },
+    )
+    assert revised_stimulus.status_code == 201
+    regrouped = client.get(
+        f"/api/edu/courses/{course['id']}/questions", headers=teacher
+    ).get_json()
+    assert regrouped["stimuli"][0]["question_count"] == 2
+
     paper = client.post(
         f"/api/edu/courses/{course['id']}/papers/compose",
         headers=teacher,
@@ -348,6 +368,76 @@ def test_reading_stimulus_groups_questions_and_paper_preview_is_hydrated(app):
     revised_payload = revised.get_json()
     assert revised_payload["current_version"]["version_number"] == 2
     assert revised_payload["published_version_id"] != revised_payload["current_version_id"]
+
+
+def test_question_bank_can_be_organized_by_course_lesson(app):
+    client = app.test_client()
+    teacher, _, course = course_with_student(client, app)
+    first_lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Reading the opening",
+            "learning_domain": "reading",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    second_lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Explaining the irony",
+            "learning_domain": "writing",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+
+    stimulus = client.post(
+        f"/api/edu/courses/{course['id']}/stimuli",
+        headers=teacher,
+        json={
+            "title": "The Gift of the Magi — opening",
+            "lesson_id": first_lesson["id"],
+            "stimulus_type": "reading_passage",
+            "language": "en",
+            "content": {"paragraphs": ["One dollar and eighty-seven cents. That was all."]},
+            "source_refs": [],
+        },
+    )
+    assert stimulus.status_code == 201
+    assert stimulus.get_json()["lesson_id"] == first_lesson["id"]
+
+    grouped_question = client.post(
+        f"/api/edu/courses/{course['id']}/questions",
+        headers=teacher,
+        json={
+            **question_payload(),
+            "stimulus_version_id": stimulus.get_json()["current_version_id"],
+            "stimulus_order": 1,
+        },
+    )
+    assert grouped_question.status_code == 201
+    assert grouped_question.get_json()["lesson_id"] == first_lesson["id"]
+
+    standalone = client.post(
+        f"/api/edu/courses/{course['id']}/questions",
+        headers=teacher,
+        json={**question_payload(), "title": "Irony transfer", "lesson_id": second_lesson["id"]},
+    )
+    assert standalone.status_code == 201
+    assert standalone.get_json()["lesson_id"] == second_lesson["id"]
+
+    listed = client.get(
+        f"/api/edu/courses/{course['id']}/questions", headers=teacher
+    ).get_json()
+    assert {row["lesson_id"] for row in listed["items"]} == {
+        first_lesson["id"],
+        second_lesson["id"],
+    }
 
 
 def test_knowledge_resource_references_durable_asset_and_summary(app):

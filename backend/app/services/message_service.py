@@ -634,6 +634,14 @@ class MessageService:
                     )
                     or (
                         finalizer
+                        == {
+                            'type':
+                            'education_student_insight_refresh_from_agent_reply'
+                        }
+                        and agent_id == '_edu_4'
+                    )
+                    or (
+                        finalizer
                         == {'type': 'education_questions_from_agent_reply'}
                         and agent_id == '_edu_3'
                     )
@@ -2076,6 +2084,47 @@ class MessageService:
             return {'status': 'ok', 'result': result}
 
         if (
+            finalizer
+            == {
+                'type':
+                'education_student_insight_refresh_from_agent_reply'
+            }
+            and agent_id == '_edu_4'
+        ):
+            try:
+                source = parse_exact_json({'refresh'}, max_bytes=10_000)
+                if source['refresh'] is not True:
+                    raise ValueError('refresh must be true')
+                members = invoke_education('edu.course.members.list', {})
+                member_rows = (
+                    members.get('items') if isinstance(members, dict) else None
+                ) or []
+                source_bytes = json.dumps(
+                    source,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                ).encode('utf-8')
+                refreshed = invoke_education(
+                    'edu.student_insight.refresh',
+                    {},
+                    'product-student-insight-refresh-'
+                    + hashlib.sha256(source_bytes).hexdigest()[:16],
+                )
+            except Exception as error:
+                return {
+                    'status': 'error',
+                    'error': f'Student insight refresh is not adoptable: {error}',
+                }
+            return {
+                'status': 'ok',
+                'result': {
+                    'member_count': len(member_rows),
+                    'refresh': refreshed,
+                },
+            }
+
+        if (
             finalizer == {'type': 'education_paper_from_agent_reply'}
             and agent_id == '_edu_3'
         ):
@@ -2563,6 +2612,18 @@ class MessageService:
                                     'license_note, and teacher_confirmed_rights. Do not use '
                                     'Markdown, tools, progress commands, explanations, or '
                                     'wrapper fields.'
+                                )
+                            elif finalizer == {
+                                'type':
+                                'education_student_insight_refresh_from_agent_reply'
+                            }:
+                                repair_prompt = (
+                                    'The trusted student insight finalizer rejected '
+                                    'your JSON. Exact error: '
+                                    f'{finalizer_result.get("error")}\n'
+                                    'Return only {"refresh":true}. Do not use '
+                                    'Markdown, tools, progress commands, explanations, '
+                                    'paths, or wrapper fields.'
                                 )
                             else:
                                 repair_prompt = (

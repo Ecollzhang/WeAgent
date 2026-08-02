@@ -141,6 +141,34 @@ def test_server_defined_workflow_accepts_bounded_question_finalizer():
     }
 
 
+def test_server_defined_workflow_accepts_bounded_student_insight_finalizer():
+    workflow = {
+        "execution_mode": "server_defined",
+        "nodes": [
+            {
+                "id": "refresh",
+                "type": "agent_task",
+                "agent_id": "_edu_4",
+                "agent_role": "learning_analyst",
+                "finalizer": {
+                    "type": "education_student_insight_refresh_from_agent_reply"
+                },
+            },
+        ],
+        "edges": [],
+    }
+
+    plan = MessageService._server_defined_workflow_plan(
+        workflow,
+        [_worker("_edu_4", "Learning analyst")],
+    )
+
+    assert plan is not None
+    assert plan["tasks"][0]["finalizer"] == {
+        "type": "education_student_insight_refresh_from_agent_reply"
+    }
+
+
 def test_courseware_finalizer_adopts_the_designated_agents_validated_files():
     class FakeManager:
         def __init__(self):
@@ -323,6 +351,60 @@ def test_question_finalizer_validates_json_and_adopts_draft_questions():
         "publish": False,
     }
     assert args["idempotency_key"].startswith("product-question-generation-")
+
+
+def test_student_insight_finalizer_lists_members_then_refreshes_real_evidence():
+    class FakeManager:
+        def __init__(self):
+            self.executed = []
+
+        def execute_tool(self, session_id, agent_id, tool_name, args):
+            self.executed.append((session_id, agent_id, tool_name, args))
+            if args["action"] == "edu.course.members.list":
+                result = {"items": [{"user_id": "student-1", "role": "student"}]}
+            else:
+                result = {
+                    "items": [
+                        {
+                            "student_user_id": "student-1",
+                            "data_state": "ready",
+                        }
+                    ]
+                }
+            return {
+                "status": "ok",
+                "result": {"status": "ok", "result": result},
+            }
+
+    manager = FakeManager()
+
+    result = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_4",
+        {"type": "education_student_insight_refresh_from_agent_reply"},
+        reply='{"refresh":true}',
+    )
+
+    assert result["status"] == "ok"
+    assert [entry[3]["action"] for entry in manager.executed] == [
+        "edu.course.members.list",
+        "edu.student_insight.refresh",
+    ]
+    assert manager.executed[1][3]["idempotency_key"].startswith(
+        "product-student-insight-refresh-"
+    )
+    assert result["result"]["member_count"] == 1
+    assert result["result"]["refresh"]["items"][0]["data_state"] == "ready"
+
+    rejected = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_4",
+        {"type": "education_student_insight_refresh_from_agent_reply"},
+        reply='{"refresh":false}',
+    )
+    assert rejected["status"] == "error"
 
 
 def test_paper_finalizer_searches_real_published_questions_before_composing():

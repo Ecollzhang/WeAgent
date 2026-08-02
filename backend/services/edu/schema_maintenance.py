@@ -92,6 +92,32 @@ def migrate_existing_education_schema():
                 )
             changes.append(index_name)
 
+    for table_name in ("edu_assessment_items", "edu_assessment_stimuli"):
+        if table_name not in tables:
+            continue
+        columns = {
+            column["name"] for column in inspect(db.engine).get_columns(table_name)
+        }
+        if "lesson_id" not in columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} "
+                        "ADD COLUMN lesson_id VARCHAR(36) DEFAULT NULL"
+                    )
+                )
+            changes.append(f"{table_name}.lesson_id")
+        indexes = {
+            index["name"] for index in inspect(db.engine).get_indexes(table_name)
+        }
+        index_name = f"ix_{table_name}_lesson_id"
+        if index_name not in indexes:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(f"CREATE INDEX {index_name} ON {table_name} (lesson_id)")
+                )
+            changes.append(index_name)
+
     if "edu_assessment_item_versions" in tables:
         columns = {
             column["name"]

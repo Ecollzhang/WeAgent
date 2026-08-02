@@ -10,6 +10,7 @@ from .knowledge_models import (
     AssessmentItem,
     AssessmentPaper,
     AssessmentStimulus,
+    AssessmentStimulusVersion,
     KnowledgeResource,
 )
 from .knowledge_service import (
@@ -81,18 +82,30 @@ def list_questions(course_id):
         for row in rows
     ]
     groups = {}
+    referenced_version_ids = {
+        (item.get("current_version") or {}).get("stimulus_version_id")
+        for item in items
+        if (item.get("current_version") or {}).get("stimulus_version_id")
+    }
+    stable_stimulus_ids = {
+        row.id: row.stimulus_id
+        for row in AssessmentStimulusVersion.query.filter(
+            AssessmentStimulusVersion.id.in_(referenced_version_ids)
+        ).all()
+    } if referenced_version_ids else {}
     for item in items:
         version = item.get("current_version") or {}
         stimulus_version_id = version.get("stimulus_version_id")
         if stimulus_version_id:
-            groups.setdefault(stimulus_version_id, []).append(item)
+            stimulus_id = stable_stimulus_ids.get(stimulus_version_id)
+            if stimulus_id:
+                groups.setdefault(stimulus_id, []).append(item)
     stimuli = []
     if groups:
         stimulus_rows = AssessmentStimulus.query.filter_by(course_id=course_id).all()
         for stimulus in stimulus_rows:
             serialized = stimulus_to_dict(stimulus, use_published=use_published)
-            version = serialized.get("current_version") or {}
-            grouped_questions = groups.get(version.get("id"), [])
+            grouped_questions = groups.get(stimulus.id, [])
             if not grouped_questions:
                 continue
             grouped_questions.sort(

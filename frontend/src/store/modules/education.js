@@ -721,9 +721,13 @@ export default {
         getCoursePapers(courseId),
         getKnowledgeResources(courseId),
       ])
+      const questionPayload = payload(questionResponse)
       commit('SET_KNOWLEDGE_SUMMARY', payload(summary))
-      commit('SET_QUESTIONS', items(questionResponse))
-      commit('SET_STIMULI', items(stimulusResponse))
+      commit('SET_QUESTIONS', Array.isArray(questionPayload.items) ? questionPayload.items : [])
+      commit(
+        'SET_STIMULI',
+        Array.isArray(questionPayload.stimuli) ? questionPayload.stimuli : items(stimulusResponse),
+      )
       commit('SET_PAPERS', items(paperResponse))
       commit('SET_KNOWLEDGE_RESOURCES', items(resourceResponse))
       return payload(summary)

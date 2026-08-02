@@ -67,6 +67,7 @@ docs/archive-registry.md
 # ===== AI runtime logs =====
 .claude/logs/
 .runtime/
+tmp/
 
 # ===== Multi-platform clients =====
 clients/**/node_modules/

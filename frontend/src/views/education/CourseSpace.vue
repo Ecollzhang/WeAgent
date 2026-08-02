@@ -369,15 +369,11 @@
               <el-option label="阅读 + 写作" value="mixed" />
             </el-select>
           </el-form-item>
-          <el-form-item label="作业满分">
-            <el-input-number
-              v-model="assignmentForm.max_score"
-              :min="1"
-              :max="10000"
-              :step="5"
-              controls-position="right"
-              style="width:100%"
-            />
+          <el-form-item label="评分方式">
+            <div class="fixed-score-card">
+              <b>百分制总分 100</b>
+              <span>不拆分评分子项；AI 只提供建议，最终分数由教师确认。</span>
+            </div>
           </el-form-item>
         </div>
       </el-form>
@@ -746,7 +742,7 @@ export default {
           assignment: {
             title: this.assignmentForm.title,
             kind: this.assignmentForm.kind,
-            max_score: this.assignmentForm.max_score,
+            max_score: 100,
             instruction_json: { text: this.assignmentForm.instructions },
             evaluation_json: {},
             source_asset_ids: this.assignmentForm.source_asset_ids,
@@ -959,6 +955,9 @@ export default {
 .form-grid-three { grid-template-columns: 1.2fr 1.2fr .8fr; }
 .assignment-import-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .assignment-import-status { margin-top: 10px; }
+.fixed-score-card { min-height: 38px; display: flex; flex-direction: column; justify-content: center; padding: 8px 12px; border: 1px solid #d9e8e4; border-radius: 8px; background: #f4faf8; }
+.fixed-score-card b { color: #287f75; font-size: 13px; }
+.fixed-score-card span { margin-top: 3px; color: #7a8985; font-size: 10px; line-height: 1.45; }
 .dialog-help { margin: 8px 0 0; color: #7b8795; font-size: 12px; line-height: 1.6; }
 .small-empty .el-button { margin-top: 12px; }
 .published-assets { display: grid; gap: 9px; margin-bottom: 16px; }

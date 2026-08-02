@@ -16,6 +16,12 @@ class AssessmentItem(TimestampMixin, db.Model):
         nullable=False,
         index=True,
     )
+    lesson_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_lessons.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     title = db.Column(db.String(200), nullable=False)
     owner_user_id = db.Column(db.String(100), nullable=False, index=True)
     source_type = db.Column(db.String(30), nullable=False, default="teacher")
@@ -153,6 +159,12 @@ class AssessmentStimulus(TimestampMixin, db.Model):
         db.String(36),
         db.ForeignKey("edu_courses.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    lesson_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_lessons.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     title = db.Column(db.String(240), nullable=False)

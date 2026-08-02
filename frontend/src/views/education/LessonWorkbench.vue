@@ -5,32 +5,31 @@
     :back-to="`/education/courses/${courseId}`"
   >
     <template #actions>
-      <el-tag v-if="lesson" :type="lesson.status === 'published' ? 'success' : 'info'">
-        {{ lesson.status === 'published' ? '已发布' : '草稿' }}
-      </el-tag>
-      <el-tag v-if="isTeacher && hasUnsavedChanges" type="warning" effect="plain">
-        有未保存更改
-      </el-tag>
-      <el-button
-        v-if="isTeacher"
-        data-testid="start-agent-workflow"
-        icon="el-icon-cpu"
-        :loading="isAgentRunning"
-        @click="agentDialog = true"
-      >Agent 协作生成</el-button>
-      <el-button
-        v-if="isTeacher"
-        data-testid="save-lesson-version"
-        :loading="saving"
-        @click="saveVersion"
-      >保存新版本</el-button>
-      <el-button
-        v-if="isTeacher"
-        data-testid="publish-lesson"
-        type="primary"
-        :loading="publishing"
-        @click="publishVersion"
-      >发布给学生</el-button>
+      <div class="workbench-action-grid">
+        <el-tag v-if="lesson" :type="lesson.status === 'published' ? 'success' : 'info'">
+          {{ lesson.status === 'published' ? '已发布' : '草稿' }}
+        </el-tag>
+        <el-button
+          v-if="isTeacher"
+          data-testid="start-agent-workflow"
+          icon="el-icon-cpu"
+          :loading="isAgentRunning"
+          @click="agentDialog = true"
+        >Agent 协作生成</el-button>
+        <el-button
+          v-if="isTeacher"
+          data-testid="save-lesson-version"
+          :loading="saving"
+          @click="saveVersion"
+        >保存新版本</el-button>
+        <el-button
+          v-if="isTeacher"
+          data-testid="publish-lesson"
+          type="primary"
+          :loading="publishing"
+          @click="publishVersion"
+        >发布给学生</el-button>
+      </div>
     </template>
 
     <el-skeleton v-if="!lesson" :rows="9" animated />
@@ -979,6 +978,9 @@ export default {
 </script>
 
 <style scoped>
+.workbench-action-grid { display: grid; grid-template-columns: repeat(2, minmax(132px, 1fr)); gap: 8px; align-items: stretch; }
+.workbench-action-grid .el-button { width: 100%; margin: 0; }
+.workbench-action-grid .el-tag { height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 7px; }
 .workbench { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; min-height: 580px; }
 .workbench-nav { padding: 8px; border: 1px solid #e3e9ef; border-radius: 11px; background: #f8fafb; }
 .workbench-nav button {

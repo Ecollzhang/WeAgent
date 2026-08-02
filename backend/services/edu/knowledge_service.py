@@ -9,6 +9,7 @@ from datetime import datetime
 from .access import active_membership
 from .asset_models import EducationAsset
 from .asset_service import asset_to_dict
+from .content_models import Lesson
 from .extensions import db
 from .knowledge_models import (
     AssessmentAnswerVersion,
@@ -68,6 +69,39 @@ def _member(course_id, actor):
     if not membership:
         raise KnowledgeServiceError("course not found", 404, "course_not_found")
     return membership
+
+
+def _lesson_id_for_course(course_id, value):
+    lesson_id = str(value or "").strip() or None
+    if not lesson_id:
+        return None
+    lesson = Lesson.query.filter_by(id=lesson_id, course_id=course_id).first()
+    if not lesson:
+        raise KnowledgeServiceError(
+            "lesson is unavailable for this course", 400, "invalid_lesson_id"
+        )
+    return lesson.id
+
+
+def _question_lesson_id(course_id, data):
+    requested = _lesson_id_for_course(course_id, data.get("lesson_id"))
+    stimulus_version_id = data.get("stimulus_version_id") or None
+    if not stimulus_version_id:
+        return requested
+    version = AssessmentStimulusVersion.query.filter_by(id=stimulus_version_id).first()
+    stimulus = (
+        AssessmentStimulus.query.filter_by(id=version.stimulus_id).first()
+        if version
+        else None
+    )
+    inherited = stimulus.lesson_id if stimulus and stimulus.course_id == course_id else None
+    if requested and inherited and requested != inherited:
+        raise KnowledgeServiceError(
+            "question lesson must match its reading material",
+            400,
+            "stimulus_lesson_mismatch",
+        )
+    return inherited or requested
 
 
 def validate_question_payload(data):
@@ -305,6 +339,7 @@ def create_question(course_id, actor, data, *, source_type="teacher"):
         )
     item = AssessmentItem(
         course_id=course_id,
+        lesson_id=_question_lesson_id(course_id, data),
         title=title,
         owner_user_id=actor,
         source_type=source_type,
@@ -326,6 +361,8 @@ def add_question_version(item, actor, data):
         )
     if data.get("title"):
         item.title = str(data["title"]).strip()
+    if "lesson_id" in data or data.get("stimulus_version_id"):
+        item.lesson_id = _question_lesson_id(item.course_id, data)
     _create_question_version(item, actor, data)
     return item
 
@@ -384,9 +421,21 @@ def question_to_dict(item, *, include_answer=False, use_published=False):
     version = AssessmentItemVersion.query.filter_by(
         id=selected_version_id
     ).first()
+    lesson_id = item.lesson_id
+    if not lesson_id and version and version.stimulus_version_id:
+        stimulus_version = AssessmentStimulusVersion.query.filter_by(
+            id=version.stimulus_version_id
+        ).first()
+        stimulus = (
+            AssessmentStimulus.query.filter_by(id=stimulus_version.stimulus_id).first()
+            if stimulus_version
+            else None
+        )
+        lesson_id = stimulus.lesson_id if stimulus else None
     return {
         "id": item.id,
         "course_id": item.course_id,
+        "lesson_id": lesson_id,
         "title": item.title,
         "source_type": item.source_type,
         "source_agent_run_id": item.source_agent_run_id,
@@ -460,6 +509,7 @@ def create_stimulus(course_id, actor, data):
         )
     stimulus = AssessmentStimulus(
         course_id=course_id,
+        lesson_id=_lesson_id_for_course(course_id, data.get("lesson_id")),
         title=title,
         stimulus_type=stimulus_type,
         owner_user_id=actor,
@@ -474,6 +524,10 @@ def add_stimulus_version(stimulus, actor, data):
     _teacher(stimulus.course_id, actor)
     if data.get("title"):
         stimulus.title = str(data["title"]).strip()
+    if "lesson_id" in data:
+        stimulus.lesson_id = _lesson_id_for_course(
+            stimulus.course_id, data.get("lesson_id")
+        )
     _create_stimulus_version(stimulus, actor, data)
     return stimulus
 
@@ -513,6 +567,7 @@ def stimulus_to_dict(stimulus, *, use_published=False):
     return {
         "id": stimulus.id,
         "course_id": stimulus.course_id,
+        "lesson_id": stimulus.lesson_id,
         "title": stimulus.title,
         "stimulus_type": stimulus.stimulus_type,
         "status": stimulus.status,

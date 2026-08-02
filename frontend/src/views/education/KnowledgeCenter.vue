@@ -31,9 +31,8 @@
         v-if="activeTab === 'papers'"
         type="primary"
         icon="el-icon-document-add"
-        :disabled="!selectedQuestionIds.length"
-        @click="paperDialog = true"
-      >从所选题目组卷</el-button>
+        @click="openPaperSelection"
+      >手动选题组卷</el-button>
       <el-button
         v-if="activeTab === 'resources'"
         icon="el-icon-search"
@@ -99,7 +98,22 @@
     >
       <header class="panel-header">
         <div><h3>题库</h3><p>稳定题目身份 + 不可变版本；答案只对教师可见。</p></div>
-        <span>已选择 {{ selectedQuestionIds.length }} 题</span>
+        <div class="question-organization">
+          <el-radio-group v-model="questionOrganization" size="mini">
+            <el-radio-button label="material">按材料</el-radio-button>
+            <el-radio-button label="lesson">按课时</el-radio-button>
+          </el-radio-group>
+          <el-select
+            v-if="questionOrganization === 'lesson'"
+            v-model="selectedQuestionLessonId"
+            clearable
+            size="mini"
+            placeholder="全部课时"
+          >
+            <el-option v-for="lesson in lessons" :key="lesson.id" :label="lesson.title" :value="lesson.id" />
+          </el-select>
+          <span>已选择 {{ selectedQuestionIds.length }} 题</span>
+        </div>
       </header>
       <div v-if="stimulusGroups.length" class="stimulus-groups">
         <article v-for="group in stimulusGroups" :key="group.id" class="stimulus-card">
@@ -107,7 +121,7 @@
             <div>
               <span>阅读材料 · {{ group.current_version.word_or_character_count }} {{ group.current_version.language === 'en' ? '词' : '字' }}</span>
               <h3>{{ group.title }}</h3>
-              <p>{{ sourceLabel(group) }}</p>
+              <p>{{ lessonLabel(group.lesson_id) }} · {{ sourceLabel(group) }}</p>
             </div>
             <div class="stimulus-actions">
               <el-tag size="mini" :type="group.status === 'published' ? 'success' : 'info'">
@@ -124,7 +138,11 @@
               </div>
             </el-collapse-item>
           </el-collapse>
-          <div class="group-question-list">
+          <button class="question-collapse-toggle" type="button" @click="toggleQuestionGroup(group.id)">
+            <span>{{ groupedQuestions(group).length }} 道配套题目</span>
+            <b>{{ questionGroupExpanded(group.id) ? '收起题目' : '展开题目' }}</b>
+          </button>
+          <div v-show="questionGroupExpanded(group.id)" class="group-question-list">
             <article v-for="(question, index) in groupedQuestions(group)" :key="question.id">
               <el-checkbox v-model="selectedQuestionIds" :label="question.id" :disabled="question.status !== 'published'"><span></span></el-checkbox>
               <span>{{ index + 1 }}</span>
@@ -148,6 +166,7 @@
           <div class="question-body">
             <header>
               <b>{{ question.title }}</b>
+              <el-tag v-if="question.lesson_id" size="mini" type="info">{{ lessonLabel(question.lesson_id) }}</el-tag>
               <el-tag size="mini" :type="question.status === 'published' ? 'success' : 'info'">
                 {{ question.status === 'published' ? '已发布' : '草稿' }}
               </el-tag>
@@ -264,11 +283,16 @@
             </el-select>
           </el-form-item>
           <el-form-item label="所属材料">
-            <el-select v-model="questionForm.stimulusVersionId" clearable style="width:100%" placeholder="独立题目">
+            <el-select v-model="questionForm.stimulusVersionId" clearable style="width:100%" placeholder="独立题目" @change="syncQuestionLessonFromStimulus">
               <el-option v-for="stimulus in stimuli" :key="stimulus.current_version_id" :label="stimulus.title" :value="stimulus.current_version_id" />
             </el-select>
           </el-form-item>
         </div>
+        <el-form-item label="所属课时">
+          <el-select v-model="questionForm.lessonId" :disabled="Boolean(questionForm.stimulusVersionId)" clearable style="width:100%" placeholder="课程公共题目（未归入课时）">
+            <el-option v-for="lesson in lessons" :key="lesson.id" :label="lesson.title" :value="lesson.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="题干">
           <el-input v-model="questionForm.prompt" type="textarea" :rows="4" />
         </el-form-item>
@@ -309,6 +333,11 @@
           <el-form-item label="材料标题"><el-input v-model.trim="stimulusForm.title" /></el-form-item>
           <el-form-item label="语言"><el-select v-model="stimulusForm.language" style="width:100%"><el-option label="英语" value="en" /><el-option label="中文" value="zh" /></el-select></el-form-item>
         </div>
+        <el-form-item label="所属课时">
+          <el-select v-model="stimulusForm.lessonId" clearable style="width:100%" placeholder="选择课时">
+            <el-option v-for="lesson in lessons" :key="lesson.id" :label="lesson.title" :value="lesson.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="正文（按段落换行）"><el-input v-model="stimulusForm.text" type="textarea" :rows="10" /></el-form-item>
         <div class="two-columns">
           <el-form-item label="来源标题"><el-input v-model.trim="stimulusForm.sourceTitle" /></el-form-item>
@@ -318,6 +347,30 @@
         <el-form-item label="权利说明"><el-input v-model.trim="stimulusForm.rights" placeholder="公共领域、CC 许可或教师提供" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="stimulusDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="createStimulus">保存材料草稿</el-button></template>
+    </el-dialog>
+
+    <el-dialog title="手动选题组卷" :visible.sync="paperSelectionDialog" width="820px" custom-class="education-dialog education-dialog--editor">
+      <div class="paper-selection-toolbar">
+        <el-select v-model="paperSelectionLessonId" clearable placeholder="全部课时" style="width:280px">
+          <el-option v-for="lesson in lessons" :key="lesson.id" :label="lesson.title" :value="lesson.id" />
+        </el-select>
+        <el-checkbox :value="allPaperSelectionChecked" @change="selectAllPublishedQuestions">选择全部已发布题目</el-checkbox>
+        <b>已选 {{ selectedQuestionIds.length }} 题</b>
+      </div>
+      <el-checkbox-group v-model="selectedQuestionIds" class="paper-selection-list">
+        <el-checkbox v-for="question in paperSelectionQuestions" :key="question.id" :label="question.id">
+          <span class="paper-selection-copy">
+            <b>{{ question.title }}</b>
+            <small>{{ lessonLabel(question.lesson_id) }} · {{ typeLabel(question.current_version.question_type) }} · {{ question.current_version.score }} 分</small>
+            <span>{{ question.current_version.prompt }}</span>
+          </span>
+        </el-checkbox>
+      </el-checkbox-group>
+      <EmptyLibrary v-if="!paperSelectionQuestions.length" icon="el-icon-edit-outline" title="该课时没有已发布题目" description="先发布题目，再进行手动组卷。" />
+      <template #footer>
+        <el-button @click="paperSelectionDialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!selectedQuestionIds.length" @click="continuePaperComposition">下一步：设置试卷</el-button>
+      </template>
     </el-dialog>
 
     <el-dialog :title="editingPaper ? '编辑试卷并创建新版本' : '从所选题目组卷'" :visible.sync="paperDialog" width="620px" custom-class="education-dialog">
@@ -440,6 +493,7 @@ export default {
       saving: false,
       questionDialog: false,
       stimulusDialog: false,
+      paperSelectionDialog: false,
       paperDialog: false,
       paperPreviewDialog: false,
       previewMode: 'student',
@@ -454,6 +508,10 @@ export default {
       researchResults: [],
       researchDiagnostics: [],
       selectedQuestionIds: [],
+      questionOrganization: 'material',
+      selectedQuestionLessonId: '',
+      paperSelectionLessonId: '',
+      expandedQuestionGroups: [],
       tabs: [
         { key: 'questions', label: '题库', caption: '规范题目与答案版本', icon: 'el-icon-edit-outline' },
         { key: 'papers', label: '试卷库', caption: '冻结题目版本组合', icon: 'el-icon-document' },
@@ -462,6 +520,7 @@ export default {
       questionForm: {
         title: '',
         questionType: 'single_choice',
+        lessonId: '',
         stimulusVersionId: '',
         stimulusOrder: 1,
         prompt: '',
@@ -472,7 +531,7 @@ export default {
         knowledgePoint: '',
         explanation: '',
       },
-      stimulusForm: { title: '', language: 'en', text: '', sourceTitle: '', author: '', sourceUrl: '', rights: '' },
+      stimulusForm: { title: '', lessonId: '', language: 'en', text: '', sourceTitle: '', author: '', sourceUrl: '', rights: '' },
       paperForm: { title: '', purpose: 'mock_exam', duration: 30 },
       questionAgentForm: { questionCount: 5, difficulty: 'medium', knowledgePoint: '', requirements: '' },
       paperAgentForm: { title: '课程诊断试卷', questionCount: 5, duration: 30 },
@@ -484,11 +543,28 @@ export default {
     summary() { return this.$store.getters['education/knowledgeSummary'] || { counts: {} } },
     questions() { return this.$store.getters['education/questions'] || [] },
     stimuli() { return this.$store.getters['education/stimuli'] || [] },
+    units() { return this.$store.getters['education/units'] || [] },
+    lessons() { return this.units.flatMap(unit => unit.lessons || []) },
     stimulusGroups() {
-      return this.stimuli
+      if (this.questionOrganization !== 'lesson' || !this.selectedQuestionLessonId) return this.stimuli
+      return this.stimuli.filter(stimulus => stimulus.lesson_id === this.selectedQuestionLessonId)
     },
     standaloneQuestions() {
-      return this.questions.filter(question => !(question.current_version && question.current_version.stimulus_version_id))
+      return this.questions.filter(question => {
+        if (question.current_version && question.current_version.stimulus_version_id) return false
+        return this.questionOrganization !== 'lesson'
+          || !this.selectedQuestionLessonId
+          || question.lesson_id === this.selectedQuestionLessonId
+      })
+    },
+    publishedQuestions() { return this.questions.filter(question => question.status === 'published') },
+    paperSelectionQuestions() {
+      if (!this.paperSelectionLessonId) return this.publishedQuestions
+      return this.publishedQuestions.filter(question => question.lesson_id === this.paperSelectionLessonId)
+    },
+    allPaperSelectionChecked() {
+      return Boolean(this.paperSelectionQuestions.length)
+        && this.paperSelectionQuestions.every(question => this.selectedQuestionIds.includes(question.id))
     },
     questionTypeOptions() {
       return [
@@ -517,6 +593,7 @@ export default {
           courseId,
           role: 'teacher',
         })
+        await this.$store.dispatch('education/fetchCourseOverview', course.id)
         await this.load(course.id)
       } catch (error) {
         this.$message.error('课程知识中心不可用')
@@ -536,6 +613,35 @@ export default {
       }
     },
     count(key) { return this.summary.counts[key] || 0 },
+    lessonLabel(lessonId) {
+      if (!lessonId) return '课程公共题目'
+      const lesson = this.lessons.find(row => row.id === lessonId)
+      return lesson ? lesson.title : '未知课时'
+    },
+    questionGroupExpanded(groupId) { return this.expandedQuestionGroups.includes(groupId) },
+    toggleQuestionGroup(groupId) {
+      this.expandedQuestionGroups = this.questionGroupExpanded(groupId)
+        ? this.expandedQuestionGroups.filter(id => id !== groupId)
+        : [...this.expandedQuestionGroups, groupId]
+    },
+    openPaperSelection() {
+      this.editingPaper = null
+      this.paperSelectionDialog = true
+    },
+    selectAllPublishedQuestions(checked) {
+      const visibleIds = this.paperSelectionQuestions.map(question => question.id)
+      if (checked) {
+        this.selectedQuestionIds = Array.from(new Set([...this.selectedQuestionIds, ...visibleIds]))
+      } else {
+        const visibleSet = new Set(visibleIds)
+        this.selectedQuestionIds = this.selectedQuestionIds.filter(id => !visibleSet.has(id))
+      }
+    },
+    continuePaperComposition() {
+      if (!this.selectedQuestionIds.length) return
+      this.paperSelectionDialog = false
+      this.paperDialog = true
+    },
     async startQuestionAgent() {
       const started = await this.startKnowledgeProduct('question_generation', {
         question_count: this.questionAgentForm.questionCount,
@@ -638,6 +744,11 @@ export default {
       return answer ? answer.correct_answer : '未提供'
     },
     groupedQuestions(stimulus) {
+      if (stimulus && Array.isArray(stimulus.questions)) {
+        return stimulus.questions
+          .slice()
+          .sort((left, right) => (left.current_version.stimulus_order || 0) - (right.current_version.stimulus_order || 0))
+      }
       const versionId = stimulus && stimulus.current_version_id
       return this.questions
         .filter(question => question.current_version && question.current_version.stimulus_version_id === versionId)
@@ -655,7 +766,7 @@ export default {
     },
     emptyQuestionForm() {
       return {
-        title: '', questionType: 'single_choice', stimulusVersionId: '', stimulusOrder: 1,
+        title: '', questionType: 'single_choice', lessonId: '', stimulusVersionId: '', stimulusOrder: 1,
         prompt: '', optionsText: '', correctAnswer: 'A', difficulty: 'easy', score: 5,
         knowledgePoint: '', explanation: '',
       }
@@ -666,6 +777,7 @@ export default {
         this.questionForm = this.emptyQuestionForm()
         if (stimulus) {
           this.questionForm.stimulusVersionId = stimulus.current_version_id
+          this.questionForm.lessonId = stimulus.lesson_id || ''
           this.questionForm.stimulusOrder = this.groupedQuestions(stimulus).length + 1
         }
       } else {
@@ -674,6 +786,7 @@ export default {
         this.questionForm = {
           title: question.title,
           questionType: version.question_type,
+          lessonId: question.lesson_id || '',
           stimulusVersionId: version.stimulus_version_id || '',
           stimulusOrder: version.stimulus_order || 1,
           prompt: version.prompt || '',
@@ -687,6 +800,11 @@ export default {
       }
       this.normalizeQuestionAnswer()
       this.questionDialog = true
+    },
+    syncQuestionLessonFromStimulus(stimulusVersionId) {
+      if (!stimulusVersionId) return
+      const stimulus = this.stimuli.find(row => row.current_version_id === stimulusVersionId)
+      this.questionForm.lessonId = (stimulus && stimulus.lesson_id) || ''
     },
     editQuestion(question) {
       this.openQuestionDialog(question)
@@ -711,10 +829,10 @@ export default {
       try {
         await this.$store.dispatch('education/createStimulus', {
           courseId: this.course.id,
-          stimulus: { title: this.stimulusForm.title, stimulus_type: 'reading_passage', language: this.stimulusForm.language, content: { paragraphs }, source_refs: sourceRefs },
+          stimulus: { title: this.stimulusForm.title, lesson_id: this.stimulusForm.lessonId, stimulus_type: 'reading_passage', language: this.stimulusForm.language, content: { paragraphs }, source_refs: sourceRefs },
         })
         this.stimulusDialog = false
-        this.stimulusForm = { title: '', language: 'en', text: '', sourceTitle: '', author: '', sourceUrl: '', rights: '' }
+        this.stimulusForm = { title: '', lessonId: '', language: 'en', text: '', sourceTitle: '', author: '', sourceUrl: '', rights: '' }
         this.$message.success('阅读材料草稿已保存，可继续添加多道子题')
       } catch (error) {
         this.$message.error('阅读材料未通过校验')
@@ -734,6 +852,7 @@ export default {
       try {
         const payload = {
           title: this.questionForm.title,
+          lesson_id: this.questionForm.lessonId,
           question_type: this.questionForm.questionType,
           prompt: this.questionForm.prompt,
           options: this.isChoiceQuestion ? options : [],
@@ -914,8 +1033,12 @@ export default {
 .stimulus-card > header span { color: #3a8177; font-size: 9px; font-weight: 700; letter-spacing: .08em; }
 .stimulus-card h3 { margin: 5px 0; color: #2e4540; font-size: 16px; }.stimulus-card > header p { margin: 0; color: #899692; font-size: 9px; }
 .stimulus-actions { display: flex; align-items: flex-start; gap: 7px; }
+.question-organization { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.question-organization .el-select { width: 210px; }
 .stimulus-text { max-height: 330px; overflow-y: auto; padding: 13px 16px; border-radius: 9px; background: #f9faf7; color: #40504c; font-size: 12px; line-height: 1.8; }
 .stimulus-text p { margin: 0 0 10px; }.group-question-list { margin-top: 8px; border-top: 1px solid #e5ecea; }
+.question-collapse-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; margin-top: 9px; padding: 10px 4px; border: 0; border-top: 1px solid #e5ecea; background: transparent; color: #617671; cursor: pointer; }
+.question-collapse-toggle b { color: #27887e; font-size: 11px; }
 .group-question-list > article { display: grid; grid-template-columns: 24px 26px minmax(0, 1fr) auto auto; gap: 9px; align-items: start; padding: 12px 3px; border-bottom: 1px solid #edf1f0; }
 .group-question-list b { color: #344a45; font-size: 11px; }.group-question-list p { margin: 4px 0 0; color: #677974; font-size: 11px; line-height: 1.55; }
 .group-empty { margin: 12px 0 0; color: #8b9995; font-size: 10px; }.standalone-heading { margin: 18px 0 4px; color: #4d635e; }
@@ -935,6 +1058,14 @@ export default {
 .paper-icon { width: 42px; height: 48px; display: grid; place-items: center; border: 1px solid #cfe0dc; border-radius: 6px 12px 6px 6px; background: #f1f7f5; color: #3c8177; font-size: 19px; }
 .paper-grid h3 { margin: 14px 0 7px; color: #344742; font-size: 14px; }.paper-grid p { color: #84928f; font-size: 10px; }
 .paper-grid footer { display: flex; align-items: center; gap: 8px; margin-top: 17px; }.paper-grid footer small { margin-left: auto; color: #98a4a1; }
+.paper-selection-toolbar { position: sticky; top: -20px; z-index: 2; display: flex; align-items: center; gap: 18px; padding: 14px; border-radius: 10px; background: #f2f8f6; }
+.paper-selection-toolbar b { margin-left: auto; color: #287f75; }
+.paper-selection-list { display: grid; gap: 9px; margin-top: 14px; }
+.paper-selection-list .el-checkbox { height: auto; display: flex; align-items: flex-start; margin: 0; padding: 13px 15px; border: 1px solid #dfe8e5; border-radius: 10px; white-space: normal; }
+.paper-selection-list .el-checkbox.is-checked { border-color: #74b9af; background: #f4faf8; }
+.paper-selection-copy { display: grid; gap: 4px; color: #3f504c; line-height: 1.5; }
+.paper-selection-copy small { color: #72847f; }
+.paper-selection-copy > span { color: #53645f; font-size: 11px; }
 .preview-toolbar { display: flex; justify-content: flex-end; margin-bottom: 14px; }.paper-preview { color: #263b37; }
 .paper-preview > header { padding: 16px 20px; border-radius: 12px; background: #eef5f3; text-align: center; }.paper-preview > header h2 { margin: 0; }
 .preview-stimulus { margin: 16px 0; padding: 18px 22px; border: 1px solid #dfe7e4; border-radius: 10px; background: #fffdf8; line-height: 1.8; }

@@ -14,10 +14,12 @@ def education_action_protocol(*, courseware_kind=None, lesson_scoped=False):
     if courseware_kind == "slide_document":
         lines = [
             "[Education large-artifact finalizer protocol]",
-            "This courseware workflow does not use provider-native tools or "
-            "text tool blocks for the large slide payload.",
-            "The courseware_maker MUST write exactly two complete UTF-8 files "
-            "in its private workspace: slide_document.json and preview.html.",
+            "This courseware workflow does not use provider-native tools for "
+            "the large slide payload.",
+            "Return exactly two fenced file blocks named slide_document.json "
+            "and preview.html, using the allowlisted absolute workspace paths.",
+            "The trusted runtime writes those blocks into your private workspace; "
+            "do not claim to have invoked a filesystem tool.",
             "slide_document.json is the complete canonical source_json object. "
             "preview.html is a complete safe HTML document that renders it.",
             "After the Agent finishes, the trusted server workflow reads only "
@@ -25,7 +27,7 @@ def education_action_protocol(*, courseware_kind=None, lesson_scoped=False):
             "the designated courseware Agent with a stable idempotency key.",
             "If deterministic schema or visual QA fails, the server sends the "
             "exact validation error back to the same Agent for a bounded repair.",
-            "Do not invoke MCP, education_action, bash, run_command, "
+            "Do not invoke MCP, education_action, bash, run_command, run_command_safe, "
             "read_mcp_resource, or any invented filesystem server.",
             "The slide_document root permits only title, theme, slides. Each "
             "slide permits only id, title, layout, blocks, speaker_notes.",
@@ -200,6 +202,20 @@ def education_reply_finalizer_protocol(product_code):
                 '"teacher_confirmed_rights":true}',
             ]
         )
+    elif product_code == "student_insight":
+        common.extend(
+            [
+                "Finalizer type: education_student_insight_refresh_from_agent_reply.",
+                "The learning_analyst root object must contain exactly refresh, and "
+                "refresh must be true.",
+                "The finalizer invokes edu.course.members.list first, then invokes "
+                "edu.student_insight.refresh. Both calls use the server-issued course, "
+                "actor, role, and Agent grant; the Agent must not guess any identifier.",
+                "The teaching_reviewer receives the real trusted_finalizer_result and "
+                "must review only that evidence-backed result.",
+                'Exact root example: {"refresh":true}',
+            ]
+        )
     else:
         raise ValueError("unsupported trusted reply finalizer")
     return "\n".join(common)
@@ -367,6 +383,9 @@ def product_template(product_code):
         ("knowledge_research", "research_worker"): {
             "type": "education_knowledge_from_agent_reply"
         },
+        ("student_insight", "learning_analyst"): {
+            "type": "education_student_insight_refresh_from_agent_reply"
+        },
     }
     return {
         "code": f"product.{product_code}",
@@ -458,6 +477,7 @@ def build_product_prompt(product_code, course, options, lesson=None):
         "question_generation",
         "paper_generation",
         "knowledge_research",
+        "student_insight",
     }:
         prompt += "\n" + education_reply_finalizer_protocol(product_code)
     else:
@@ -496,8 +516,8 @@ def build_product_prompt(product_code, course, options, lesson=None):
             "形成课件 brief；不得改写课时教学目标的语义。"
             "\n【课件制作师】生成 canonical slide_document：根对象包含 title、theme、"
             "slides；每页包含 id、title、layout、blocks、speaker_notes，blocks "
-            "使用可渲染的 type/content。必须把完整 JSON 写入私有目录的 "
-            "slide_document.json，把完整安全 HTML 写入同目录的 preview.html。"
+            "使用可渲染的 type/content。按协议返回完整 slide_document.json 与 "
+            "preview.html 两个受控文件块，由可信运行时写入私有目录。"
             "不得直接调用业务工具；固定工作流终结器会以课件制作师身份校验并调用 "
             "edu.courseware.create。课时作用域由服务端注入。不得自动发布。"
             f"\n本次指定风格为 {theme_style}；source_json.theme 必须严格写成"
@@ -511,12 +531,12 @@ def build_product_prompt(product_code, course, options, lesson=None):
         )
     elif product_code == "student_insight":
         prompt += (
-            "\n【学情分析师】先读取 edu.course.members.list，再调用 "
-            "edu.student_insight.refresh（idempotency_key="
-            "product-student-insight-refresh-v1）。只依据提交、评分和模拟考试"
-            "证据解释结果；数据不足必须明确写出，禁止性格标签或虚构掌握概率。"
-            "\n【教学审校员】检查每条建议能否回溯到工具返回的证据摘要，"
-            "只提供教学建议，不发布学生反馈。"
+            "\n【学情分析师】不要调用工具。只返回 trusted finalizer 协议规定的 "
+            "refresh JSON；固定终结器会以你的受限身份读取真实课程成员，并按正式"
+            "提交、评分和模拟考试证据刷新画像。"
+            "\n【教学审校员】只检查前置节点注入的 trusted_finalizer_result。"
+            "确认每条建议能回溯到真实证据摘要；数据不足必须明确写出，禁止性格"
+            "标签、虚构掌握概率或发布学生反馈。"
         )
     elif product_code == "question_generation":
         question_count = int(options.get("question_count") or 5)

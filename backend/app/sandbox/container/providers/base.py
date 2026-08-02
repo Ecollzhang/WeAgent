@@ -110,6 +110,11 @@ class ProviderRunner:
     def runnable(self) -> bool:
         return True
 
+    @property
+    def supports_native_shell(self) -> bool:
+        """Whether the provider exposes an executable shell to the model."""
+        return True
+
     def unavailable_message(self) -> str:
         return f"Provider {self.provider_name} is not available."
 

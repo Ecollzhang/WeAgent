@@ -94,6 +94,11 @@ class CodexRunner(ProviderRunner):
         )
         return [item for feature in features for item in ("--disable", feature)]
 
+    @property
+    def supports_native_shell(self) -> bool:
+        """DeepSeek's compatible Responses API cannot execute Codex shell tools."""
+        return self._provider_name(self._codex_base_url()) != "deepseek"
+
     def environment(self) -> dict:
         runtime = self.runtime
         self._init_relay_state()
@@ -139,8 +144,19 @@ class CodexRunner(ProviderRunner):
 
     def stream_chunk(self, chunk: str, stream_name: str) -> str:
         if stream_name != "stdout":
-            return chunk
+            return self._clean_stderr_notice(chunk)
         return self._parse_stream_chunk(chunk)
+
+    def clean_error_output(self, stderr: str) -> str:
+        return self._clean_stderr_notice(stderr).strip()
+
+    @staticmethod
+    def _clean_stderr_notice(value: str) -> str:
+        return "\n".join(
+            line
+            for line in str(value or "").splitlines()
+            if line.strip() != "Reading additional input from stdin..."
+        )
 
     def _parse_output(self, text: str, final: bool = False) -> str:
         parser = JsonObjectStream()

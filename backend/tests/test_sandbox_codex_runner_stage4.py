@@ -50,6 +50,33 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn("computer_use", disabled)
         self.assertIn("multi_agent", disabled)
 
+    def test_deepseek_runtime_instruction_does_not_require_unavailable_shell_tools(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"DEEPSEEK_BASE_URL": "https://api.deepseek.com/v1"},
+            clear=True,
+        ):
+            instruction = runtime._runtime_instruction()
+
+        self.assertNotIn("必须先用 Bash", instruction)
+        self.assertNotIn("weagent-report 调用示例", instruction)
+        self.assertIn("Do not call bash, run_command, run_command_safe", instruction)
+        self.assertIn("controlled file", instruction)
+
+    def test_codex_stdin_notice_is_not_streamed_as_an_agent_error(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+
+        notice = "Reading additional input from stdin...\n"
+
+        self.assertEqual("", runtime.provider_runner.stream_chunk(notice, "stderr"))
+        self.assertEqual("", runtime.provider_runner.clean_error_output(notice))
+
     def test_resume_command_uses_codex_exec_resume_last(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
 

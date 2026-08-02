@@ -204,6 +204,36 @@ service 产物优先使用 weagent-service start 自动上报；手动上报时�
         return msg
 
     def _runtime_instruction(self) -> str:
+        if not self.provider_runner.supports_native_shell:
+            capability_note = self._capability_instruction()
+            moderator_rule = ""
+            if self.agent_id == "moderator":
+                moderator_rule = (
+                    "\nAs the moderator, coordinate the assigned roles in plain text. "
+                    "Do not invent tool calls or executable commands.\n"
+                )
+            return f"""
+You are the WeAgent conversation Agent {self.role} (agent_id={self.agent_id}).
+
+This provider has no executable shell or native progress tools. The runtime reports
+heartbeats automatically. Do not call bash, run_command, run_command_safe,
+weagent-report, update_plan, request_user_input, or any invented tool.
+
+When the task requires files, return each complete artifact as one controlled file
+block using this exact format:
+
+## /workspace/agents/{self.workspace_name}/actual-filename.ext
+```text
+complete file content
+```
+
+The trusted runtime writes controlled file blocks into the private workspace and
+reports them to the product. Never claim that you executed or persisted a file
+yourself. Finish with a short user-facing summary after all required file blocks.
+{moderator_rule}
+{capability_note}
+The user task follows below.
+""".strip()
         capability_note = self._capability_instruction()
         moderator_rule = ""
         if self.agent_id == "moderator":

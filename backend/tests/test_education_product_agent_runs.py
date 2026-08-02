@@ -245,6 +245,10 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     assert "Education large-artifact finalizer protocol" in started["prompt"]
     assert "slide_document.json and preview.html" in started["prompt"]
     assert "trusted server workflow" in started["prompt"]
+    assert "Return exactly two fenced file blocks" in started["prompt"]
+    assert "The trusted runtime writes those blocks into your private workspace" in (
+        started["prompt"]
+    )
     assert "<tool_call>" not in started["prompt"]
     assert "lesson_id is injected from the lesson-scoped Agent run" in (
         started["prompt"]
@@ -282,6 +286,34 @@ def test_teacher_courseware_product_requires_lesson_and_uses_draft_tools(
     )
     assert invalid_theme.status_code == 400
     assert "supported presentation style" in invalid_theme.get_json()["error"]
+
+
+def test_teacher_student_insight_uses_trusted_refresh_finalizer(education_app):
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, _, teacher, _, _ = seed_course(education_app)
+
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "product_code": "student_insight",
+            "options": {},
+        },
+    )
+
+    assert created.status_code == 202
+    run = created.get_json()
+    assert run["nodes"][0]["finalizer"] == {
+        "type": "education_student_insight_refresh_from_agent_reply"
+    }
+    started = runtime.started[0]
+    assert "Education trusted reply finalizer protocol" in started["prompt"]
+    assert '{"refresh":true}' in started["prompt"]
+    assert "Do not call education_action" in started["prompt"]
+    assert "<tool_call>" not in started["prompt"]
 
 
 def test_teacher_starts_submission_review_agent_with_natural_visible_prompt(
