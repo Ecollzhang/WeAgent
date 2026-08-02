@@ -31,7 +31,7 @@ def core_login(username):
         return json.loads(response.read().decode("utf-8"))["data"]["access_token"]
 
 
-def multipart_upload(url, token, fields, file_path):
+def multipart_upload(url, token, fields, file_path, *, content_type="application/pdf"):
     boundary = f"weagent-{uuid.uuid4().hex}"
     chunks = []
     for name, value in fields.items():
@@ -50,7 +50,7 @@ def multipart_upload(url, token, fields, file_path):
                 'Content-Disposition: form-data; name="file"; '
                 f'filename="{file_path.name}"\r\n'
             ).encode(),
-            b"Content-Type: application/pdf\r\n\r\n",
+            f"Content-Type: {content_type}\r\n\r\n".encode(),
             file_path.read_bytes(),
             b"\r\n",
             f"--{boundary}--\r\n".encode(),
@@ -71,7 +71,17 @@ def multipart_upload(url, token, fields, file_path):
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"PDF upload failed ({error.code}): {body[:1000]}") from error
+        raise RuntimeError(f"File upload failed ({error.code}): {body[:1000]}") from error
+
+
+def download_bytes(url, token):
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return response.read(), response.headers.get_content_type()
 
 
 def flattened_lessons(course_id, token):
@@ -316,6 +326,78 @@ def ensure_lesson_question_bank(course_id, lessons, token):
     return edu("GET", f"/courses/{course_id}/questions", token=token)
 
 
+def ensure_courseware_assets(course_id, lesson, token):
+    assets = edu(
+        "GET",
+        f"/courses/{course_id}/assets?purpose=courseware",
+        token=token,
+    )["items"]
+    by_filename = {row["original_filename"]: row for row in assets}
+    contents = edu("GET", f"/lessons/{lesson['id']}/contents", token=token)["items"]
+    slide_documents = [row for row in contents if row["kind"] == "slide_document"]
+    if not slide_documents:
+        raise RuntimeError("The demo lesson needs a structured slide document")
+    source_content = slide_documents[-1]
+    specs = [
+        {
+            "format": "pptx",
+            "filename": "wise-or-foolish-storybook-courseware.pptx",
+            "title": "Wise or Foolish? - Storybook courseware",
+            "visibility_scope": "course_published",
+            "content_type": (
+                "application/vnd.openxmlformats-officedocument."
+                "presentationml.presentation"
+            ),
+        },
+        {
+            "format": "html",
+            "filename": "wise-or-foolish-storybook-preview.html",
+            "title": "Wise or Foolish? - HTML preview",
+            "visibility_scope": "course_teacher",
+            "content_type": "text/html",
+        },
+    ]
+    runtime_dir = ROOT / ".runtime" / "phase4-courseware-assets"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    for spec in specs:
+        existing = by_filename.get(spec["filename"])
+        if existing:
+            if existing["visibility_scope"] != spec["visibility_scope"]:
+                existing = edu(
+                    "PATCH",
+                    f"/assets/{existing['id']}",
+                    token=token,
+                    payload={"visibility_scope": spec["visibility_scope"]},
+                )
+            by_filename[spec["filename"]] = existing
+            continue
+        exported, response_type = download_bytes(
+            (
+                f"{EDU_URL}/contents/{source_content['id']}/export"
+                f"?format={spec['format']}"
+            ),
+            token,
+        )
+        if not exported:
+            raise RuntimeError(f"Empty courseware export: {spec['format']}")
+        temp_path = runtime_dir / spec["filename"]
+        temp_path.write_bytes(exported)
+        created = multipart_upload(
+            f"{EDU_URL}/courses/{course_id}/assets",
+            token,
+            {
+                "lesson_id": lesson["id"],
+                "title": spec["title"],
+                "purpose": "courseware",
+                "visibility_scope": spec["visibility_scope"],
+            },
+            temp_path,
+            content_type=response_type or spec["content_type"],
+        )
+        by_filename[spec["filename"]] = created
+    return [by_filename[spec["filename"]] for spec in specs]
+
+
 def ensure_student_mock_exam(course_id, teacher_token, student_token, papers):
     attempts = edu(
         "GET",
@@ -433,6 +515,7 @@ def main():
     assignments = normalize_assignments(course["id"], token, asset["id"])
     resource = ensure_knowledge_resource(course["id"], token, asset)
     bank = ensure_lesson_question_bank(course["id"], lessons, token)
+    courseware_assets = ensure_courseware_assets(course["id"], lessons[1], token)
     papers = edu("GET", f"/courses/{course['id']}/papers", token=token)["items"]
     mock_exam = ensure_student_mock_exam(
         course["id"], token, student_token, papers
@@ -458,6 +541,15 @@ def main():
             for lesson in lessons
         },
         "paper_count": len(papers),
+        "courseware_assets": [
+            {
+                "id": row["id"],
+                "filename": row["original_filename"],
+                "visibility_scope": row["visibility_scope"],
+                "byte_size": row["byte_size"],
+            }
+            for row in courseware_assets
+        ],
         "mock_exam_count": len(mock_exams),
         "mock_exam": {
             "id": mock_exam["id"],
