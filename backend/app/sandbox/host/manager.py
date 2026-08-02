@@ -234,6 +234,20 @@ class DockerContainerManager:
             "HOST_CALLBACK_URL": env_vars.get("HOST_CALLBACK_URL") if env_vars and env_vars.get("HOST_CALLBACK_URL") else _default_host_callback_url(),
             "NO_PROXY": _merge_no_proxy(env_vars.get("NO_PROXY") if env_vars else os.environ.get("NO_PROXY", "")),
             "no_proxy": _merge_no_proxy(env_vars.get("no_proxy") if env_vars else os.environ.get("no_proxy", "")),
+            # RAG service defaults — can be overridden via env_vars
+            "RAG_SERVICE_URL": os.environ.get("RAG_SERVICE_URL", "http://host.docker.internal:5104"),
+            "RAG_INTERNAL_API_KEY": os.environ.get("RAG_INTERNAL_API_KEY", "weagent-rag-internal-key"),
+            # OpenCode uses OpenAI-compatible endpoint; reasoning models (v4-pro)
+            # consume all output tokens via reasoning. Use a non-reasoning model.
+            "OPENCODE_MODEL": os.environ.get("OPENCODE_MODEL", "deepseek-chat"),
+            "OPENCODE_BASE_URL": os.environ.get("OPENCODE_BASE_URL", ""),
+            # Service registry for agent service discovery
+            "SERVICE_REGISTRY": json.dumps({
+                "rag": "http://host.docker.internal:5104",
+                "rd": "http://host.docker.internal:5101",
+                "edu": "http://host.docker.internal:5102",
+                "office": "http://host.docker.internal:5103",
+            }),
         }
         # Pass through provider env vars if provided. The container runners
         # translate these into each provider's private home/config.
@@ -250,6 +264,9 @@ class DockerContainerManager:
             "CODEX_EXEC_TIMEOUT_SECONDS", "OPENCODE_EXEC_TIMEOUT_SECONDS",
             "AGENT_EXEC_TIMEOUT_SECONDS",
             "RAG_INTERNAL_API_KEY", "RAG_SERVICE_URL",
+            "KB_DOCUMENT_IDS",
+            "SERVICE_REGISTRY",
+            "USER_AUTH_TOKEN",
             "HTTP_PROXY", "HTTPS_PROXY",
         ]
         if env_vars:

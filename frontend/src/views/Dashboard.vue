@@ -297,7 +297,7 @@
       </div>
     </el-dialog>
 
-    <el-dialog title="新建会话" :visible.sync="showCreateDialog" width="500px" custom-class="create-conv-dialog" top="8vh">
+    <el-dialog title="新建会话" :visible.sync="showCreateDialog" width="680px" custom-class="create-conv-dialog" top="6vh">
       <div class="create-conv-body">
         <div class="conv-field">
           <label class="field-label">会话标题</label>
@@ -343,14 +343,77 @@
           </div>
         </div>
 
+        <!-- 领域服务选择 -->
         <div class="conv-field">
-          <label class="field-label">知识库范围 <span class="field-hint">（Agent 检索知识库时的领域过滤）</span></label>
-          <el-select v-model="newConversation.kb_domain" placeholder="继承工作空间领域" size="medium" style="width: 100%;">
-            <el-option label="继承工作空间（默认）" value=""></el-option>
-            <el-option label="全部领域" value="all"></el-option>
-            <el-option label="智能研发 (rd)" value="rd"></el-option>
-            <el-option label="智慧教育 (edu)" value="edu"></el-option>
-            <el-option label="智慧办公 (office)" value="office"></el-option>
+          <label class="field-label">选择领域服务 <span class="field-hint">（多选，Agent将能调用对应服务的API）</span></label>
+          <div class="service-checkboxes">
+            <label class="service-checkbox" :class="{ checked: newConversation.services.includes('rd') }">
+              <input type="checkbox" value="rd" v-model="newConversation.services" />
+              <span class="svc-icon"><i class="el-icon-monitor"></i></span>
+              <span class="svc-info">
+                <strong>智能研发</strong>
+                <em>RD</em>
+              </span>
+            </label>
+            <label class="service-checkbox" :class="{ checked: newConversation.services.includes('rag') }">
+              <input type="checkbox" value="rag" v-model="newConversation.services" />
+              <span class="svc-icon rag"><i class="el-icon-collection"></i></span>
+              <span class="svc-info">
+                <strong>知识库</strong>
+                <em>RAG</em>
+              </span>
+            </label>
+            <label class="service-checkbox disabled">
+              <input type="checkbox" disabled />
+              <span class="svc-icon edu"><i class="el-icon-reading"></i></span>
+              <span class="svc-info">
+                <strong>智慧教育</strong>
+                <em>EDU · 待上线</em>
+              </span>
+            </label>
+            <label class="service-checkbox disabled">
+              <input type="checkbox" disabled />
+              <span class="svc-icon office"><i class="el-icon-s-home"></i></span>
+              <span class="svc-info">
+                <strong>智慧办公</strong>
+                <em>OFFICE · 待上线</em>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <!-- RD 项目选择（选 RD 时展示） -->
+        <div class="conv-field" v-if="showProjectSelector">
+          <label class="field-label">关联项目 <span class="field-hint">（可选，不选=全局视角）</span></label>
+          <el-select
+            v-model="newConversation.projectId"
+            placeholder="选择项目或留空"
+            clearable
+            style="width: 100%"
+            :loading="projectsLoading"
+            size="medium"
+          >
+            <el-option
+              v-for="p in projectList"
+              :key="p.id"
+              :label="p.name"
+              :value="p.id"
+            >
+              <span>{{ p.name }}</span>
+              <span style="float:right;color:#94a3b8;font-size:12px">{{ p.tech_stack?.frontend || p.tech_stack?.backend || '' }}</span>
+            </el-option>
+          </el-select>
+        </div>
+
+        <!-- RAG 知识库配置（选 RAG 时展示） -->
+        <div class="conv-field" v-if="showKbConfig">
+          <label class="field-label">知识库领域</label>
+          <el-select v-model="newConversation.kbDomain" placeholder="选择知识库领域或留空" clearable style="width: 100%" size="medium">
+            <el-option label="继承工作空间" value="" />
+            <el-option label="全部领域" value="all" />
+            <el-option label="智能研发 (RD)" value="rd" />
+            <el-option label="智慧教育 (EDU)" value="edu" />
+            <el-option label="智慧办公 (OFFICE)" value="office" />
           </el-select>
         </div>
 
@@ -378,6 +441,21 @@
             <el-tag size="mini" :type="selectedAgentList.length > 1 ? 'success' : 'primary'">
               {{ selectedAgentList.length > 1 ? '群聊' : '单聊' }}
             </el-tag>
+          </div>
+        </div>
+
+        <!-- 上下文预览 -->
+        <div class="conv-context-preview" v-if="newConversation.services.length > 0 || newConversation.projectId || newConversation.kbDomain">
+          <div class="context-chips">
+            <span v-if="newConversation.services.includes('rd')" class="context-chip rd">
+              <i class="el-icon-monitor"></i> 智能研发
+            </span>
+            <span v-if="newConversation.projectId" class="context-chip project">
+              <i class="el-icon-folder-opened"></i> {{ projectList.find(p => p.id === newConversation.projectId)?.name || '项目' }}
+            </span>
+            <span v-if="newConversation.services.includes('rag')" class="context-chip rag">
+              <i class="el-icon-collection"></i> 知识库{{ newConversation.kbDomain ? ' · ' + kbDomainLabel(newConversation.kbDomain) : '' }}
+            </span>
           </div>
         </div>
       </div>
@@ -443,8 +521,13 @@ export default {
         title: '',
         type: 'single',
         selectedAgents: [],
-        kb_domain: '',
+        services: [],        // ['rd', 'rag']
+        projectId: '',       // RD项目ID（可选）
+        kbDomain: '',        // RAG知识库域
+        kbDocumentIds: [],   // RAG限定文档
       },
+      projectList: [],
+      projectsLoading: false,
       socketHandlers: [],
       isAgentResponding: false,
       previewVisible: false,
@@ -524,6 +607,12 @@ export default {
     hasWorkspace() {
       return this.$store.getters['workspace/workspacesByDomain'](this.activeDomain).length > 0
     },
+    showProjectSelector() {
+      return this.newConversation.services.includes('rd')
+    },
+    showKbConfig() {
+      return this.newConversation.services.includes('rag')
+    },
     selectedAgentList() {
       return this.newConversation.selectedAgents
         .map(id => this.findAgentWithMeta(id))
@@ -581,7 +670,17 @@ export default {
       if (open) {
         this.$nextTick(async () => { await this.buildAgentTree() })
       } else {
-        this.newConversation = { title: '', type: 'single', selectedAgents: [] }
+        this.newConversation = { title: '', type: 'single', selectedAgents: [], services: [], projectId: '', kbDomain: '', kbDocumentIds: [] }
+      }
+    },
+    'newConversation.services'(val) {
+      if (!val.includes('rd')) this.newConversation.projectId = ''
+      if (!val.includes('rag')) {
+        this.newConversation.kbDomain = ''
+        this.newConversation.kbDocumentIds = []
+      }
+      if (val.includes('rd') && this.projectList.length === 0) {
+        this.fetchProjects()
       }
     },
     'newConversation.selectedAgents': function(ids) {
@@ -1484,6 +1583,23 @@ export default {
       }
     },
 
+    async fetchProjects() {
+      if (this.projectList.length > 0) return  // already loaded
+      this.projectsLoading = true
+      try {
+        const { getProjects } = await import('../api/rd')
+        const res = await getProjects()
+        if (res.code === 200) {
+          this.projectList = res.data?.items || []
+        }
+      } catch (e) {
+        // RD service may not be running — silently skip, dropdown shows empty
+        this.projectList = []
+      } finally {
+        this.projectsLoading = false
+      }
+    },
+
     handleTreeCheckChange() {
       if (this.$refs.agentTree) {
         const checkedAgents = this.$refs.agentTree.getCheckedNodes(true)
@@ -1491,6 +1607,11 @@ export default {
           .map(node => node.id)
         this.newConversation.selectedAgents = checkedAgents
       }
+    },
+
+    kbDomainLabel(domain) {
+      const map = { rd: '智能研发', edu: '智慧教育', office: '智慧办公', all: '全部领域' }
+      return map[domain] || domain || '继承工作空间'
     },
 
     async handleCreateConversation() {
@@ -1508,12 +1629,15 @@ export default {
           type: this.newConversation.type,
           participant_ids: participantIds,
           workspace_id: this.activeWorkspaceId || undefined,
-          kb_domain: this.newConversation.kb_domain || '',
+          services: this.newConversation.services,
+          project_id: this.newConversation.projectId || undefined,
+          kb_domain: this.newConversation.kbDomain || '',
+          kb_document_ids: this.newConversation.kbDocumentIds,
         })
         if (response.code === 201) {
           this.$message.success('会话创建成功')
           this.showCreateDialog = false
-          this.newConversation = { title: '', type: 'single', selectedAgents: [], kb_domain: '' }
+          this.newConversation = { title: '', type: 'single', selectedAgents: [], services: [], projectId: '', kbDomain: '', kbDocumentIds: [] }
           this.handleSelectConversation(response.data)
         } else {
           this.$message.error(response.message || '创建会话失败')
@@ -1742,6 +1866,115 @@ export default {
 }
 .preview-type {
   flex-shrink: 0;
+}
+
+/* 领域服务选择卡片 */
+.service-checkboxes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.service-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1.5px solid #e8eaed;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fafbfc;
+}
+.service-checkbox:hover {
+  border-color: #c0d3f0;
+  background: #f8faff;
+}
+.service-checkbox.checked {
+  border-color: #4080ff;
+  background: #f0f5ff;
+  box-shadow: 0 0 0 2px rgba(64,128,255,0.12);
+}
+.service-checkbox.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.service-checkbox.disabled:hover {
+  border-color: #e8eaed;
+  background: #fafbfc;
+}
+.service-checkbox input[type="checkbox"] {
+  display: none;
+}
+.svc-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  background: #e8f0ff;
+  color: #4080ff;
+  flex-shrink: 0;
+}
+.svc-icon.rag {
+  background: #e8f5e9;
+  color: #4caf50;
+}
+.svc-icon.edu {
+  background: #fff3e0;
+  color: #ff9800;
+}
+.svc-icon.office {
+  background: #f3e5f5;
+  color: #9c27b0;
+}
+.svc-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.svc-info strong {
+  font-size: 13px;
+  color: #1e293b;
+}
+.svc-info em {
+  font-size: 11px;
+  color: #94a3b8;
+  font-style: normal;
+}
+
+/* 上下文预览芯片 */
+.conv-context-preview {
+  margin-top: 4px;
+  padding: 8px 0;
+}
+.context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.context-chip.rd {
+  background: #e8f0ff;
+  color: #4080ff;
+}
+.context-chip.rag {
+  background: #e8f5e9;
+  color: #4caf50;
+}
+.context-chip.project {
+  background: #fff3e0;
+  color: #e65100;
 }
 
 /* 底部按钮 */
@@ -2214,6 +2447,15 @@ export default {
 }
 .create-conv-dialog .el-dialog__body {
   padding: 16px 24px 10px;
+  max-height: 68vh;
+  overflow-y: auto;
+}
+.create-conv-dialog .el-dialog__body::-webkit-scrollbar {
+  width: 5px;
+}
+.create-conv-dialog .el-dialog__body::-webkit-scrollbar-thumb {
+  background: #d0d5dd;
+  border-radius: 4px;
 }
 .create-conv-dialog .el-dialog__footer {
   padding: 0 24px 20px;

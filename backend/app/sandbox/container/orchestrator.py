@@ -194,79 +194,113 @@ class Orchestrator:
         fs_baseline = self._snapshot_workspace()
 
         try:
-            prompt = self._with_tool_instructions(agent_id, message)
-            reply = agent.send_with_context(prompt, context=context)
-            log_agent(
-                agent_id,
-                "task_reply_received",
-                role=role,
-                reply_len=len(reply or ""),
-                reply_preview=shorten(reply, 300),
-            )
+            # ── Multi-turn loop: feed tool results back to the agent ──
+            MAX_TOOL_TURNS = 5
+            all_tool_results = []
+            final_reply = None
+            current_message = message
+            current_context = context
+            first_turn = True
 
-            # Save assistant reply
-            session_store.save_message(agent_id, "assistant", reply)
-            if self._is_agent_runtime_error(reply):
-                log_agent(agent_id, "task_runtime_error", level="error", role=role, error=shorten(reply, 500))
-                push_event(agent_id, "error", {
-                    "agent_id": agent_id,
-                    "error": reply,
-                })
-                return {"status": "error", "agent_id": agent_id, "error": reply, "reply": reply}
-
-            # Parse tool calls and code blocks from the response
-            start_parse = time.time()
-            tool_results = []
-            if self._should_collect_agent_files(agent_id):
-                log_agent(agent_id, "artifact_collection_start", role=role)
-                tool_results = self._execute_tool_calls(
-                    agent_id, reply, run_id=capability_run_id
-                )
-                if not tool_results:
-                    tool_results = self._parse_and_write_code_blocks(agent_id, reply)
-
-                # If no files found by pattern matching, check filesystem for
-                # files written by Claude's native Write tool (now that --print
-                # is removed, Claude can execute tools directly)
-                if not tool_results:
-                    tool_results = self._detect_written_files(agent_id, reply, baseline=fs_baseline)
-
-                # If still nothing, try a second pass (ask Claude to output files)
-                if not tool_results and self._reply_mentions_files(reply):
-                    log_agent(agent_id, "artifact_second_pass_start", role=role)
-                    tool_results = self._second_pass_extract_files(agent_id, message, reply)
+            for _turn in range(MAX_TOOL_TURNS):
+                prompt = self._with_tool_instructions(agent_id, current_message)
+                reply = agent.send_with_context(prompt, context=current_context)
                 log_agent(
                     agent_id,
-                    "artifact_collection_done",
+                    "task_reply_received",
                     role=role,
-                    file_count=len(tool_results or []),
-                    files=[t.get("file", "") for t in (tool_results or [])],
+                    reply_len=len(reply or ""),
+                    reply_preview=shorten(reply, 300),
                 )
+
+                # Save assistant reply
+                session_store.save_message(agent_id, "assistant", reply)
+                final_reply = reply
+
+                if self._is_agent_runtime_error(reply):
+                    log_agent(agent_id, "task_runtime_error", level="error", role=role, error=shorten(reply, 500))
+                    push_event(agent_id, "error", {
+                        "agent_id": agent_id,
+                        "error": reply,
+                    })
+                    return {"status": "error", "agent_id": agent_id, "error": reply, "reply": reply}
+
+                # Parse <tool_call> XML blocks and execute them
+                start_parse = time.time()
+                turn_tool_results = []
+                if self._should_collect_agent_files(agent_id):
+                    turn_tool_results = self._execute_tool_calls(
+                        agent_id, reply, run_id=capability_run_id
+                    )
+                all_tool_results.extend(turn_tool_results)
+
+                if turn_tool_results:
+                    # Feed tool results back to agent for the next turn
+                    fb_parts = ["工具执行结果："]
+                    for tr in turn_tool_results:
+                        fb_parts.append(
+                            f"\n[{tr.get('tool', 'unknown')}]: {tr.get('result', '')}"
+                        )
+                    current_message = "\n".join(fb_parts)
+                    current_context = ""
+                    first_turn = False
+                    continue  # Next turn with tool feedback
+
+                # No tool calls — extract file artifacts (final turn)
+                if self._should_collect_agent_files(agent_id):
+                    log_agent(agent_id, "artifact_collection_start", role=role)
+                    code_blocks = self._parse_and_write_code_blocks(agent_id, reply)
+                    if code_blocks:
+                        all_tool_results.extend(code_blocks)
+                    else:
+                        detected = self._detect_written_files(agent_id, reply, baseline=fs_baseline)
+                        if detected:
+                            all_tool_results.extend(detected)
+                        elif self._reply_mentions_files(reply):
+                            log_agent(agent_id, "artifact_second_pass_start", role=role)
+                            second_pass = self._second_pass_extract_files(
+                                agent_id,
+                                message if first_turn else current_message,
+                                reply,
+                            )
+                            if second_pass:
+                                all_tool_results.extend(second_pass)
+                    log_agent(
+                        agent_id,
+                        "artifact_collection_done",
+                        role=role,
+                        file_count=len(all_tool_results or []),
+                        files=[t.get("file", "") for t in (all_tool_results or [])],
+                    )
+                break  # Agent is done
 
             parse_elapsed = time.time() - start_parse
 
-            result = {"status": "ok", "agent_id": agent_id, "reply": reply}
+            # Strip <tool_call> blocks from the final reply for clean display
+            clean_reply = self._strip_tool_calls(final_reply or "")
+
+            result = {"status": "ok", "agent_id": agent_id, "reply": clean_reply}
             if capability_run_id:
                 result["capability_run_id"] = capability_run_id
             skill_drafts = self.collect_skill_drafts(agent_id)
             if skill_drafts:
                 result["skill_drafts"] = skill_drafts
-            if tool_results:
-                result["tool_results"] = tool_results
+            if all_tool_results:
+                result["tool_results"] = all_tool_results
 
             push_event(agent_id, "agent_task_completed", {
                 "agent_id": agent_id,
                 "role": role,
                 "message": f"{role} 任务完成",
-                "file_count": len(tool_results) if tool_results else 0,
-                "files": [t.get("file", "") for t in (tool_results or [])],
+                "file_count": len(all_tool_results) if all_tool_results else 0,
+                "files": [t.get("file", "") for t in (all_tool_results or [])],
                 "parse_time": round(parse_elapsed, 1),
             })
             log_agent(
                 agent_id,
                 "task_completed",
                 role=role,
-                file_count=len(tool_results) if tool_results else 0,
+                file_count=len(all_tool_results) if all_tool_results else 0,
                 parse_time=round(parse_elapsed, 2),
             )
             return result
@@ -316,46 +350,80 @@ class Orchestrator:
                 # Snapshot workspace before each agent in the chain
                 chain_baseline = self._snapshot_workspace()
 
-                reply = agent.send(full_msg)
-                log_agent(agent_id, "chain_step_reply_received", role=role, reply_len=len(reply or ""))
-                session_store.save_message(agent_id, "assistant", reply)
-                if self._is_agent_runtime_error(reply):
-                    push_event(agent_id, "error", {
-                        "agent_id": agent_id,
-                        "error": reply,
-                    })
-                    results.append({"status": "error", "agent_id": agent_id, "error": reply, "reply": reply})
-                    continue
+                # ── Multi-turn loop for this chain step ──
+                CHAIN_MAX_TOOL_TURNS = 5
+                all_step_tool_results = []
+                final_step_reply = None
+                current_step_msg = full_msg
+                chain_step_error = False
 
-                tool_results = []
-                if self._should_collect_agent_files(agent_id):
-                    tool_results = self._execute_tool_calls(
-                        agent_id, reply, run_id=capability_run_id
-                    )
-                    if not tool_results:
-                        tool_results = self._parse_and_write_code_blocks(agent_id, reply)
-                    if not tool_results:
-                        tool_results = self._detect_written_files(
-                            agent_id, reply, baseline=chain_baseline)
+                for _cturn in range(CHAIN_MAX_TOOL_TURNS):
+                    reply = agent.send(current_step_msg)
+                    log_agent(agent_id, "chain_step_reply_received", role=role, reply_len=len(reply or ""))
+                    session_store.save_message(agent_id, "assistant", reply)
+                    final_step_reply = reply
 
-                entry = {"status": "ok", "agent_id": agent_id, "reply": reply}
+                    if self._is_agent_runtime_error(reply):
+                        push_event(agent_id, "error", {
+                            "agent_id": agent_id,
+                            "error": reply,
+                        })
+                        results.append({"status": "error", "agent_id": agent_id, "error": reply, "reply": reply})
+                        chain_step_error = True
+                        break
+
+                    step_tool_results = []
+                    if self._should_collect_agent_files(agent_id):
+                        step_tool_results = self._execute_tool_calls(
+                            agent_id, reply, run_id=capability_run_id
+                        )
+                    all_step_tool_results.extend(step_tool_results)
+
+                    if step_tool_results:
+                        # Feed tool results back to the agent
+                        fb_parts = ["工具执行结果："]
+                        for tr in step_tool_results:
+                            fb_parts.append(
+                                f"\n[{tr.get('tool', 'unknown')}]: {tr.get('result', '')}"
+                            )
+                        current_step_msg = "\n".join(fb_parts)
+                        continue
+
+                    # No tool calls — extract file artifacts (final turn)
+                    if self._should_collect_agent_files(agent_id):
+                        code_blocks = self._parse_and_write_code_blocks(agent_id, reply)
+                        if code_blocks:
+                            all_step_tool_results.extend(code_blocks)
+                        else:
+                            detected = self._detect_written_files(
+                                agent_id, reply, baseline=chain_baseline)
+                            if detected:
+                                all_step_tool_results.extend(detected)
+                    break  # Agent is done
+
+                if chain_step_error:
+                    continue  # Skip to next chain item
+
+                clean_reply = self._strip_tool_calls(final_step_reply or "")
+
+                entry = {"status": "ok", "agent_id": agent_id, "reply": clean_reply}
                 if capability_run_id:
                     entry["capability_run_id"] = capability_run_id
                 skill_drafts = self.collect_skill_drafts(agent_id)
                 if skill_drafts:
                     entry["skill_drafts"] = skill_drafts
-                if tool_results:
-                    entry["tool_results"] = tool_results
+                if all_step_tool_results:
+                    entry["tool_results"] = all_step_tool_results
 
                 push_event(agent_id, "agent_task_completed", {
                     "agent_id": agent_id, "role": role,
                     "message": f"{role} 链式任务完成",
-                    "file_count": len(tool_results) if tool_results else 0,
-                    "files": [t.get("file", "") for t in (tool_results or [])],
+                    "file_count": len(all_step_tool_results) if all_step_tool_results else 0,
+                    "files": [t.get("file", "") for t in (all_step_tool_results or [])],
                 })
-                log_agent(agent_id, "chain_step_completed", role=role, file_count=len(tool_results or []))
+                log_agent(agent_id, "chain_step_completed", role=role, file_count=len(all_step_tool_results or []))
 
-                accumulated_context += f"\n\n[{role} 的输出]:\n{reply}"
+                accumulated_context += f"\n\n[{role} 的输出]:\n{clean_reply}"
                 results.append(entry)
             except Exception as e:
                 log_agent(agent_id, "chain_step_exception", level="error", role=role, error=str(e))
@@ -731,6 +799,18 @@ class Orchestrator:
         r"<tool_call>\s*({.*?})\s*</tool_call>", re.DOTALL
     )
 
+    @staticmethod
+    def _strip_tool_calls(text: str) -> str:
+        """Remove <tool_call> XML blocks from agent reply for clean display."""
+        if not text:
+            return text
+        return re.sub(
+            r"<tool_call>\s*\{.*?\}\s*</tool_call>",
+            "",
+            text,
+            flags=re.DOTALL,
+        ).strip()
+
     def _execute_tool_calls(self, agent_id: str, response: str,
                             run_id: str = None) -> list[dict]:
         """Parse <tool_call> blocks from agent response and execute them."""
@@ -753,9 +833,15 @@ class Orchestrator:
                     session_id=session_id,
                 )
                 results.append({"tool": tool_name, "result": result})
-                # Push RAG search results as a structured card element
-                if tool_name == "rag_search" and isinstance(result, dict):
-                    self._push_rag_result_card(agent_id, args.get("query", ""), result)
+                # Push RAG search results as a structured card element (both old and new tool names)
+                if tool_name in ("rag_search", "call_service_api") and isinstance(result, dict):
+                    if tool_name == "call_service_api":
+                        # Check if this is a rag search call
+                        if args.get("service_name") == "rag" and "/api/rag/search" in str(args.get("path", "")):
+                            body = args.get("body") or {}
+                            self._push_rag_result_card(agent_id, body.get("query", ""), result)
+                    else:
+                        self._push_rag_result_card(agent_id, args.get("query", ""), result)
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})
         return results
@@ -814,25 +900,31 @@ class Orchestrator:
                 )
                 for n in (item.get("tool_names") or []):
                     seen_tools.add(n)
-            # 始终包含 rag_search（知识库检索）工具
-            if "rag_search" not in seen_tools and "rag_search" in self.tools._tools:
+            # 始终包含微服务调用工具（list_services / call_service_api）
+            if "list_services" not in seen_tools and "list_services" in self.tools._tools:
                 tool_lines.append(
-                    "  - 知识库检索: 搜索知识库中的文档内容，返回相关文本片段\n"
-                    "    参数: query(必填,搜索关键词), top_k(可选,默认5,返回数量),\n"
-                    "    domain(可选,如rd/edu/office,过滤领域), workspace_id(可选,过滤工作空间),\n"
-                    "    score_threshold(可选,默认0.0,相关性阈值0-1)\n"
-                    "    (status: implemented; tools: rag_search)"
+                    "  - 列出微服务: 列出所有可用的后端微服务及其访问地址\n"
+                    "    (status: implemented; tools: list_services)"
+                )
+            if "call_service_api" not in seen_tools and "call_service_api" in self.tools._tools:
+                tool_lines.append(
+                    "  - 调用服务API: 通用微服务API调用工具，可调用任何已注册服务的接口\n"
+                    "    参数: service_name(必填,服务名如rag/rd), method(默认GET), path(必填,如/api/rag/search),\n"
+                    "    body(可选,POST/PUT的JSON请求体), query_params(可选,URL查询参数)\n"
+                    "    每个服务都有 /api/{service}/spec 端点可查询所有可用接口\n"
+                    "    (status: implemented; tools: call_service_api)"
                 )
             tool_list = "\n".join(tool_lines)
             tool_hint = (
                 "只调用上面列出的 Tool。需要更多说明时，先读取对应 doc 路径中的 TOOL.md。\n"
+                "微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
             )
         else:
             tools = self.tools.list_tools()
             if not tools:
                 return ""
             tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
-            tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n"
+            tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
         work_dir = self._agent_work_dir(agent_id)
         return (
             "\n\n===== 沙箱协作和工具说明 =====\n"

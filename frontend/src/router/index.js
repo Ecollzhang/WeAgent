@@ -65,29 +65,65 @@ const routes = [
     path: '/sandbox',
     redirect: '/favorites',
   },
-  // ── 领域专属页面（占位）─────────────────────────────
+  // ── 智能研发领域 ──────────────────────────────────
   {
     path: '/projects',
     name: 'projects',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/rd/RdProjects.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/projects/:id',
+    name: 'projectDetail',
+    component: () => import('../views/rd/RdProjectDetail.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/projects/:id/requirements/:rid',
+    name: 'requirementDetail',
+    component: () => import('../views/rd/RdRequirementDetail.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/projects/:id/bugs/:bid',
+    name: 'bugDetail',
+    component: () => import('../views/rd/RdBugDetail.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/projects/:id/gantt',
+    name: 'projectGantt',
+    component: () => import('../views/rd/RdGanttChart.vue'),
     meta: { requiresAuth: true },
   },
   {
     path: '/repos',
     name: 'repos',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/rd/RdRepos.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/repos/:id',
+    name: 'repoDetail',
+    component: () => import('../views/rd/RdRepoDetail.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/rd/callback',
+    name: 'githubCallback',
+    component: () => import('../views/rd/GithubCallback.vue'),
     meta: { requiresAuth: true },
   },
   {
     path: '/reviews',
     name: 'reviews',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/rd/RdReviews.vue'),
     meta: { requiresAuth: true },
   },
   {
     path: '/builds',
     name: 'builds',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/rd/RdBuilds.vue'),
     meta: { requiresAuth: true },
   },
   {

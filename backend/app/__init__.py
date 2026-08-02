@@ -95,6 +95,10 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN stopped_at DATETIME DEFAULT NULL'))
             if 'workspace_id' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(36) DEFAULT NULL'))
+            if 'kb_domain' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_domain VARCHAR(20) DEFAULT NULL'))
+            if 'kb_document_ids' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_document_ids JSON DEFAULT NULL'))
             conn.commit()
 
     # workspaces table — sub_role column

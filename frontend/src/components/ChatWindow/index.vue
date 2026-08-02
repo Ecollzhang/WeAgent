@@ -6,6 +6,15 @@
         <span class="participant-count">
           {{ participantCount }} 个参与者
         </span>
+        <el-tag
+          v-if="conversation.kb_domain"
+          size="mini"
+          :type="kbDomainTagType"
+          effect="plain"
+          class="kb-domain-badge"
+        >
+          <i class="el-icon-collection"></i> {{ kbDomainLabel }}
+        </el-tag>
       </div>
       <div class="header-actions">
         <el-button size="mini" icon="el-icon-search" type="text" @click="toggleSearchPanel" title="搜索"></el-button>
@@ -46,6 +55,24 @@
         <el-button size="mini" icon="el-icon-star-off" type="text" title="收藏"></el-button>
         <el-button size="mini" icon="el-icon-time" type="text" title="历史"></el-button>
         <el-button size="mini" icon="el-icon-more" type="text" title="更多"></el-button>
+      </div>
+    </div>
+
+    <!-- 服务/项目上下文栏 -->
+    <div class="context-bar" v-if="conversation && (conversation.services?.length || conversation.project_id || conversation.kb_domain)">
+      <div class="context-bar-left">
+        <span class="context-label">上下文</span>
+        <span v-if="conversation.services?.includes('rd')" class="ctx-chip rd" title="智能研发服务已启用">
+          <span class="ctx-dot rd"></span> RD
+        </span>
+        <span v-if="conversation.project_id" class="ctx-chip project" :title="'关联项目: ' + (projectName || conversation.project_id)" @click="openProject">
+          <i class="el-icon-folder-opened"></i>
+          {{ projectName || conversation.project_id.slice(0, 8) + '...' }}
+        </span>
+        <span v-if="conversation.services?.includes('rag')" class="ctx-chip rag" title="知识库服务已启用">
+          <span class="ctx-dot rag"></span> RAG
+          <span v-if="conversation.kb_domain" class="ctx-sub">· {{ kbDomainLabel(conversation.kb_domain) }}</span>
+        </span>
       </div>
     </div>
 
@@ -267,13 +294,39 @@
     <!-- 底部标签切换栏 -->
     <div class="chat-tabs" v-if="conversation">
       <span
-        v-for="tab in tabs"
+        v-for="tab in visibleTabs"
         :key="tab.key"
         class="tab-item"
         :class="{ active: activeTab === tab.key }"
         @click="handleTabSwitch(tab.key)"
       >{{ tab.label }}</span>
+      <!-- 知识库入口 -->
+      <span
+        v-if="kbTabVisible"
+        class="tab-item kb-tab"
+        :class="{ active: kbDialogVisible }"
+        @click="openKbDialog"
+      >知识库</span>
     </div>
+    <!-- KB selected document chips row (between tabs and input) -->
+    <div class="kb-doc-chips-row" v-if="conversation && selectedKbDocs.length">
+      <span class="kb-doc-chips-label">知识库文档：</span>
+      <span
+        v-for="doc in visibleKbDocs"
+        :key="doc.id"
+        class="kb-doc-chip"
+      >{{ doc.name }}</span>
+      <span v-if="selectedKbDocs.length > 3" class="kb-doc-more">
+        +{{ selectedKbDocs.length - 3 }}
+      </span>
+    </div>
+    <!-- 隐藏的知识库选择器 (控制弹窗) -->
+    <KbDocumentSelector
+      ref="kbDocSelector"
+      :conversation="conversation"
+      :hideTrigger="true"
+      @documents-change="onKbDocumentsChange"
+    />
 
     <div class="message-input" v-if="conversation">
       <div v-if="selectedWorkflowLabel" class="selected-workflow-chip">
@@ -456,12 +509,13 @@
 
 <script>
 import MessageBubble from '../MessageBubble/index.vue'
+import KbDocumentSelector from '../KbDocumentSelector/index.vue'
 import { checkVisible } from '../../store/modules/grayscale'
 import { listServices, getServiceLogs, restartService, stopService } from '../../api/sandbox'
 
 export default {
   name: 'ChatWindow',
-  components: { MessageBubble },
+  components: { MessageBubble, KbDocumentSelector },
   props: {
     conversation: Object,
     messages: Array,
@@ -499,6 +553,10 @@ export default {
       serviceLogsData: null,
       serviceLogsLoading: false,
       stickToBottom: true,
+      selectedKbDocs: [],
+      kbDialogVisible: false,
+      projectName: '',
+      projectNameLoading: false,
       panelVisible: false,
       panelMode: 'search',
       searchQuery: '',
@@ -531,6 +589,14 @@ export default {
     participantCount() {
       if (!this.conversation || !this.conversation.participant_ids) return 0
       return this.conversation.participant_ids.length
+    },
+    kbDomainLabel() {
+      const map = { rd: '智能研发', edu: '智慧教育', office: '智慧办公', all: '全部领域' }
+      return map[this.conversation?.kb_domain] || this.conversation?.kb_domain || ''
+    },
+    kbDomainTagType() {
+      const map = { rd: '', edu: 'success', office: 'warning', all: 'info' }
+      return map[this.conversation?.kb_domain] || ''
     },
     sessionId() {
       return this.conversation?.sandbox_session_id || this.conversation?.id || ''
@@ -696,6 +762,24 @@ export default {
       if (this.sidePanelMode === 'logs') return '日志'
       return ''
     },
+    visibleTabs() {
+      const state = this.$store.state.grayscale
+      const domain = this.activeDomain
+      return this.tabs.filter(tab => {
+        if (tab.key === 'chat') return true
+        return checkVisible(state, domain, 'ui.chat.tabs.' + tab.key)
+      })
+    },
+    kbTabVisible() {
+      return checkVisible(
+        this.$store.state.grayscale,
+        this.activeDomain,
+        'ui.chat.tabs.knowledge_base'
+      )
+    },
+    visibleKbDocs() {
+      return this.selectedKbDocs.slice(0, 3)
+    },
     sidePanelSubtitle() {
       if (this.sidePanelMode === 'agent_config') return '只影响当前会话，不更新全局 Agent'
       if (this.sidePanelMode === 'artifacts') return `当前会话 ${this.conversationArtifacts.length} 个产物`
@@ -714,8 +798,12 @@ export default {
       this.sandboxServices = []
       this.selectedServiceId = ''
       this.serviceLogsData = null
+      this.projectName = ''
       this.ensureSessionAgentConfigs()
       this.loadSavedWorkflows()
+      if (this.conversation?.project_id) {
+        this.fetchProjectName(this.conversation.project_id)
+      }
       this.$nextTick(() => this.scrollToBottom(true))
     },
     workflowDraft: {
@@ -1227,6 +1315,26 @@ export default {
       })
       return parts.join(' ')
     },
+    onKbDocumentsChange(docs) {
+      this.selectedKbDocs = docs || []
+    },
+    openKbDialog() {
+      this.kbDialogVisible = true
+      this.$refs.kbDocSelector.openDialog()
+      // sync dialog state back when it closes
+      this.$nextTick(() => {
+        const selector = this.$refs.kbDocSelector
+        const unwatch = this.$watch(
+          function () { return selector && selector.visible },
+          function (v) {
+            if (!v) {
+              this.kbDialogVisible = false
+              unwatch()
+            }
+          }
+        )
+      })
+    },
     isNearBottom() {
       const container = this.$refs.messagesContainer
       if (!container) return true
@@ -1548,6 +1656,27 @@ export default {
         this.serviceLogsLoading = false
       }
     },
+
+    async fetchProjectName(projectId) {
+      if (!projectId) return
+      this.projectNameLoading = true
+      try {
+        const { getProject } = await import('../../api/rd')
+        const res = await getProject(projectId)
+        if (res.code === 200 && res.data) {
+          this.projectName = res.data.name || ''
+        }
+      } catch (e) {
+        // Silently fail — will show truncated ID instead
+      } finally {
+        this.projectNameLoading = false
+      }
+    },
+
+    openProject() {
+      if (!this.conversation?.project_id) return
+      this.$router.push(`/rd/projects/${this.conversation.project_id}`)
+    },
     async loadSelectedServiceLogs() {
       if (!this.sessionId || !this.selectedServiceId) {
         this.serviceLogsData = null
@@ -1564,7 +1693,7 @@ export default {
       }
     },
   },
-}
+};
 </script>
 
 <style scoped>
@@ -1578,7 +1707,7 @@ export default {
 .chat-header {
   height: 60px;
   padding: 0 20px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid #eef1f6;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1599,6 +1728,11 @@ export default {
 .participant-count {
   font-size: 12px;
   color: #94a3b8;
+}
+
+.kb-domain-badge {
+  margin-left: 8px;
+  font-size: 11px;
 }
 
 .header-actions {
@@ -1735,26 +1869,41 @@ export default {
 .messages-container {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
-  background: #fafafa;
+  padding: 20px 24px;
+  background: #f7f8fa;
 }
 
 .messages-container::-webkit-scrollbar {
-  width: 4px;
+  width: 5px;
+}
+
+.messages-container::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .messages-container::-webkit-scrollbar-thumb {
-  background: #dcdde1;
-  border-radius: 4px;
+  background: #d5dbe3;
+  border-radius: 999px;
+}
+
+.messages-container::-webkit-scrollbar-thumb:hover {
+  background: #c0c8d4;
 }
 
 .message-wrapper {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  animation: messageSlideIn 0.25s ease-out;
+}
+
+@keyframes messageSlideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .message-wrapper.highlighted {
   border-radius: 10px;
-  box-shadow: 0 0 0 2px rgba(64, 128, 255, 0.14);
+  box-shadow: 0 0 0 3px rgba(64, 128, 255, 0.18);
+  transition: box-shadow 0.3s ease-out;
 }
 
 .empty-messages {
@@ -1767,57 +1916,181 @@ export default {
 }
 
 .empty-messages i {
-  font-size: 64px;
+  font-size: 56px;
   margin-bottom: 16px;
-  color: #cbd5e1;
+  color: #d5dce6;
 }
 
 .empty-messages h2 {
   font-size: 22px;
   color: #1e293b;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+
+.empty-messages p {
+  font-size: 14px;
+  color: #94a3b8;
+  margin: 0;
 }
 
 .empty-messages .hint {
   font-size: 13px;
-  margin-top: 8px;
+  margin-top: 12px;
+  color: #bcc4d2;
+}
+
+/* 服务/项目上下文栏 */
+.context-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 20px;
+  background: #f8fafc;
+  border-bottom: 1px solid #f0f0f0;
+  min-height: 34px;
+  flex-shrink: 0;
+}
+.context-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.context-label {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-right: 2px;
+}
+.ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.ctx-chip.rd {
+  background: #e8f0ff;
+  color: #4080ff;
+}
+.ctx-chip.rag {
+  background: #e8f5e9;
+  color: #4caf50;
+}
+.ctx-chip.project {
+  background: #fff3e0;
+  color: #e65100;
+  cursor: pointer;
+}
+.ctx-chip.project:hover {
+  background: #ffe0b2;
+}
+.ctx-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ctx-dot.rd {
+  background: #4080ff;
+}
+.ctx-dot.rag {
+  background: #4caf50;
+}
+.ctx-sub {
+  font-weight: 400;
+  opacity: 0.8;
 }
 
 /* 底部标签栏 */
 .chat-tabs {
   height: 42px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid #eef1f6;
   display: flex;
   align-items: center;
   padding: 0 16px;
-  gap: 8px;
-  background: rgba(250,250,250,0.8);
+  gap: 6px;
+  background: #fafbfc;
   flex-shrink: 0;
 }
 
 .tab-item {
-  padding: 4px 12px;
-  border-radius: 6px;
+  padding: 5px 14px;
+  border-radius: 7px;
   font-size: 12px;
-  color: #666;
+  color: #64748b;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
+  font-weight: 500;
 }
 
 .tab-item:hover {
-  background: #f0f0f0;
+  background: #eef2f7;
+  color: #334155;
 }
 
 .tab-item.active {
   background: #4080ff;
   color: #fff;
+  box-shadow: 0 1px 3px rgba(64, 128, 255, 0.3);
 }
 
-/* 飞书风格输入框 */
+.kb-tab {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+}
+
+.kb-doc-chips-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 16px;
+  border-top: 1px solid #f0f0f0;
+  background: #fafafa;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.kb-doc-chips-label {
+  font-size: 11px;
+  color: #909399;
+  margin-right: 2px;
+  white-space: nowrap;
+}
+
+.kb-doc-chip {
+  display: inline-block;
+  max-width: 100px;
+  padding: 1px 7px;
+  background: #ecf5ff;
+  color: #409eff;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kb-doc-more {
+  display: inline-block;
+  padding: 1px 6px;
+  background: #f0f0f0;
+  color: #909399;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 输入框 */
 .message-input {
   min-height: 68px;
-  padding: 10px 16px;
-  border-top: 1px solid #f0f0f0;
+  padding: 12px 16px;
+  border-top: 1px solid #eef1f6;
   flex-shrink: 0;
   background: #ffffff;
 }
@@ -1827,10 +2100,10 @@ export default {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   border: 1px solid #bfdbfe;
-  border-radius: 7px;
-  padding: 5px 8px;
+  border-radius: 8px;
+  padding: 6px 10px;
   background: #eff6ff;
   color: #1d4ed8;
   font-size: 12px;
@@ -1841,16 +2114,29 @@ export default {
   background: transparent;
   color: #1d4ed8;
   cursor: pointer;
+  font-size: 16px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.selected-workflow-chip button:hover {
+  opacity: 1;
 }
 
 .input-wrapper {
   display: flex;
   align-items: center;
-  background: #f2f3f5;
-  border-radius: 8px;
-  padding: 0 12px;
+  background: #f2f4f7;
+  border-radius: 10px;
+  padding: 0 14px;
   height: 44px;
   position: relative;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.input-wrapper:focus-within {
+  background: #eef2f7;
+  box-shadow: 0 0 0 2px rgba(64, 128, 255, 0.12);
 }
 
 .input-wrapper .feishu-input :deep(.el-input__inner) {
@@ -1859,6 +2145,11 @@ export default {
   font-size: 14px;
   height: 44px;
   padding: 0;
+  color: #1e293b;
+}
+
+.input-wrapper .feishu-input :deep(.el-input__inner::placeholder) {
+  color: #a0aec0;
 }
 
 .input-wrapper .feishu-input :deep(.el-input__inner:focus) {
@@ -1870,13 +2161,18 @@ export default {
 }
 
 .send-btn {
-  font-size: 18px;
+  font-size: 20px;
   color: #4080ff;
-  padding: 8px;
+  padding: 6px;
+  transition: transform 0.15s;
+}
+
+.send-btn:not(:disabled):hover {
+  transform: scale(1.15);
 }
 
 .send-btn:disabled {
-  color: #c0c4cc;
+  color: #cbd5e0;
 }
 
 .mention-menu {
@@ -1947,19 +2243,25 @@ export default {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 0;
+  padding: 12px 0;
+  animation: fadeInUp 0.3s ease-out;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .typing-dots {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .dot {
   width: 8px;
   height: 8px;
-  background: #c0d3f0;
+  background: #a0c4f0;
   border-radius: 50%;
   animation: typingBounce 1.4s ease-in-out infinite;
 }
@@ -1969,13 +2271,14 @@ export default {
 .dot:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typingBounce {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-6px); opacity: 1; }
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; background: #a0c4f0; }
+  30% { transform: translateY(-7px); opacity: 1; background: #4080ff; }
 }
 
 .typing-text {
   font-size: 12px;
-  color: #94a3b8;
+  color: #8b9ab8;
+  font-weight: 500;
 }
 
 .functional-side-backdrop {
@@ -2137,17 +2440,23 @@ export default {
   align-items: flex-start;
   gap: 12px;
   border: 1px solid #e8edf5;
-  border-radius: 8px;
-  padding: 12px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  border-radius: 10px;
+  padding: 14px;
+  background: #ffffff;
   text-align: left;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: all 0.2s ease;
+}
+
+.side-artifact-item:hover {
+  border-color: #bfd3ff;
+  box-shadow: 0 4px 12px rgba(64, 128, 255, 0.08);
+  transform: translateY(-1px);
 }
 
 .side-artifact-item + .side-artifact-item {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .artifact-group + .artifact-group {

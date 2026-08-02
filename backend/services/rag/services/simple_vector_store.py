@@ -55,8 +55,8 @@ class SimpleVectorStore:
             conn.close()
 
     def search(self, query_embedding: list[float], top_k: int = 5,
-               filter_meta: dict = None) -> list[dict]:
-        """Brute-force cosine 相似度搜索."""
+               filter_meta: dict = None, document_ids: list[str] = None) -> list[dict]:
+        """Brute-force cosine 相似度搜索，支持按 document_ids 过滤."""
         with self._lock:
             conn = sqlite3.connect(self.db_path)
             rows = conn.execute('SELECT id, embedding, document, metadata FROM vectors').fetchall()
@@ -65,14 +65,21 @@ class SimpleVectorStore:
         if not rows:
             return []
 
+        # 预计算 document_ids 过滤集合
+        doc_id_set = set(document_ids) if document_ids else None
+
         # 计算所有向量的 cosine 相似度
         scored = []
         for row in rows:
             vid, emb_json, doc, meta_json = row
+            meta = json.loads(meta_json) if meta_json else {}
             # metadata 按需过滤
             if filter_meta:
-                meta = json.loads(meta_json) if meta_json else {}
                 if not all(meta.get(k) == v for k, v in filter_meta.items()):
+                    continue
+            # document_ids 过滤
+            if doc_id_set:
+                if meta.get('document_id') not in doc_id_set:
                     continue
             emb = json.loads(emb_json)
             similarity = _cosine_similarity(query_embedding, emb)
