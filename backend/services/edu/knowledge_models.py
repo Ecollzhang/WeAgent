@@ -21,6 +21,7 @@ class AssessmentItem(TimestampMixin, db.Model):
     source_type = db.Column(db.String(30), nullable=False, default="teacher")
     source_agent_run_id = db.Column(db.String(100), nullable=True, index=True)
     current_version_id = db.Column(db.String(36), nullable=True)
+    published_version_id = db.Column(db.String(36), nullable=True, index=True)
     status = db.Column(db.String(20), nullable=False, default="draft", index=True)
     published_by = db.Column(db.String(100), nullable=True)
     published_at = db.Column(db.DateTime, nullable=True)
@@ -52,6 +53,13 @@ class AssessmentItemVersion(db.Model):
     knowledge_points = db.Column(db.JSON, nullable=False, default=list)
     grade_band = db.Column(db.String(50), nullable=True)
     source_context = db.Column(db.JSON, nullable=False, default=dict)
+    stimulus_version_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_assessment_stimulus_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    stimulus_order = db.Column(db.Integer, nullable=True)
     checksum = db.Column(db.String(64), nullable=False)
     created_by_user_id = db.Column(db.String(100), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -101,6 +109,7 @@ class AssessmentPaper(TimestampMixin, db.Model):
         index=True,
     )
     current_version_id = db.Column(db.String(36), nullable=True)
+    published_version_id = db.Column(db.String(36), nullable=True, index=True)
     status = db.Column(db.String(20), nullable=False, default="draft", index=True)
     published_by = db.Column(db.String(100), nullable=True)
     published_at = db.Column(db.DateTime, nullable=True)
@@ -129,6 +138,55 @@ class AssessmentPaperVersion(db.Model):
     total_score = db.Column(db.Float, nullable=False)
     duration_minutes = db.Column(db.Integer, nullable=False)
     blueprint = db.Column(db.JSON, nullable=False, default=dict)
+    checksum = db.Column(db.String(64), nullable=False)
+    created_by_user_id = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class AssessmentStimulus(TimestampMixin, db.Model):
+    """Stable identity for a versioned reading or reference material."""
+
+    __tablename__ = "edu_assessment_stimuli"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    course_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_courses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title = db.Column(db.String(240), nullable=False)
+    stimulus_type = db.Column(db.String(30), nullable=False, default="reading_passage")
+    owner_user_id = db.Column(db.String(100), nullable=False, index=True)
+    current_version_id = db.Column(db.String(36), nullable=True)
+    published_version_id = db.Column(db.String(36), nullable=True, index=True)
+    status = db.Column(db.String(20), nullable=False, default="draft", index=True)
+    published_by = db.Column(db.String(100), nullable=True)
+    published_at = db.Column(db.DateTime, nullable=True)
+
+
+class AssessmentStimulusVersion(db.Model):
+    __tablename__ = "edu_assessment_stimulus_versions"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "stimulus_id",
+            "version_number",
+            name="uq_edu_assessment_stimulus_version",
+        ),
+    )
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    stimulus_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_assessment_stimuli.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version_number = db.Column(db.Integer, nullable=False)
+    content_json = db.Column(db.JSON, nullable=False)
+    source_refs = db.Column(db.JSON, nullable=False, default=list)
+    language = db.Column(db.String(20), nullable=True)
+    word_or_character_count = db.Column(db.Integer, nullable=False, default=0)
     checksum = db.Column(db.String(64), nullable=False)
     created_by_user_id = db.Column(db.String(100), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

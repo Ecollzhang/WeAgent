@@ -2049,8 +2049,11 @@ class MessageService:
             and agent_id == '_edu_3'
         ):
             try:
-                source = parse_exact_json({'questions'})
+                source = parse_exact_json({'stimuli', 'questions'})
+                stimuli = source['stimuli']
                 questions = source['questions']
+                if not isinstance(stimuli, list) or len(stimuli) > 10:
+                    raise ValueError('stimuli must contain 0 to 10 objects')
                 if not isinstance(questions, list) or not 1 <= len(questions) <= 30:
                     raise ValueError('questions must contain 1 to 30 objects')
                 source_bytes = json.dumps(
@@ -2061,7 +2064,7 @@ class MessageService:
                 ).encode('utf-8')
                 result = invoke_education(
                     'edu.question_bank.upsert',
-                    {'questions': questions, 'publish': False},
+                    {'stimuli': stimuli, 'questions': questions, 'publish': False},
                     'product-question-generation-'
                     + hashlib.sha256(source_bytes).hexdigest()[:16],
                 )
@@ -2533,8 +2536,10 @@ class MessageService:
                                     'The trusted question finalizer rejected your JSON. '
                                     f'Exact error: {finalizer_result.get("error")}\n'
                                     'Return only one complete JSON object with exactly the '
-                                    'root field questions. questions must be an array of '
-                                    'canonical question objects. Do not use Markdown, tools, '
+                                    'root fields stimuli and questions. stimuli must be an array of '
+                                    'canonical source objects; questions must be an array of canonical '
+                                    'question objects. Every stimulus needs at least two child questions '
+                                    'with unique positive stimulus_order values. Do not use Markdown, tools, '
                                     'progress commands, explanations, or wrapper fields.'
                                 )
                             elif finalizer == {

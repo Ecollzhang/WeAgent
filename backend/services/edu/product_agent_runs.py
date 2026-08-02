@@ -135,17 +135,31 @@ def education_reply_finalizer_protocol(product_code):
         common.extend(
             [
                 "Finalizer type: education_questions_from_agent_reply.",
-                "The exercise_generator root object must contain exactly questions.",
+                "The exercise_generator root object must contain exactly stimuli and questions.",
+                "stimuli is an array of versioned source materials. For a reading workflow, "
+                "create one authentic or teacher-supplied passage and connect its questions "
+                "with stimulus_key. For an independent exercise, stimuli is an empty array.",
+                "Each stimulus contains client_key, title, stimulus_type, content, "
+                "source_refs, and language. content contains paragraphs as plain strings; "
+                "source_refs record title, author, URL and rights when a source exists.",
+                "Every stimulus must be referenced by at least two questions, and its "
+                "stimulus_order values must be unique positive integers.",
                 "questions must contain the requested number of canonical question "
                 "objects. Every object must contain title, question_type, prompt, "
                 "options, correct_answer, explanation, difficulty, score, "
                 "knowledge_points, grade_band, and source_context.",
-                "single_choice options are plain strings without A/B/C/D prefixes; "
-                "correct_answer is the zero-based integer option index.",
+                "Allowed question_type values are single_choice, multiple_choice, "
+                "true_false, fill_blank, short_answer, and writing. Choice options are "
+                "plain strings without A/B/C/D prefixes; choice correct_answer uses "
+                "option letters. Grouped questions also contain stimulus_key and "
+                "stimulus_order. Do not force every task into multiple choice.",
                 "The finalizer invokes edu.question_bank.upsert with publish=false.",
-                'Exact root example: {"questions":[{"title":"...",'
+                'Exact root example: {"stimuli":[{"client_key":"passage-1",'
+                '"title":"...","stimulus_type":"reading_passage",'
+                '"content":{"paragraphs":["..."]},"source_refs":[],"language":"en"}],'
+                '"questions":[{"stimulus_key":"passage-1","stimulus_order":1,"title":"...",'
                 '"question_type":"single_choice","prompt":"...",'
-                '"options":["...","..."],"correct_answer":0,'
+                '"options":["...","..."],"correct_answer":"A",'
                 '"explanation":"...","difficulty":"medium","score":5,'
                 '"knowledge_points":["..."],"grade_band":"senior_high",'
                 '"source_context":{"basis":"teacher_requirement"}}]}',

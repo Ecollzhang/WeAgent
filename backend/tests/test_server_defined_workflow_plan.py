@@ -285,13 +285,14 @@ def test_question_finalizer_validates_json_and_adopts_draft_questions():
             }
 
     questions = {
+        "stimuli": [],
         "questions": [
             {
                 "title": "Evidence and inference",
                 "question_type": "single_choice",
                 "prompt": "Which detail best supports the inference?",
                 "options": ["Detail one", "Detail two", "Detail three"],
-                "correct_answer": 1,
+                "correct_answer": "B",
                 "explanation": "Detail two directly supports the inference.",
                 "difficulty": "medium",
                 "score": 5,
@@ -316,7 +317,11 @@ def test_question_finalizer_validates_json_and_adopts_draft_questions():
     assert agent_id == "_edu_3"
     assert tool_name == "education_action"
     assert args["action"] == "edu.question_bank.upsert"
-    assert args["arguments"] == {"questions": questions["questions"], "publish": False}
+    assert args["arguments"] == {
+        "stimuli": [],
+        "questions": questions["questions"],
+        "publish": False,
+    }
     assert args["idempotency_key"].startswith("product-question-generation-")
 
 

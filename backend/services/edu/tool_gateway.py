@@ -39,9 +39,11 @@ from .knowledge_service import (
     KnowledgeServiceError,
     compose_paper,
     create_question,
+    create_stimulus,
     knowledge_resource_to_dict,
     paper_to_dict,
     publish_question,
+    publish_stimulus,
     question_to_dict,
 )
 from .learning_service import (
@@ -102,6 +104,7 @@ QUESTION_SCHEMA = _object_schema(
             "enum": [
                 "single_choice",
                 "multiple_choice",
+                "true_false",
                 "fill_blank",
                 "short_answer",
                 "writing",
@@ -127,6 +130,8 @@ QUESTION_SCHEMA = _object_schema(
         "rubric": {"type": "object"},
         "grade_band": {"type": "string"},
         "source_context": {"type": "object"},
+        "stimulus_key": {"type": "string"},
+        "stimulus_order": {"type": "integer"},
     },
     [
         "title",
@@ -320,6 +325,23 @@ TOOL_CATALOG = {
         "mode": "write",
         "input_schema": _object_schema(
             {
+                "stimuli": {
+                    "type": "array",
+                    "items": _object_schema(
+                        {
+                            "client_key": {"type": "string"},
+                            "title": {"type": "string"},
+                            "stimulus_type": {
+                                "type": "string",
+                                "enum": ["reading_passage", "image_text", "reference_material"],
+                            },
+                            "content": {"type": "object"},
+                            "source_refs": {"type": "array", "items": {"type": "object"}},
+                            "language": {"type": "string"},
+                        },
+                        ["client_key", "title", "stimulus_type", "content", "source_refs"],
+                    ),
+                },
                 "questions": {
                     "type": "array",
                     "items": QUESTION_SCHEMA,
@@ -727,6 +749,7 @@ def _question_search(grant, arguments):
         item = question_to_dict(
             row,
             include_answer=grant.actor_role == TEACHER,
+            use_published=grant.actor_role != TEACHER,
         )
         version = item.get("current_version") or {}
         if difficulty and version.get("difficulty") != difficulty:
@@ -1251,7 +1274,14 @@ def _attach_asset(grant, arguments):
 
 
 def _question_upsert(grant, arguments):
+    stimuli = arguments.get("stimuli") or []
     questions = arguments.get("questions")
+    if not isinstance(stimuli, list) or len(stimuli) > 10:
+        raise ToolGatewayError(
+            "stimuli must contain at most 10 canonical objects",
+            400,
+            "invalid_stimulus_batch",
+        )
     if not isinstance(questions, list) or not questions or len(questions) > 100:
         raise ToolGatewayError(
             "questions must contain 1 to 100 canonical objects",
@@ -1259,6 +1289,65 @@ def _question_upsert(grant, arguments):
             "invalid_question_batch",
         )
     source_agent_run_id = grant.agent_run_id
+    stimulus_payloads = {}
+    for payload in stimuli:
+        if not isinstance(payload, dict):
+            raise ToolGatewayError(
+                "every stimulus must be an object", 400, "invalid_stimulus_batch"
+            )
+        client_key = str(payload.get("client_key") or "").strip()
+        if not client_key or client_key in stimulus_payloads:
+            raise ToolGatewayError(
+                "stimulus client_key must be unique and non-empty",
+                400,
+                "invalid_stimulus_key",
+            )
+        stimulus_payloads[client_key] = payload
+    grouped_orders = {client_key: [] for client_key in stimulus_payloads}
+    for payload in questions:
+        if not isinstance(payload, dict):
+            raise ToolGatewayError(
+                "every question must be an object",
+                400,
+                "invalid_question_batch",
+            )
+        stimulus_key = str(payload.get("stimulus_key") or "").strip()
+        if not stimulus_key:
+            continue
+        if stimulus_key not in stimulus_payloads:
+            raise ToolGatewayError(
+                "question references an unknown stimulus_key",
+                400,
+                "invalid_stimulus_key",
+            )
+        order = payload.get("stimulus_order")
+        if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+            raise ToolGatewayError(
+                "grouped questions require a positive integer stimulus_order",
+                400,
+                "invalid_stimulus_order",
+            )
+        grouped_orders[stimulus_key].append(order)
+    for stimulus_key, orders in grouped_orders.items():
+        if len(orders) < 2:
+            raise ToolGatewayError(
+                f"stimulus {stimulus_key} must have at least two child questions",
+                400,
+                "stimulus_group_too_small",
+            )
+        if len(orders) != len(set(orders)):
+            raise ToolGatewayError(
+                f"stimulus {stimulus_key} has duplicate child order values",
+                400,
+                "invalid_stimulus_order",
+            )
+    stimulus_versions = {}
+    for client_key, payload in stimulus_payloads.items():
+        stimulus_versions[client_key] = create_stimulus(
+            grant.course_id,
+            grant.actor_user_id,
+            payload,
+        )
     items = []
     for payload in questions:
         if not isinstance(payload, dict):
@@ -1267,16 +1356,41 @@ def _question_upsert(grant, arguments):
                 400,
                 "invalid_question_batch",
             )
+        question_payload = dict(payload)
+        stimulus_key = str(question_payload.pop("stimulus_key", "") or "").strip()
+        if stimulus_key:
+            stimulus = stimulus_versions.get(stimulus_key)
+            if not stimulus:
+                raise ToolGatewayError(
+                    "question references an unknown stimulus_key",
+                    400,
+                    "invalid_stimulus_key",
+                )
+            question_payload["stimulus_version_id"] = stimulus.current_version_id
         item = create_question(
             grant.course_id,
             grant.actor_user_id,
-            {**payload, "source_agent_run_id": source_agent_run_id},
+            {**question_payload, "source_agent_run_id": source_agent_run_id},
             source_type="agent",
         )
         if arguments.get("publish") is True:
             publish_question(item, grant.actor_user_id)
         items.append(question_to_dict(item, include_answer=True))
-    return {"items": items}
+    if arguments.get("publish") is True:
+        for stimulus in stimulus_versions.values():
+            publish_stimulus(stimulus, grant.actor_user_id)
+    return {
+        "items": items,
+        "stimuli": [
+            {
+                "id": stimulus.id,
+                "client_key": client_key,
+                "current_version_id": stimulus.current_version_id,
+                "status": stimulus.status,
+            }
+            for client_key, stimulus in stimulus_versions.items()
+        ],
+    }
 
 
 def _paper_compose(grant, arguments):

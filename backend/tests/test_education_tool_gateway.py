@@ -381,6 +381,131 @@ def test_teacher_question_tool_uses_canonical_service_and_is_idempotent(app):
         assert "token" not in str(calls[0].sanitized_input).lower()
 
 
+def test_student_question_search_uses_published_version_not_teacher_draft(app):
+    client = app.test_client()
+    teacher, student, course = setup_course(client, app)
+    created = client.post(
+        f"/api/edu/courses/{course['id']}/questions",
+        headers=teacher,
+        json=question_payload(),
+    ).get_json()
+    assert client.post(
+        f"/api/edu/questions/{created['id']}/publish",
+        headers=teacher,
+    ).status_code == 200
+    draft_prompt = "Private teacher draft that students must not retrieve."
+    assert client.post(
+        f"/api/edu/questions/{created['id']}/versions",
+        headers=teacher,
+        json={**question_payload(), "prompt": draft_prompt},
+    ).status_code == 201
+    grant = issue_grant(
+        client,
+        student,
+        course["id"],
+        ["edu.question_bank.search"],
+    )
+
+    response = invoke(
+        client,
+        grant["token"],
+        "edu.question_bank.search",
+        {"limit": 10},
+    )
+
+    assert response.status_code == 200
+    item = response.get_json()["result"]["items"][0]
+    assert item["current_version"]["prompt"] == question_payload()["prompt"]
+    assert item["current_version"]["prompt"] != draft_prompt
+    assert "answer" not in item["current_version"]
+
+
+def test_agent_question_group_requires_multiple_children_and_persists_atomically(app):
+    from services.edu.knowledge_models import AssessmentItem, AssessmentStimulus
+
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        ["edu.question_bank.upsert"],
+    )
+    stimulus = {
+        "client_key": "gift-of-magi",
+        "title": "The Gift of the Magi — classroom excerpt",
+        "stimulus_type": "reading_passage",
+        "content": {
+            "paragraphs": [
+                "Della counted the money again. There was only one dollar and eighty-seven cents.",
+                "She had been saving every penny she could for Jim's present.",
+            ]
+        },
+        "source_refs": [
+            {
+                "title": "The Gift of the Magi",
+                "author": "O. Henry",
+                "url": "https://www.gutenberg.org/ebooks/7256",
+                "rights": "Public domain in the USA",
+            }
+        ],
+        "language": "en",
+    }
+    one_child = {
+        **question_payload(),
+        "stimulus_key": "gift-of-magi",
+        "stimulus_order": 1,
+    }
+
+    rejected = invoke(
+        client,
+        grant["token"],
+        "edu.question_bank.upsert",
+        {"stimuli": [stimulus], "questions": [one_child]},
+        "group-too-small",
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.get_json()["error_code"] == "stimulus_group_too_small"
+    with app.app_context():
+        assert AssessmentStimulus.query.count() == 0
+        assert AssessmentItem.query.count() == 0
+
+    accepted = invoke(
+        client,
+        grant["token"],
+        "edu.question_bank.upsert",
+        {
+            "stimuli": [stimulus],
+            "questions": [
+                one_child,
+                {
+                    "title": "Evidence response",
+                    "question_type": "short_answer",
+                    "prompt": "Use one detail to explain Della's situation.",
+                    "difficulty": "medium",
+                    "score": 5,
+                    "knowledge_points": ["text evidence"],
+                    "correct_answer": (
+                        "She has little money but has saved carefully for Jim."
+                    ),
+                    "rubric": {"evidence": 3, "explanation": 2},
+                    "stimulus_key": "gift-of-magi",
+                    "stimulus_order": 2,
+                },
+            ],
+            "publish": True,
+        },
+        "group-valid",
+    )
+
+    assert accepted.status_code == 200
+    result = accepted.get_json()["result"]
+    assert len(result["stimuli"]) == 1
+    assert len(result["items"]) == 2
+    assert all(row["status"] == "published" for row in result["items"])
+
+
 def test_lesson_scoped_run_injects_lesson_into_courseware_write(app):
     from services.edu.tool_models import EducationToolGrant
     from services.edu.workflow_models import EducationAgentRun

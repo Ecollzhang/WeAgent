@@ -183,6 +183,173 @@ def test_paper_version_freezes_question_versions_and_student_sees_published_pape
     ]
 
 
+def test_published_question_pointer_hides_new_teacher_draft_and_supports_true_false(app):
+    client = app.test_client()
+    teacher, student, course = course_with_student(client, app)
+    created = client.post(
+        f"/api/edu/courses/{course['id']}/questions",
+        headers=teacher,
+        json={
+            "title": "Text evidence check",
+            "question_type": "true_false",
+            "prompt": "Della sells her hair before buying Jim's gift.",
+            "difficulty": "easy",
+            "score": 2,
+            "knowledge_points": ["sequence of events"],
+            "correct_answer": True,
+            "explanation": "The action happens before she buys the chain.",
+        },
+    )
+    assert created.status_code == 201
+    item = created.get_json()
+    assert client.post(
+        f"/api/edu/questions/{item['id']}/publish", headers=teacher
+    ).status_code == 200
+
+    edited = client.post(
+        f"/api/edu/questions/{item['id']}/versions",
+        headers=teacher,
+        json={
+            "title": "Text evidence check",
+            "question_type": "true_false",
+            "prompt": "Teacher draft that must remain private.",
+            "difficulty": "medium",
+            "score": 2,
+            "knowledge_points": ["sequence of events"],
+            "correct_answer": False,
+            "explanation": "Draft explanation.",
+        },
+    ).get_json()
+    assert edited["current_version"]["version_number"] == 2
+    assert edited["published_version_id"] != edited["current_version_id"]
+
+    student_item = client.get(
+        f"/api/edu/courses/{course['id']}/questions", headers=student
+    ).get_json()["items"][0]
+    assert student_item["current_version"]["prompt"] == (
+        "Della sells her hair before buying Jim's gift."
+    )
+    assert "answer" not in student_item["current_version"]
+
+
+def test_reading_stimulus_groups_questions_and_paper_preview_is_hydrated(app):
+    client = app.test_client()
+    teacher, student, course = course_with_student(client, app)
+    stimulus_response = client.post(
+        f"/api/edu/courses/{course['id']}/stimuli",
+        headers=teacher,
+        json={
+            "title": "The Gift of the Magi — classroom excerpt",
+            "stimulus_type": "reading_passage",
+            "language": "en",
+            "content": {
+                "paragraphs": [
+                    "Della counted the money again. There was only one dollar and eighty-seven cents.",
+                    "She had been saving every penny she could for Jim's present.",
+                ]
+            },
+            "source_refs": [
+                {
+                    "title": "The Gift of the Magi",
+                    "author": "O. Henry",
+                    "url": "https://www.gutenberg.org/ebooks/7256",
+                    "rights": "Public domain in the USA",
+                }
+            ],
+        },
+    )
+    assert stimulus_response.status_code == 201
+    stimulus = stimulus_response.get_json()
+    assert stimulus["current_version"]["word_or_character_count"] > 10
+    assert client.post(
+        f"/api/edu/stimuli/{stimulus['id']}/publish", headers=teacher
+    ).status_code == 200
+
+    question_ids = []
+    for order, payload in enumerate(
+        [
+            {
+                **question_payload(),
+                "title": "Inference from detail",
+                "prompt": "What does Della's repeated counting reveal?",
+            },
+            {
+                "title": "Evidence response",
+                "question_type": "short_answer",
+                "prompt": "Use one detail to explain Della's situation.",
+                "difficulty": "medium",
+                "score": 5,
+                "knowledge_points": ["text evidence"],
+                "correct_answer": "She has very little money but has saved carefully for Jim.",
+                "rubric": {"evidence": 3, "explanation": 2},
+                "explanation": "Responses must connect a quoted detail to the inference.",
+            },
+        ],
+        start=1,
+    ):
+        response = client.post(
+            f"/api/edu/courses/{course['id']}/questions",
+            headers=teacher,
+            json={
+                **payload,
+                "stimulus_version_id": stimulus["current_version_id"],
+                "stimulus_order": order,
+            },
+        )
+        assert response.status_code == 201
+        item = response.get_json()
+        question_ids.append(item["id"])
+        client.post(f"/api/edu/questions/{item['id']}/publish", headers=teacher)
+
+    grouped = client.get(
+        f"/api/edu/courses/{course['id']}/questions", headers=teacher
+    ).get_json()
+    assert grouped["stimuli"][0]["question_count"] == 2
+    assert [row["current_version"]["stimulus_order"] for row in grouped["stimuli"][0]["questions"]] == [1, 2]
+
+    paper = client.post(
+        f"/api/edu/courses/{course['id']}/papers/compose",
+        headers=teacher,
+        json={
+            "title": "Authentic reading check",
+            "purpose": "practice",
+            "duration_minutes": 25,
+            "item_ids": question_ids,
+        },
+    ).get_json()
+    teacher_student_preview = client.get(
+        f"/api/edu/papers/{paper['id']}/preview?mode=student", headers=teacher
+    )
+    assert teacher_student_preview.status_code == 200
+    assert all(
+        "answer" not in row
+        for row in teacher_student_preview.get_json()["questions"]
+    )
+    client.post(f"/api/edu/papers/{paper['id']}/publish", headers=teacher)
+    student_preview = client.get(
+        f"/api/edu/papers/{paper['id']}/preview?mode=student", headers=student
+    )
+    assert student_preview.status_code == 200
+    preview = student_preview.get_json()
+    assert len(preview["stimuli"]) == 1
+    assert len(preview["questions"]) == 2
+    assert all("answer" not in row for row in preview["questions"])
+    teacher_preview = client.get(
+        f"/api/edu/papers/{paper['id']}/preview?mode=teacher", headers=teacher
+    ).get_json()
+    assert all("answer" in row for row in teacher_preview["questions"])
+
+    revised = client.post(
+        f"/api/edu/papers/{paper['id']}/versions",
+        headers=teacher,
+        json={"title": "Authentic reading check — revised", "duration_minutes": 30, "item_ids": question_ids},
+    )
+    assert revised.status_code == 201
+    revised_payload = revised.get_json()
+    assert revised_payload["current_version"]["version_number"] == 2
+    assert revised_payload["published_version_id"] != revised_payload["current_version_id"]
+
+
 def test_knowledge_resource_references_durable_asset_and_summary(app):
     client = app.test_client()
     teacher, student, course = course_with_student(client, app)
@@ -230,4 +397,3 @@ def test_knowledge_resource_references_durable_asset_and_summary(app):
         "papers": 0,
         "knowledge_resources": 1,
     }
-

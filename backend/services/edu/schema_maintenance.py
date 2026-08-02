@@ -56,6 +56,78 @@ def migrate_existing_education_schema():
                 )
             changes.append("edu_materials.asset_id_index")
 
+    for table_name in ("edu_assessment_items", "edu_assessment_papers"):
+        if table_name not in tables:
+            continue
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns(table_name)
+        }
+        if "published_version_id" not in columns:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} "
+                        "ADD COLUMN published_version_id VARCHAR(36) DEFAULT NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        f"UPDATE {table_name} SET published_version_id = current_version_id "
+                        "WHERE status = 'published' AND published_version_id IS NULL"
+                    )
+                )
+            changes.append(f"{table_name}.published_version_id")
+        indexes = {
+            index["name"] for index in inspect(db.engine).get_indexes(table_name)
+        }
+        index_name = f"ix_{table_name}_published_version_id"
+        if index_name not in indexes:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"CREATE INDEX {index_name} "
+                        f"ON {table_name} (published_version_id)"
+                    )
+                )
+            changes.append(index_name)
+
+    if "edu_assessment_item_versions" in tables:
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns("edu_assessment_item_versions")
+        }
+        with db.engine.begin() as connection:
+            if "stimulus_version_id" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_assessment_item_versions "
+                        "ADD COLUMN stimulus_version_id VARCHAR(36) DEFAULT NULL"
+                    )
+                )
+                changes.append("edu_assessment_item_versions.stimulus_version_id")
+            if "stimulus_order" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_assessment_item_versions "
+                        "ADD COLUMN stimulus_order INTEGER DEFAULT NULL"
+                    )
+                )
+                changes.append("edu_assessment_item_versions.stimulus_order")
+        indexes = {
+            index["name"]
+            for index in inspect(db.engine).get_indexes("edu_assessment_item_versions")
+        }
+        if "ix_edu_assessment_item_versions_stimulus_version_id" not in indexes:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE INDEX ix_edu_assessment_item_versions_stimulus_version_id "
+                        "ON edu_assessment_item_versions (stimulus_version_id)"
+                    )
+                )
+            changes.append("ix_edu_assessment_item_versions_stimulus_version_id")
+
     if "edu_assessment_papers" in tables:
         columns = {
             column["name"]

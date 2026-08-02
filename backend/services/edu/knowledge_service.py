@@ -16,6 +16,8 @@ from .knowledge_models import (
     AssessmentItemVersion,
     AssessmentPaper,
     AssessmentPaperVersion,
+    AssessmentStimulus,
+    AssessmentStimulusVersion,
     KnowledgeResource,
 )
 from .models import Course
@@ -24,6 +26,7 @@ from .models import Course
 QUESTION_TYPES = {
     "single_choice",
     "multiple_choice",
+    "true_false",
     "fill_blank",
     "short_answer",
     "writing",
@@ -32,6 +35,7 @@ DIFFICULTIES = {"easy", "medium", "hard"}
 PAPER_PURPOSES = {"practice", "assignment", "mock_exam", "diagnostic"}
 RESOURCE_VISIBILITY = {"course_teacher", "course_published"}
 INGESTION_STATES = {"pending", "processing", "ready", "failed", "archived"}
+STIMULUS_TYPES = {"reading_passage", "image_text", "reference_material"}
 OPTION_LABEL = re.compile(r"^\s*(?:[A-Z]|[1-9]\d*)\s*[.)、:：]\s+")
 
 
@@ -170,6 +174,56 @@ def validate_question_payload(data):
                 400,
                 "invalid_correct_answer",
             )
+    if question_type == "true_false":
+        if not isinstance(correct_answer, bool):
+            raise KnowledgeServiceError(
+                "true-false answer must be a boolean",
+                400,
+                "invalid_correct_answer",
+            )
+    if question_type == "fill_blank":
+        if not isinstance(correct_answer, (str, list)) or (
+            isinstance(correct_answer, list)
+            and not correct_answer
+        ):
+            raise KnowledgeServiceError(
+                "fill-blank answer must be text or a non-empty list",
+                400,
+                "invalid_correct_answer",
+            )
+    stimulus_version_id = data.get("stimulus_version_id") or None
+    stimulus_order = data.get("stimulus_order")
+    if stimulus_version_id:
+        stimulus_version = AssessmentStimulusVersion.query.filter_by(
+            id=stimulus_version_id
+        ).first()
+        stimulus = (
+            AssessmentStimulus.query.filter_by(id=stimulus_version.stimulus_id).first()
+            if stimulus_version
+            else None
+        )
+        if not stimulus or stimulus.course_id != data.get("course_id"):
+            raise KnowledgeServiceError(
+                "stimulus version is unavailable",
+                400,
+                "invalid_stimulus_version",
+            )
+        try:
+            stimulus_order = int(stimulus_order)
+        except (TypeError, ValueError):
+            raise KnowledgeServiceError(
+                "stimulus_order is required for grouped questions",
+                400,
+                "invalid_stimulus_order",
+            )
+        if stimulus_order < 1:
+            raise KnowledgeServiceError(
+                "stimulus_order must be positive",
+                400,
+                "invalid_stimulus_order",
+            )
+    else:
+        stimulus_order = None
     return {
         "question_type": question_type,
         "prompt": prompt,
@@ -182,11 +236,13 @@ def validate_question_payload(data):
         "correct_answer": correct_answer,
         "explanation": str(data.get("explanation") or "").strip(),
         "rubric": data.get("rubric") or {},
+        "stimulus_version_id": stimulus_version_id,
+        "stimulus_order": stimulus_order,
     }
 
 
 def _create_question_version(item, actor, data):
-    canonical = validate_question_payload(data)
+    canonical = validate_question_payload({**data, "course_id": item.course_id})
     previous = (
         AssessmentItemVersion.query.filter_by(item_id=item.id)
         .order_by(AssessmentItemVersion.version_number.desc())
@@ -203,6 +259,8 @@ def _create_question_version(item, actor, data):
         knowledge_points=canonical["knowledge_points"],
         grade_band=canonical["grade_band"],
         source_context=canonical["source_context"],
+        stimulus_version_id=canonical["stimulus_version_id"],
+        stimulus_order=canonical["stimulus_order"],
         checksum=_checksum(
             {
                 key: canonical[key]
@@ -215,6 +273,8 @@ def _create_question_version(item, actor, data):
                     "knowledge_points",
                     "grade_band",
                     "source_context",
+                    "stimulus_version_id",
+                    "stimulus_order",
                 )
             }
         ),
@@ -279,6 +339,7 @@ def publish_question(item, actor):
             "question_version_missing",
         )
     item.status = "published"
+    item.published_version_id = item.current_version_id
     item.published_by = actor
     item.published_at = datetime.utcnow()
     return item
@@ -297,6 +358,8 @@ def question_version_to_dict(version, *, include_answer=False):
         "knowledge_points": version.knowledge_points or [],
         "grade_band": version.grade_band,
         "source_context": version.source_context or {},
+        "stimulus_version_id": version.stimulus_version_id,
+        "stimulus_order": version.stimulus_order,
         "checksum": version.checksum,
         "created_by_user_id": version.created_by_user_id,
         "created_at": version.created_at.isoformat() if version.created_at else None,
@@ -314,9 +377,12 @@ def question_version_to_dict(version, *, include_answer=False):
     return payload
 
 
-def question_to_dict(item, *, include_answer=False):
+def question_to_dict(item, *, include_answer=False, use_published=False):
+    selected_version_id = (
+        item.published_version_id if use_published else item.current_version_id
+    )
     version = AssessmentItemVersion.query.filter_by(
-        id=item.current_version_id
+        id=selected_version_id
     ).first()
     return {
         "id": item.id,
@@ -326,6 +392,7 @@ def question_to_dict(item, *, include_answer=False):
         "source_agent_run_id": item.source_agent_run_id,
         "status": item.status,
         "current_version_id": item.current_version_id,
+        "published_version_id": item.published_version_id,
         "current_version": (
             question_version_to_dict(version, include_answer=include_answer)
             if version
@@ -334,6 +401,125 @@ def question_to_dict(item, *, include_answer=False):
         "published_at": item.published_at.isoformat() if item.published_at else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
+def _stimulus_text(content):
+    if not isinstance(content, dict):
+        return ""
+    paragraphs = content.get("paragraphs")
+    if isinstance(paragraphs, list):
+        return "\n".join(str(row).strip() for row in paragraphs if str(row).strip())
+    return str(content.get("text") or "").strip()
+
+
+def _create_stimulus_version(stimulus, actor, data):
+    content = data.get("content")
+    if not isinstance(content, dict) or not _stimulus_text(content):
+        raise KnowledgeServiceError(
+            "stimulus content is required", 400, "stimulus_content_required"
+        )
+    source_refs = data.get("source_refs") or []
+    if not isinstance(source_refs, list):
+        raise KnowledgeServiceError(
+            "source_refs must be a list", 400, "invalid_source_refs"
+        )
+    previous = (
+        AssessmentStimulusVersion.query.filter_by(stimulus_id=stimulus.id)
+        .order_by(AssessmentStimulusVersion.version_number.desc())
+        .first()
+    )
+    text_value = _stimulus_text(content)
+    language = str(data.get("language") or "").strip() or None
+    count = len(text_value.split()) if language == "en" else len(text_value.replace("\n", ""))
+    version = AssessmentStimulusVersion(
+        stimulus_id=stimulus.id,
+        version_number=(previous.version_number + 1 if previous else 1),
+        content_json=content,
+        source_refs=source_refs,
+        language=language,
+        word_or_character_count=count,
+        checksum=_checksum({"content": content, "source_refs": source_refs, "language": language}),
+        created_by_user_id=actor,
+    )
+    db.session.add(version)
+    db.session.flush()
+    stimulus.current_version_id = version.id
+    return version
+
+
+def create_stimulus(course_id, actor, data):
+    _teacher(course_id, actor)
+    title = str(data.get("title") or "").strip()
+    stimulus_type = str(data.get("stimulus_type") or "reading_passage")
+    if not title:
+        raise KnowledgeServiceError("title is required", 400, "stimulus_title_required")
+    if stimulus_type not in STIMULUS_TYPES:
+        raise KnowledgeServiceError(
+            "unsupported stimulus_type", 400, "invalid_stimulus_type"
+        )
+    stimulus = AssessmentStimulus(
+        course_id=course_id,
+        title=title,
+        stimulus_type=stimulus_type,
+        owner_user_id=actor,
+    )
+    db.session.add(stimulus)
+    db.session.flush()
+    _create_stimulus_version(stimulus, actor, data)
+    return stimulus
+
+
+def add_stimulus_version(stimulus, actor, data):
+    _teacher(stimulus.course_id, actor)
+    if data.get("title"):
+        stimulus.title = str(data["title"]).strip()
+    _create_stimulus_version(stimulus, actor, data)
+    return stimulus
+
+
+def publish_stimulus(stimulus, actor):
+    _teacher(stimulus.course_id, actor)
+    if not stimulus.current_version_id:
+        raise KnowledgeServiceError(
+            "stimulus has no current version", 409, "stimulus_version_missing"
+        )
+    stimulus.status = "published"
+    stimulus.published_version_id = stimulus.current_version_id
+    stimulus.published_by = actor
+    stimulus.published_at = datetime.utcnow()
+    return stimulus
+
+
+def stimulus_version_to_dict(version):
+    return {
+        "id": version.id,
+        "stimulus_id": version.stimulus_id,
+        "version_number": version.version_number,
+        "content": version.content_json or {},
+        "source_refs": version.source_refs or [],
+        "language": version.language,
+        "word_or_character_count": version.word_or_character_count,
+        "checksum": version.checksum,
+        "created_at": version.created_at.isoformat() if version.created_at else None,
+    }
+
+
+def stimulus_to_dict(stimulus, *, use_published=False):
+    selected_version_id = (
+        stimulus.published_version_id if use_published else stimulus.current_version_id
+    )
+    version = AssessmentStimulusVersion.query.filter_by(id=selected_version_id).first()
+    return {
+        "id": stimulus.id,
+        "course_id": stimulus.course_id,
+        "title": stimulus.title,
+        "stimulus_type": stimulus.stimulus_type,
+        "status": stimulus.status,
+        "current_version_id": stimulus.current_version_id,
+        "published_version_id": stimulus.published_version_id,
+        "current_version": stimulus_version_to_dict(version) if version else None,
+        "published_at": stimulus.published_at.isoformat() if stimulus.published_at else None,
     }
 
 
@@ -382,7 +568,7 @@ def compose_paper(course_id, actor, data):
         )
     versions = [
         AssessmentItemVersion.query.filter_by(
-            id=items[item_id].current_version_id
+            id=items[item_id].published_version_id
         ).one()
         for item_id in item_ids
     ]
@@ -446,14 +632,100 @@ def publish_paper(paper, actor):
             "paper_version_missing",
         )
     paper.status = "published"
+    paper.published_version_id = paper.current_version_id
     paper.published_by = actor
     paper.published_at = datetime.utcnow()
     return paper
 
 
-def paper_to_dict(paper):
+def add_paper_version(paper, actor, data):
+    _teacher(paper.course_id, actor)
+    if paper.status == "archived":
+        raise KnowledgeServiceError("paper is archived", 409, "paper_archived")
+    item_ids = data.get("item_ids")
+    if not isinstance(item_ids, list) or not item_ids:
+        raise KnowledgeServiceError(
+            "item_ids must contain at least one question", 400, "paper_items_required"
+        )
+    if len(set(item_ids)) != len(item_ids):
+        raise KnowledgeServiceError(
+            "item_ids must not contain duplicates", 400, "duplicate_paper_items"
+        )
+    items = {
+        item.id: item
+        for item in AssessmentItem.query.filter(
+            AssessmentItem.course_id == paper.course_id,
+            AssessmentItem.id.in_(item_ids),
+            AssessmentItem.status == "published",
+        ).all()
+    }
+    if any(not items.get(item_id) or not items[item_id].published_version_id for item_id in item_ids):
+        raise KnowledgeServiceError(
+            "paper contains an unavailable question", 400, "paper_item_unavailable"
+        )
+    versions = [
+        AssessmentItemVersion.query.filter_by(
+            id=items[item_id].published_version_id
+        ).one()
+        for item_id in item_ids
+    ]
+    try:
+        duration = int(data.get("duration_minutes") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if not 1 <= duration <= 600:
+        raise KnowledgeServiceError(
+            "duration_minutes must be between 1 and 600", 400, "invalid_paper_duration"
+        )
+    if data.get("title"):
+        paper.title = str(data["title"]).strip()
+    if data.get("purpose"):
+        purpose = str(data["purpose"])
+        if purpose not in PAPER_PURPOSES:
+            raise KnowledgeServiceError(
+                "unsupported paper purpose", 400, "invalid_paper_purpose"
+            )
+        paper.purpose = purpose
+    previous = (
+        AssessmentPaperVersion.query.filter_by(paper_id=paper.id)
+        .order_by(AssessmentPaperVersion.version_number.desc())
+        .first()
+    )
+    version_ids = [version.id for version in versions]
+    total_score = sum(version.score for version in versions)
+    sections = data.get("sections") or [
+        {"title": "Questions", "item_version_ids": version_ids, "score": total_score}
+    ]
+    version = AssessmentPaperVersion(
+        paper_id=paper.id,
+        version_number=(previous.version_number + 1 if previous else 1),
+        item_version_ids=version_ids,
+        sections=sections,
+        total_score=total_score,
+        duration_minutes=duration,
+        blueprint=data.get("blueprint") or {},
+        checksum=_checksum(
+            {
+                "item_version_ids": version_ids,
+                "sections": sections,
+                "total_score": total_score,
+                "duration_minutes": duration,
+            }
+        ),
+        created_by_user_id=actor,
+    )
+    db.session.add(version)
+    db.session.flush()
+    paper.current_version_id = version.id
+    return paper
+
+
+def paper_to_dict(paper, *, use_published=False):
+    selected_version_id = (
+        paper.published_version_id if use_published else paper.current_version_id
+    )
     version = AssessmentPaperVersion.query.filter_by(
-        id=paper.current_version_id
+        id=selected_version_id
     ).first()
     return {
         "id": paper.id,
@@ -464,6 +736,7 @@ def paper_to_dict(paper):
         "visibility_scope": paper.visibility_scope,
         "status": paper.status,
         "current_version_id": paper.current_version_id,
+        "published_version_id": paper.published_version_id,
         "current_version": (
             {
                 "id": version.id,
@@ -485,6 +758,70 @@ def paper_to_dict(paper):
         "published_at": paper.published_at.isoformat() if paper.published_at else None,
         "created_at": paper.created_at.isoformat() if paper.created_at else None,
         "updated_at": paper.updated_at.isoformat() if paper.updated_at else None,
+    }
+
+
+def paper_preview(paper, actor, *, mode="student", version_id=None):
+    membership = _member(paper.course_id, actor)
+    is_teacher = membership.role == "teacher"
+    if mode not in {"student", "teacher"}:
+        raise KnowledgeServiceError("unsupported preview mode", 400, "invalid_preview_mode")
+    if mode == "teacher" and not is_teacher:
+        raise KnowledgeServiceError("paper not found", 404, "paper_not_found")
+    if not is_teacher and paper.status != "published":
+        raise KnowledgeServiceError("paper not found", 404, "paper_not_found")
+    selected_id = (
+        version_id
+        if is_teacher and version_id
+        else paper.current_version_id
+        if is_teacher
+        else paper.published_version_id
+    )
+    version = AssessmentPaperVersion.query.filter_by(
+        id=selected_id, paper_id=paper.id
+    ).first()
+    if not version:
+        raise KnowledgeServiceError("paper version not found", 404, "paper_version_not_found")
+    item_versions = {
+        row.id: row
+        for row in AssessmentItemVersion.query.filter(
+            AssessmentItemVersion.id.in_(version.item_version_ids or [])
+        ).all()
+    }
+    ordered = [item_versions[row_id] for row_id in version.item_version_ids or [] if row_id in item_versions]
+    stimulus_ids = []
+    for item_version in ordered:
+        if item_version.stimulus_version_id and item_version.stimulus_version_id not in stimulus_ids:
+            stimulus_ids.append(item_version.stimulus_version_id)
+    stimulus_versions = {
+        row.id: row
+        for row in AssessmentStimulusVersion.query.filter(
+            AssessmentStimulusVersion.id.in_(stimulus_ids)
+        ).all()
+    } if stimulus_ids else {}
+    stimuli = []
+    for stimulus_id in stimulus_ids:
+        stimulus_version = stimulus_versions.get(stimulus_id)
+        if not stimulus_version:
+            continue
+        stimulus = AssessmentStimulus.query.filter_by(id=stimulus_version.stimulus_id).first()
+        stimuli.append(
+            {
+                **stimulus_version_to_dict(stimulus_version),
+                "title": stimulus.title if stimulus else "Reading material",
+                "stimulus_type": stimulus.stimulus_type if stimulus else "reading_passage",
+            }
+        )
+    return {
+        "paper": paper_to_dict(paper, use_published=not is_teacher),
+        "version_id": version.id,
+        "mode": mode,
+        "stimuli": stimuli,
+        "questions": [
+            question_version_to_dict(row, include_answer=is_teacher and mode == "teacher")
+            for row in ordered
+        ],
+        "sections": version.sections or [],
     }
 
 
