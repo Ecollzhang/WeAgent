@@ -127,7 +127,7 @@ def _select_question_versions(course_id, data):
     }
     for item in rows:
         version = AssessmentItemVersion.query.filter_by(
-            id=item.current_version_id
+            id=item.published_version_id
         ).first()
         if not version:
             continue
@@ -222,6 +222,7 @@ def _create_generated_paper(course_id, actor, data):
     db.session.add(paper_version)
     db.session.flush()
     paper.current_version_id = paper_version.id
+    paper.published_version_id = paper_version.id
     return paper
 
 
@@ -427,6 +428,7 @@ def submit_mock_exam(attempt_id, actor):
             },
         )
     )
+    create_weakness_snapshot(attempt.course_id, actor)
     return attempt
 
 
@@ -498,7 +500,7 @@ def _assignment_feedback_evidence(course_id, student_user_id):
     submissions = Submission.query.filter(
         Submission.assignment_id.in_(list(assignments_by_id)),
         Submission.student_user_id == student_user_id,
-        Submission.status == "graded",
+        Submission.status.in_(("graded", "revision_requested")),
     ).all()
     evidence = []
     for submission in submissions:
@@ -513,8 +515,11 @@ def _assignment_feedback_evidence(course_id, student_user_id):
         )
         feedback_json = feedback.feedback_json if feedback else {}
         points = []
-        for key in ("weaknesses", "improvements", "next_steps"):
+        for key in ("weaknesses", "improvements", "issues", "next_steps"):
             points.extend(_feedback_text_items((feedback_json or {}).get(key)))
+        has_explicit_weakness = bool(points)
+        if not points:
+            points.extend(_feedback_text_items((feedback_json or {}).get("comment")))
         points = list(dict.fromkeys(point for point in points if point))
         normalized_score = _normalized_score(
             submission.final_score,
@@ -533,13 +538,7 @@ def _assignment_feedback_evidence(course_id, student_user_id):
                     "item_version_id": submission.current_version_id,
                     "knowledge_points": [point],
                     "correct": (
-                        normalized_score >= 80
-                        if not feedback
-                        or not any(
-                            _feedback_text_items((feedback_json or {}).get(key))
-                            for key in ("weaknesses", "improvements", "next_steps")
-                        )
-                        else False
+                        False if has_explicit_weakness else normalized_score >= 80
                     ),
                     "score": submission.final_score,
                     "max_score": assignment.max_score,
@@ -559,7 +558,7 @@ def _assignment_feedback_evidence(course_id, student_user_id):
     return evidence
 
 
-def create_weakness_snapshot(course_id, actor):
+def _weakness_evidence(course_id, actor):
     _student(course_id, actor)
     attempts = (
         MockExamAttempt.query.filter(
@@ -575,6 +574,11 @@ def create_weakness_snapshot(course_id, actor):
         for row in attempt.evidence_json or []:
             evidence.append({**row, "attempt_id": attempt.id})
     evidence.extend(_assignment_feedback_evidence(course_id, actor))
+    return evidence
+
+
+def create_weakness_snapshot(course_id, actor, *, evidence=None):
+    evidence = _weakness_evidence(course_id, actor) if evidence is None else evidence
     weaknesses, recommendations = _weakness_projection(evidence)
     snapshot = WeaknessAnalysisSnapshot(
         course_id=course_id,
@@ -590,6 +594,23 @@ def create_weakness_snapshot(course_id, actor):
     db.session.add(snapshot)
     db.session.flush()
     return snapshot
+
+
+def ensure_weakness_snapshot(course_id, actor):
+    """Return a projection matching current official evidence, rebuilding if stale."""
+    evidence = _weakness_evidence(course_id, actor)
+    fingerprint = _checksum(evidence)
+    latest = (
+        WeaknessAnalysisSnapshot.query.filter_by(
+            course_id=course_id,
+            student_user_id=actor,
+        )
+        .order_by(WeaknessAnalysisSnapshot.created_at.desc())
+        .first()
+    )
+    if latest and latest.source_fingerprint == fingerprint:
+        return latest
+    return create_weakness_snapshot(course_id, actor, evidence=evidence)
 
 
 def weakness_to_dict(snapshot):
@@ -616,6 +637,10 @@ def _validate_tree(tree):
     seen = set()
     count = 0
 
+    allowed_colors = {
+        "auto", "teal", "blue", "indigo", "violet", "amber", "orange", "rose", "slate"
+    }
+
     def visit(node, depth):
         nonlocal count
         if not isinstance(node, dict) or depth > 12:
@@ -633,6 +658,14 @@ def _validate_tree(tree):
                 400,
                 "invalid_mind_map_tree",
             )
+        color_token = str(node.get("color_token") or "auto")
+        if color_token not in allowed_colors:
+            raise LearningServiceError(
+                "unsupported mind-map color token",
+                400,
+                "invalid_mind_map_color",
+            )
+        node["color_token"] = color_token
         seen.add(node_id)
         count += 1
         if count > 500:
@@ -1234,6 +1267,109 @@ def build_class_insight_overview(course_id):
         "median_score": round(float(median(scores)), 2) if scores else None,
         "score_distribution": _score_distribution(scores),
         "trend": trend,
+    }
+
+
+def build_assignment_grade_overview(course_id, assignment_id=None):
+    """Build one assignment distribution plus a course-wide assignment trend."""
+    assignments = (
+        Assignment.query.filter_by(course_id=course_id, status="published")
+        .order_by(Assignment.published_at.asc(), Assignment.created_at.asc())
+        .all()
+    )
+    if not assignments:
+        return {
+            "course_id": course_id,
+            "data_state": "insufficient",
+            "assignment_catalog": [],
+            "selected_assignment": None,
+            "score_distribution": _score_distribution([]),
+            "course_assignment_trend": [],
+            "graded_count": 0,
+            "pending_review_count": 0,
+        }
+    by_id = {row.id: row for row in assignments}
+    if assignment_id and assignment_id not in by_id:
+        raise LearningServiceError(
+            "assignment not found", 404, "assignment_not_found"
+        )
+    assignment_ids = list(by_id)
+    submissions = Submission.query.filter(
+        Submission.assignment_id.in_(assignment_ids),
+        Submission.status != "draft",
+    ).all()
+    by_assignment = defaultdict(list)
+    for submission in submissions:
+        by_assignment[submission.assignment_id].append(submission)
+
+    def official_scores(assignment):
+        rows = []
+        for submission in by_assignment.get(assignment.id, []):
+            if submission.final_score is None or not submission.graded_at:
+                continue
+            normalized = _normalized_score(submission.final_score, assignment.max_score)
+            if normalized is not None:
+                rows.append(normalized)
+        return rows
+
+    selected = by_id.get(assignment_id) if assignment_id else None
+    if not selected:
+        selected = next(
+            (row for row in reversed(assignments) if official_scores(row)),
+            assignments[-1],
+        )
+    scores = official_scores(selected)
+    selected_submissions = by_assignment.get(selected.id, [])
+    pending_count = sum(
+        1
+        for row in selected_submissions
+        if row.final_score is None or not row.graded_at
+    )
+    students = CourseMembership.query.filter_by(
+        course_id=course_id, role="student", status="active"
+    ).count()
+    trend = []
+    for assignment in assignments:
+        values = official_scores(assignment)
+        trend.append(
+            {
+                "assignment_id": assignment.id,
+                "assessment_id": assignment.id,
+                "assessment_title": assignment.title,
+                "average_score": round(sum(values) / len(values), 2) if values else None,
+                "highest_score": max(values) if values else None,
+                "lowest_score": min(values) if values else None,
+                "graded_count": len(values),
+                "published_at": assignment.published_at.isoformat() if assignment.published_at else None,
+            }
+        )
+    catalog = [
+        {
+            "id": row.id,
+            "title": row.title,
+            "max_score": row.max_score,
+            "graded_count": len(official_scores(row)),
+            "published_at": row.published_at.isoformat() if row.published_at else None,
+        }
+        for row in assignments
+    ]
+    return {
+        "course_id": course_id,
+        "data_state": "ready" if scores else ("pending_review" if pending_count else "insufficient"),
+        "score_unit": "percentage",
+        "assignment_catalog": catalog,
+        "selected_assignment": next(row for row in catalog if row["id"] == selected.id),
+        "student_count": students,
+        "submitted_count": len(selected_submissions),
+        "graded_count": len(scores),
+        "pending_review_count": pending_count,
+        "submission_rate": round(len(selected_submissions) / students, 4) if students else 0.0,
+        "highest_score": max(scores) if scores else None,
+        "lowest_score": min(scores) if scores else None,
+        "average_score": round(sum(scores) / len(scores), 2) if scores else None,
+        "median_score": round(float(median(scores)), 2) if scores else None,
+        "score_distribution": _score_distribution(scores),
+        "course_assignment_trend": trend,
     }
 
 

@@ -88,6 +88,7 @@
                 v-model="editDocument"
                 :editable="editing"
                 @change="dirty = true"
+                @request-edit="openEditor"
               />
               <div v-if="editing" class="map-save-bar">
                 <el-input v-model.trim="changeSummary" maxlength="200" placeholder="本次修改说明" />
@@ -108,7 +109,7 @@
       </section>
     </template>
 
-    <el-dialog title="新建课程思维导图" :visible.sync="createDialog" width="600px">
+    <el-dialog title="新建课程思维导图" :visible.sync="createDialog" width="600px" custom-class="education-dialog">
       <el-form label-position="top">
         <el-form-item label="导图名称"><el-input v-model.trim="createForm.title" maxlength="200" /></el-form-item>
         <el-form-item label="导图范围">

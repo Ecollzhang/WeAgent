@@ -2228,6 +2228,9 @@ def publish_submission_review(submission_id):
             "revision_requested": bool(draft.revision_requested),
         },
     )
+    from .learning_service import ensure_weakness_snapshot
+
+    ensure_weakness_snapshot(assignment.course_id, submission.student_user_id)
     db.session.delete(draft)
     db.session.commit()
     return jsonify(_feedback_dict(feedback)), 201
@@ -2287,6 +2290,9 @@ def release_feedback(submission_id):
         submission.id,
         {"student_user_id": submission.student_user_id, "score": score},
     )
+    from .learning_service import ensure_weakness_snapshot
+
+    ensure_weakness_snapshot(assignment.course_id, submission.student_user_id)
     db.session.commit()
     return jsonify(_feedback_dict(feedback)), 201
 

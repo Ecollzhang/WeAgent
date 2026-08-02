@@ -36,13 +36,21 @@
         @close="closeAgentRun"
       />
 
-      <section class="class-overview" data-testid="student-insight-overview">
+      <div class="insight-mode-switch" data-testid="student-insight-mode-switch">
+        <button type="button" :class="{ active: mode === 'grades' }" @click="mode = 'grades'">成绩总览</button>
+        <button type="button" :class="{ active: mode === 'profiles' }" @click="mode = 'profiles'">学生画像</button>
+      </div>
+
+      <section v-if="mode === 'grades'" class="class-overview" data-testid="student-insight-overview">
         <header>
           <div>
-            <span>OFFICIAL CLASS EVIDENCE</span>
-            <h2>班级正式成绩总览</h2>
-            <p>只统计规则判分完成或教师确认后的最终成绩，跨任务统一换算为百分制。</p>
+            <span>ONE ASSIGNMENT · ONE DISTRIBUTION</span>
+            <h2>按作业查看班级成绩</h2>
+            <p>分布只统计当前选中作业；课程趋势按已发布作业排列，不混入模拟考试。</p>
           </div>
+          <el-select v-model="selectedAssignmentId" class="assignment-selector" placeholder="选择作业" @change="loadGradeOverview">
+            <el-option v-for="assignment in overview.assignment_catalog || []" :key="assignment.id" :label="assignment.title" :value="assignment.id" />
+          </el-select>
           <el-tag v-if="overview.pending_review_count" type="warning" size="small">
             {{ overview.pending_review_count }} 份待教师确认
           </el-tag>
@@ -50,23 +58,23 @@
         <div class="official-metrics">
           <article><span>最高分</span><b>{{ scoreMetric('highest_score') }}</b><small>百分制</small></article>
           <article><span>最低分</span><b>{{ scoreMetric('lowest_score') }}</b><small>百分制</small></article>
-          <article><span>平均分</span><b>{{ scoreMetric('average_score') }}</b><small>{{ overview.graded_student_count || 0 }} 人有正式成绩</small></article>
+          <article><span>平均分</span><b>{{ scoreMetric('average_score') }}</b><small>{{ overview.graded_count || 0 }} 人已批改</small></article>
           <article><span>中位数</span><b>{{ scoreMetric('median_score') }}</b><small>降低极端值影响</small></article>
-          <article><span>完成率</span><b>{{ percent(overview.completion_rate) }}</b><small>已发布作业</small></article>
+          <article><span>提交率</span><b>{{ percent(overview.submission_rate) }}</b><small>当前作业</small></article>
         </div>
         <div class="analytics-charts">
           <article>
-            <h3>成绩分布</h3>
+            <h3>{{ overview.selected_assignment ? overview.selected_assignment.title : '当前作业' }} · 成绩分布</h3>
             <ScoreDistributionChart :distribution="overview.score_distribution || []" />
           </article>
           <article>
-            <h3>评估趋势</h3>
-            <ScoreDistributionChart mode="trend" :trend="overview.trend || []" />
+            <h3>课程作业平均分趋势</h3>
+            <ScoreDistributionChart mode="trend" :trend="overview.course_assignment_trend || []" />
           </article>
         </div>
       </section>
 
-      <section class="evidence-banner">
+      <section v-if="mode === 'profiles'" class="evidence-banner">
         <div class="banner-seal"><i class="el-icon-data-board"></i></div>
         <div>
           <span>Evidence-first learner profile</span>
@@ -81,11 +89,12 @@
       </section>
 
       <section
+        v-if="mode === 'profiles'"
         v-loading="loading"
         class="insight-list"
         data-testid="student-insight-list"
       >
-        <article v-for="row in studentRows" :key="row.user_id" class="insight-card">
+        <article v-for="row in visibleStudentRows" :key="row.user_id" ref="profileCards" class="insight-card" @click="openEvidence(row)">
           <header>
             <span class="student-avatar">{{ initials(row.display_name) }}</span>
             <div>
@@ -143,6 +152,9 @@
           <h3>课程中还没有学生</h3>
           <p>回到教学空间，通过邀请码或 Agent 名单工具添加学生。</p>
         </div>
+        <button v-if="visibleStudentCount < studentRows.length" type="button" class="load-more-profiles" @click="loadMoreProfiles">
+          加载更多（剩余 {{ studentRows.length - visibleStudentCount }} 人）
+        </button>
       </section>
     </template>
 
@@ -184,7 +196,7 @@
         <div><span>最高分</span><b>{{ scoreMetric('highest_score') }}</b></div>
         <div><span>最低分</span><b>{{ scoreMetric('lowest_score') }}</b></div>
         <div><span>平均分</span><b>{{ scoreMetric('average_score') }}</b></div>
-        <div><span>完成率</span><b>{{ percent(overview.completion_rate) }}</b></div>
+        <div><span>提交率</span><b>{{ percent(overview.submission_rate) }}</b></div>
       </div>
       <div class="insight-product-list">
         <article v-for="row in studentRows" :key="row.user_id">
@@ -210,6 +222,9 @@ export default {
   components: { EducationShell, EmbeddedAgentRecord, ScoreDistributionChart },
   data() {
     return {
+      mode: 'grades',
+      visibleStudentCount: 3,
+      selectedAssignmentId: '',
       roleError: false,
       loading: false,
       refreshing: false,
@@ -222,7 +237,7 @@ export default {
     course() { return this.$store.getters['education/activeCourse'] },
     members() { return this.$store.getters['education/members'] || [] },
     insights() { return this.$store.getters['education/studentInsights'] || [] },
-    overview() { return this.$store.getters['education/studentInsightOverview'] || {} },
+    overview() { return this.$store.getters['education/gradeOverview'] || {} },
     studentRows() {
       return this.members
         .filter(member => member.role === 'student')
@@ -231,6 +246,7 @@ export default {
           insight: this.insights.find(item => item.student_user_id === member.user_id) || null,
         }))
     },
+    visibleStudentRows() { return this.studentRows.slice(0, this.visibleStudentCount) },
     readyCount() {
       return this.studentRows.filter(row => row.insight && row.insight.data_state === 'ready').length
     },
@@ -266,7 +282,9 @@ export default {
         await Promise.all([
           this.$store.dispatch('education/fetchCourseOverview', courseId),
           this.$store.dispatch('education/fetchStudentInsights', courseId),
+          this.$store.dispatch('education/fetchGradeOverview', { courseId, assignmentId: this.selectedAssignmentId }),
         ])
+        if (!this.selectedAssignmentId && this.overview.selected_assignment) this.selectedAssignmentId = this.overview.selected_assignment.id
         await this.$store.dispatch('education/restoreProductAgentRun', {
           courseId,
           productCode: 'student_insight',
@@ -281,6 +299,7 @@ export default {
       this.refreshing = true
       try {
         await this.$store.dispatch('education/refreshStudentInsights', this.course.id)
+        await this.loadGradeOverview()
         this.$message.success('画像已按最新学习证据刷新')
       } catch (error) {
         this.$message.error('画像刷新失败')
@@ -318,6 +337,20 @@ export default {
       this.selectedRow = row
       this.evidenceDrawer = true
     },
+    async loadGradeOverview() {
+      if (!this.course) return
+      const result = await this.$store.dispatch('education/fetchGradeOverview', { courseId: this.course.id, assignmentId: this.selectedAssignmentId })
+      if (!this.selectedAssignmentId && result.selected_assignment) this.selectedAssignmentId = result.selected_assignment.id
+    },
+    loadMoreProfiles() {
+      const previous = this.visibleStudentCount
+      this.visibleStudentCount = Math.min(this.studentRows.length, previous + 3)
+      this.$nextTick(() => {
+        const cards = this.$refs.profileCards || []
+        const target = Array.isArray(cards) ? cards[previous] : null
+        if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+    },
     initials(name) {
       const value = String(name || '学')
       return value.slice(-2)
@@ -342,6 +375,10 @@ export default {
 </script>
 
 <style scoped>
+.insight-mode-switch { width: fit-content; display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 4px; margin-bottom: 16px; padding: 4px; border-radius: 12px; background: #e9f1ef; }
+.insight-mode-switch button { padding: 9px 18px; border: 0; border-radius: 9px; background: transparent; color: #70817d; cursor: pointer; }
+.insight-mode-switch button.active { background: #fff; color: #276f66; font-weight: 700; box-shadow: 0 4px 12px rgba(44, 85, 78, .08); }
+.assignment-selector { min-width: 260px; }
 .class-overview {
   margin-bottom: 18px; padding: 22px; border: 1px solid #d8e5e2;
   border-radius: 16px; background: linear-gradient(135deg, #fff 0%, #f5faf8 72%, #edf6f3 100%);
@@ -378,8 +415,10 @@ export default {
 .evidence-banner dl div { min-width: 68px; padding: 10px; border-left: 1px solid #d7e3e0; text-align: center; }
 .evidence-banner dt { color: #8b9996; font-size: 9px; }
 .evidence-banner dd { margin: 4px 0 0; color: #2d746b; font-family: Georgia, serif; font-size: 22px; }
-.insight-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; min-height: 300px; }
-.insight-card { padding: 17px; border: 1px solid #e0e8e6; border-radius: 13px; background: #fff; box-shadow: 0 8px 24px rgba(40, 73, 68, .04); }
+.insight-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; min-height: 300px; }
+.insight-card { padding: 17px; border: 1px solid #e0e8e6; border-radius: 13px; background: #fff; box-shadow: 0 8px 24px rgba(40, 73, 68, .04); cursor: pointer; transition: transform .18s ease, box-shadow .18s ease; }
+.insight-card:hover { transform: translateY(-2px); box-shadow: 0 13px 30px rgba(40, 73, 68, .09); }
+.load-more-profiles { grid-column: 1 / -1; padding: 12px; border: 1px dashed #bad0ca; border-radius: 11px; background: #f7fbfa; color: #34796f; cursor: pointer; }
 .insight-card header { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid #edf1f0; }
 .student-avatar { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; background: #e7f1ee; color: #286f67; font-size: 12px; font-weight: 700; }
 .insight-card h3 { margin: 0; color: #31433f; font-size: 14px; }
@@ -430,7 +469,9 @@ export default {
   .analytics-charts { grid-template-columns: 1fr; }
   .evidence-banner { grid-template-columns: 52px 1fr; }
   .evidence-banner dl { display: none; }
+  .insight-list { grid-template-columns: 1fr; }
 }
+@media (min-width: 861px) and (max-width: 1180px) { .insight-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (prefers-reduced-motion: reduce) {
   .class-overview { animation: none; }
   .insight-card { transition: none; }

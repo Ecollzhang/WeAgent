@@ -1,8 +1,11 @@
 import {
   acceptCourseInvitation,
   composeCoursePaper,
+  createPaperVersion,
   createCourseMindMap,
   createCourseQuestion,
+  createQuestionVersion,
+  createCourseStimulus,
   createKnowledgeResource,
   adoptWebKnowledgeResource as adoptWebKnowledgeResourceApi,
   createLessonContent,
@@ -25,8 +28,10 @@ import {
   getCourseMindMaps,
   getCourseMembers,
   getCoursePapers,
+  getPaperPreview,
   getCourseProductAgentRuns,
   getCourseQuestions,
+  getCourseStimuli,
   getCourseWorkflowRuns,
   getCourses,
   getCourseUnits,
@@ -34,6 +39,7 @@ import {
   getKnowledgeResources,
   getMockExams,
   getStudentInsights,
+  getAssignmentGradeOverview,
   getWeaknessAnalysis,
   getEducationWorkflowRun,
   getEducationProductAgentRun,
@@ -52,6 +58,7 @@ import {
   publishSubmissionReview,
   publishCoursePaper,
   publishCourseQuestion,
+  publishCourseStimulus,
   publishLesson,
   processAssignmentImport,
   releaseFeedback,
@@ -112,6 +119,7 @@ function initialState() {
     assets: [],
     knowledgeSummary: null,
     questions: [],
+    stimuli: [],
     papers: [],
     knowledgeResources: [],
     mockExams: [],
@@ -121,6 +129,7 @@ function initialState() {
     activeMindMap: null,
     studentInsights: [],
     studentInsightOverview: null,
+    gradeOverview: null,
     loading: false,
     saving: false,
   }
@@ -155,6 +164,7 @@ export default {
     assets: state => state.assets,
     knowledgeSummary: state => state.knowledgeSummary,
     questions: state => state.questions,
+    stimuli: state => state.stimuli,
     papers: state => state.papers,
     knowledgeResources: state => state.knowledgeResources,
     mockExams: state => state.mockExams,
@@ -164,6 +174,7 @@ export default {
     activeMindMap: state => state.activeMindMap,
     studentInsights: state => state.studentInsights,
     studentInsightOverview: state => state.studentInsightOverview,
+    gradeOverview: state => state.gradeOverview,
   },
 
   mutations: {
@@ -191,6 +202,7 @@ export default {
     SET_ASSETS(state, value) { state.assets = value },
     SET_KNOWLEDGE_SUMMARY(state, value) { state.knowledgeSummary = value },
     SET_QUESTIONS(state, value) { state.questions = value },
+    SET_STIMULI(state, value) { state.stimuli = value },
     SET_PAPERS(state, value) { state.papers = value },
     SET_KNOWLEDGE_RESOURCES(state, value) { state.knowledgeResources = value },
     SET_MOCK_EXAMS(state, value) { state.mockExams = value },
@@ -200,6 +212,7 @@ export default {
     SET_ACTIVE_MIND_MAP(state, value) { state.activeMindMap = value },
     SET_STUDENT_INSIGHTS(state, value) { state.studentInsights = value },
     SET_STUDENT_INSIGHT_OVERVIEW(state, value) { state.studentInsightOverview = value },
+    SET_GRADE_OVERVIEW(state, value) { state.gradeOverview = value },
     UPSERT_COURSE(state, course) {
       const index = state.courses.findIndex(item => item.id === course.id)
       if (index < 0) state.courses.push(course)
@@ -701,14 +714,16 @@ export default {
     },
 
     async fetchKnowledgeCenter({ commit }, courseId) {
-      const [summary, questionResponse, paperResponse, resourceResponse] = await Promise.all([
+      const [summary, questionResponse, stimulusResponse, paperResponse, resourceResponse] = await Promise.all([
         getKnowledgeCenter(courseId),
         getCourseQuestions(courseId),
+        getCourseStimuli(courseId),
         getCoursePapers(courseId),
         getKnowledgeResources(courseId),
       ])
       commit('SET_KNOWLEDGE_SUMMARY', payload(summary))
       commit('SET_QUESTIONS', items(questionResponse))
+      commit('SET_STIMULI', items(stimulusResponse))
       commit('SET_PAPERS', items(paperResponse))
       commit('SET_KNOWLEDGE_RESOURCES', items(resourceResponse))
       return payload(summary)
@@ -718,6 +733,24 @@ export default {
       const created = payload(await createCourseQuestion(courseId, question))
       await dispatch('fetchKnowledgeCenter', courseId)
       return created
+    },
+
+    async saveQuestionVersion({ dispatch }, { courseId, questionId, question }) {
+      const created = payload(await createQuestionVersion(questionId, question))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return created
+    },
+
+    async createStimulus({ dispatch }, { courseId, stimulus }) {
+      const created = payload(await createCourseStimulus(courseId, stimulus))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return created
+    },
+
+    async publishStimulus({ dispatch }, { courseId, stimulusId }) {
+      const published = payload(await publishCourseStimulus(stimulusId))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return published
     },
 
     async publishQuestion({ dispatch }, { courseId, questionId }) {
@@ -736,6 +769,19 @@ export default {
       const published = payload(await publishCoursePaper(paperId))
       await dispatch('fetchKnowledgeCenter', courseId)
       return published
+    },
+
+    async savePaperVersion({ dispatch }, { courseId, paperId, paper }) {
+      const created = payload(await createPaperVersion(paperId, paper))
+      await dispatch('fetchKnowledgeCenter', courseId)
+      return created
+    },
+
+    async fetchPaperPreview(context, { paperId, mode, versionId }) {
+      return payload(await getPaperPreview(paperId, {
+        mode,
+        ...(versionId ? { version_id: versionId } : {}),
+      }))
     },
 
     async addKnowledgeResource({ dispatch }, { courseId, resource }) {
@@ -825,6 +871,12 @@ export default {
       const value = Array.isArray(response.items) ? response.items : []
       commit('SET_STUDENT_INSIGHTS', value)
       commit('SET_STUDENT_INSIGHT_OVERVIEW', response.class_overview || null)
+      return response
+    },
+
+    async fetchGradeOverview({ commit }, { courseId, assignmentId }) {
+      const response = payload(await getAssignmentGradeOverview(courseId, assignmentId))
+      commit('SET_GRADE_OVERVIEW', response)
       return response
     },
   },

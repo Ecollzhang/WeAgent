@@ -68,7 +68,13 @@ export default {
   components: { EducationShell },
   data() {
     return {
-      role: this.$route.query.role === 'student' ? 'student' : 'teacher',
+      role: this.$route.query.role
+        || (
+          this.$store.getters['education/activeCourse']
+          && this.$store.getters['education/activeCourse'].membership_role === 'student'
+            ? 'student'
+            : 'teacher'
+        ),
       teacherSteps: [
         { key: 'course', visual: 'course', title: '建立课程与课时', description: '在教学空间创建课程、课时并邀请真实学生。', tips: ['课程身份来自成员关系', '课时决定教案和课件上下文'], action: '进入教学空间', route: '/education' },
         { key: 'slides', visual: 'slides', title: '制作可编辑课件', description: '选择课程和课时，从教案、目标与材料生成 SlideDocument。', tips: ['先保存结构化版本', '可导出 PPTX / PDF / HTML'], action: '打开 PPT 与课件', route: '/education/teacher/courseware' },
@@ -83,8 +89,22 @@ export default {
     }
   },
   computed: {
+    courseRole() {
+      const course = this.$store.getters['education/activeCourse']
+      return course ? course.membership_role : ''
+    },
     isStudent() { return this.role === 'student' },
     activeSteps() { return this.isStudent ? this.studentSteps : this.teacherSteps },
+  },
+  watch: {
+    courseRole: {
+      immediate: true,
+      handler(value) {
+        if (!this.$route.query.role && ['teacher', 'student'].includes(value)) {
+          this.role = value
+        }
+      },
+    },
   },
   methods: {
     open(path) {

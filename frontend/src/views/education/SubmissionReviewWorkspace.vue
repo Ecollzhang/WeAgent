@@ -91,7 +91,7 @@
             </article>
           </div>
           <article v-else-if="review.evidence.text" class="writing-evidence">
-            <div class="paper-header"><span>学生正文</span><small>可选取原文添加批注</small></div>
+            <div class="paper-header"><span>学生正文</span><small>当前提交版本 · 只读</small></div>
             <p>{{ review.evidence.text }}</p>
           </article>
           <div v-else class="empty-evidence">
@@ -112,15 +112,6 @@
             </button>
           </section>
 
-          <section class="annotation-editor">
-            <h3>锚定批注</h3>
-            <div v-for="(annotation, index) in draft.annotations" :key="index">
-              <el-input v-model="annotation.quote" placeholder="引用学生原文" />
-              <el-input v-model="annotation.comment" placeholder="批注内容" />
-              <el-button icon="el-icon-delete" @click="draft.annotations.splice(index, 1)" />
-            </div>
-            <el-button plain icon="el-icon-plus" @click="addAnnotation">添加批注</el-button>
-          </section>
         </section>
 
         <aside class="review-feedback-column">
@@ -140,14 +131,17 @@
               />
             </div>
             <footer><span>总分</span><b>{{ totalScore }} / {{ review.assignment.max_score }}</b></footer>
+            <p v-if="scoreRecoveryNotice" class="score-recovery-notice">
+              该历史批改只保存了总分，系统已按各量规上限等比例恢复为可编辑分项；再次发布前请确认各维度。
+            </p>
           </section>
 
-          <section class="ai-suggestion">
-            <div class="section-heading">
+          <section class="ai-suggestion" :class="{ open: aiSuggestionOpen }">
+            <button type="button" class="section-heading" @click="aiSuggestionOpen = !aiSuggestionOpen">
               <h3>AI 批改建议</h3>
-              <el-tag size="mini" :type="analysisTagType">{{ analysisStateLabel }}</el-tag>
-            </div>
-            <template v-if="analysis">
+              <span><el-tag size="mini" :type="analysisTagType">{{ analysisStateLabel }}</el-tag><i :class="aiSuggestionOpen ? 'el-icon-arrow-up' : 'el-icon-arrow-down'"></i></span>
+            </button>
+            <template v-if="aiSuggestionOpen && analysis">
               <p>{{ analysis.summary }}</p>
               <div v-for="(issue, index) in analysis.issues || []" :key="index" class="ai-issue">
                 <small>证据：“{{ issue.evidence }}”</small>
@@ -156,7 +150,7 @@
               </div>
               <el-button size="mini" plain @click="adoptAnalysis">采纳到反馈</el-button>
             </template>
-            <template v-else>
+            <template v-else-if="aiSuggestionOpen">
               <p>AI 正在后台读取当前版本和量规；你可以立即评分与编辑。</p>
               <el-button
                 v-if="!agentRunning"
@@ -168,22 +162,13 @@
           </section>
 
           <el-form label-position="top" class="feedback-form">
-            <el-form-item label="做得好的地方">
-              <el-input v-model="feedbackStrengths" type="textarea" :rows="3" />
-            </el-form-item>
-            <el-form-item label="关键问题">
-              <el-input v-model="feedbackIssues" type="textarea" :rows="3" />
-            </el-form-item>
-            <el-form-item label="下一步建议">
-              <el-input v-model="feedbackNextSteps" type="textarea" :rows="3" />
-            </el-form-item>
             <el-form-item label="教师反馈">
               <el-input
-                v-model="feedbackComment"
+                v-model="feedbackForm.comment"
                 data-testid="teacher-feedback-editor"
                 type="textarea"
-                :rows="4"
-                placeholder="写给学生的完整反馈"
+                :rows="8"
+                placeholder="用一段完整、可执行的反馈说明做得好的地方、关键问题和下一步建议"
               />
             </el-form-item>
             <el-checkbox v-model="draft.revision_requested">要求学生订正后重新提交</el-checkbox>
@@ -225,10 +210,9 @@ export default {
   data() {
     return {
       draft: emptyDraft(),
-      feedbackStrengths: '',
-      feedbackIssues: '',
-      feedbackNextSteps: '',
-      feedbackComment: '',
+      feedbackForm: { comment: '' },
+      scoreRecoveryNotice: false,
+      aiSuggestionOpen: false,
       saving: false,
       publishing: false,
       retryingAgent: false,
@@ -276,10 +260,7 @@ export default {
     canPublish() {
       return Boolean(
         this.totalScore >= 0
-        && (this.feedbackComment.trim()
-          || this.feedbackStrengths.trim()
-          || this.feedbackIssues.trim()
-          || this.feedbackNextSteps.trim())
+        && this.feedbackForm.comment.trim()
       )
     },
     analysis() {
@@ -350,22 +331,53 @@ export default {
     },
     hydrateDraft(value) {
       const source = value || emptyDraft()
+      const sourceScores = { ...(source.rubric_scores || {}) }
+      this.scoreRecoveryNotice = (
+        !Object.keys(sourceScores).length
+        && source.score !== null
+        && source.score !== undefined
+      )
       this.draft = {
-        rubric_scores: { ...(source.rubric_scores || {}) },
+        rubric_scores: this.scoreRecoveryNotice
+          ? this.restoreLegacyRubricScores(source.score)
+          : sourceScores,
         feedback_json: { ...(source.feedback_json || {}) },
         annotations: (source.annotations || []).map(item => ({ ...item })),
         revision_requested: Boolean(source.revision_requested),
       }
       const feedback = source.feedback_json || {}
-      this.feedbackStrengths = this.listText(feedback.strengths)
-      this.feedbackIssues = this.listText(feedback.issues)
-      this.feedbackNextSteps = this.listText(feedback.next_steps)
-      this.feedbackComment = feedback.comment || feedback.content || ''
+      const historical = [
+        ...this.lines(this.listText(feedback.strengths)).map(value => `做得好：${value}`),
+        ...this.lines(this.listText(feedback.issues || feedback.weaknesses)).map(value => `需要改进：${value}`),
+        ...this.lines(this.listText(feedback.next_steps)).map(value => `下一步：${value}`),
+      ]
+      this.feedbackForm.comment = feedback.comment || feedback.content || historical.join('\n')
       for (const item of this.review.rubric || []) {
         if (this.draft.rubric_scores[item.id] === undefined) {
           this.$set(this.draft.rubric_scores, item.id, 0)
         }
       }
+    },
+    restoreLegacyRubricScores(score) {
+      const rubric = this.review && Array.isArray(this.review.rubric)
+        ? this.review.rubric
+        : []
+      const rubricMaximum = rubric.reduce(
+        (sum, item) => sum + Number(item.max_score || 0),
+        0
+      )
+      if (!rubricMaximum) return {}
+      const target = Math.max(0, Math.min(Number(score || 0), rubricMaximum))
+      let remaining = target
+      return rubric.reduce((scores, item, index) => {
+        const maximum = Number(item.max_score || 0)
+        const value = index === rubric.length - 1
+          ? Math.min(maximum, Number(remaining.toFixed(2)))
+          : Math.min(maximum, Number((target * maximum / rubricMaximum).toFixed(2)))
+        scores[item.id] = value
+        remaining -= value
+        return scores
+      }, {})
     },
     listText(value) {
       return Array.isArray(value) ? value.join('\n') : String(value || '')
@@ -376,13 +388,8 @@ export default {
     buildDraft() {
       return {
         rubric_scores: { ...this.draft.rubric_scores },
-        feedback_json: {
-          strengths: this.lines(this.feedbackStrengths),
-          issues: this.lines(this.feedbackIssues),
-          next_steps: this.lines(this.feedbackNextSteps),
-          comment: this.feedbackComment.trim(),
-        },
-        annotations: this.draft.annotations,
+        feedback_json: { comment: this.feedbackForm.comment.trim() },
+        annotations: [],
         revision_requested: this.draft.revision_requested,
       }
     },
@@ -401,18 +408,16 @@ export default {
     formatDate(value) {
       return value ? new Date(value).toLocaleString('zh-CN') : '时间未记录'
     },
-    addAnnotation() {
-      this.draft.annotations.push({ quote: '', comment: '' })
-    },
     adoptAnalysis() {
       if (!this.analysis) return
-      this.feedbackStrengths = this.listText(this.analysis.strengths)
-      this.feedbackIssues = (this.analysis.issues || [])
-        .map(item => `${item.concern}：${item.suggestion}`)
-        .join('\n')
-      this.feedbackNextSteps = this.listText(this.analysis.next_steps)
-      this.feedbackComment = this.feedbackComment || this.analysis.summary || ''
-      this.$message.success('AI 建议已复制到草稿，请教师继续修改确认')
+      const sections = [
+        this.analysis.summary,
+        ...(this.analysis.strengths || []).map(value => `做得好：${value}`),
+        ...(this.analysis.issues || []).map(item => `需要改进：${item.concern}。${item.suggestion}`),
+        ...(this.analysis.next_steps || []).map(value => `下一步：${value}`),
+      ].filter(Boolean)
+      this.feedbackForm.comment = this.feedbackForm.comment || sections.join('\n')
+      this.$message.success('AI 建议已整理到唯一的教师反馈草稿，请继续修改确认')
     },
     async startReviewAgent() {
       if (this.agentRunning) return
@@ -537,15 +542,16 @@ dd { margin: 0; color: #3c4b5c; font-size: 11px; }
 .answer-items b { margin-top: 6px; color: #3c4959; }
 .answer-items p { color: #566576; }
 .empty-evidence { min-height: 250px; display: grid; place-items: center; border: 1px dashed #d6dfe4; border-radius: 9px; color: #8d98a4; }
-.submission-artifacts, .annotation-editor { margin-top: 16px; }
+.submission-artifacts { margin-top: 16px; }
 .submission-artifacts button { width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; padding: 9px; border: 1px solid #dce7e4; border-radius: 8px; background: #f6faf9; color: #31756e; text-align: left; cursor: pointer; }
-.annotation-editor > div { display: grid; grid-template-columns: 1fr 1.3fr auto; gap: 6px; margin-bottom: 6px; }
 .score-editor { margin-top: 14px; }
 .score-editor > div, .score-editor footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; }
 .score-editor footer { margin-top: 5px; border-top: 1px solid #dfe7e5; color: #286f68; }
 .score-editor footer b { font-size: 18px; }
+.score-recovery-notice { margin: 8px 0 0; padding: 8px 10px; border-radius: 7px; background: #fff8e8; color: #8a6a28; font-size: 10px; line-height: 1.6; }
 .ai-suggestion { margin-top: 14px; padding: 12px; border: 1px solid #cfe2dd; border-radius: 9px; background: #f4faf8; }
-.section-heading { display: flex; justify-content: space-between; align-items: center; }
+.section-heading { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.section-heading > span { display: flex; align-items: center; gap: 7px; }
 .section-heading h3 { margin: 0; color: #2b746c; }
 .ai-suggestion > p { color: #58706b; font-size: 11px; line-height: 1.6; }
 .ai-issue { display: grid; gap: 3px; margin: 8px 0; padding: 8px; border-radius: 7px; background: #fff; }

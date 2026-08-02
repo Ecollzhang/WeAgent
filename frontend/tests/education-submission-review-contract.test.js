@@ -84,4 +84,16 @@ for (const fragment of [
   )
 }
 
+for (const fragment of [
+  'restoreLegacyRubricScores',
+  'scoreRecoveryNotice',
+  'source.score',
+]) {
+  contains(
+    'src/views/education/SubmissionReviewWorkspace.vue',
+    fragment,
+    'released total-only feedback must not reopen as a misleading zero score'
+  )
+}
+
 console.log('Education submission review contract passed')

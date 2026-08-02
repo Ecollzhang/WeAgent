@@ -17,12 +17,19 @@
       </el-dropdown>
     </div>
 
-    <div class="graph-body">
+    <div class="graph-body" :class="{ editable }">
       <div ref="canvas" class="graph-canvas" aria-label="可拖拽课程思维导图"></div>
+      <div v-if="inlineEditingId" class="inline-node-editor">
+        <el-input ref="inlineInput" v-model.trim="inlineLabel" size="small" maxlength="120" @keyup.enter.native="commitInlineEdit" @keyup.esc.native="cancelInlineEdit" @blur="commitInlineEdit" />
+        <small>Enter 保存 · Esc 取消</small>
+      </div>
       <aside v-if="editable" class="node-inspector">
         <template v-if="selectedNode">
           <span class="inspector-kicker">SELECTED NODE</span>
           <el-input v-model.trim="nodeLabel" size="small" maxlength="120" @keyup.enter.native="renameNode" />
+          <div class="color-palette" aria-label="节点颜色">
+            <button v-for="token in COLOR_TOKENS" :key="token" type="button" :class="['color-dot', `color-${token}`, { active: (selectedNode.color_token || 'auto') === token }]" :title="colorName(token)" @click="setNodeColor(token)"></button>
+          </div>
           <div class="inspector-actions">
             <el-button size="mini" type="primary" plain @click="renameNode">重命名</el-button>
             <el-button size="mini" @click="addChild">新增子节点</el-button>
@@ -70,6 +77,14 @@ import { SVGRenderer } from 'echarts/renderers'
 use([GraphChart, TooltipComponent, SVGRenderer])
 
 const clone = value => JSON.parse(JSON.stringify(value || {}))
+const COLOR_TOKENS = ['auto', 'teal', 'blue', 'indigo', 'violet', 'amber', 'orange', 'rose', 'slate']
+const COLOR_MAP = {
+  auto: ['#f7fbfa', '#9fc3bb', '#36544e'], teal: ['#dff3ef', '#2f897d', '#245f57'],
+  blue: ['#e5f0fb', '#4d82b8', '#315f8c'], indigo: ['#e9eafa', '#6167b5', '#454b8f'],
+  violet: ['#f0e8fa', '#8a61b2', '#694489'], amber: ['#fff2d7', '#c68a2d', '#8a5c19'],
+  orange: ['#fce9dc', '#c46e37', '#8a4825'], rose: ['#f8e5ea', '#b85e76', '#813d50'],
+  slate: ['#e9eef0', '#647981', '#40545b'],
+}
 
 export default {
   name: 'MindMapGraphEditor',
@@ -88,6 +103,9 @@ export default {
       relationLabel: '',
       undoStack: [],
       redoStack: [],
+      inlineEditingId: '',
+      inlineLabel: '',
+      COLOR_TOKENS,
     }
   },
   computed: {
@@ -138,6 +156,9 @@ export default {
     this.chart = init(this.$refs.canvas, null, { renderer: 'svg' })
     this.chart.on('click', params => {
       if (params.dataType === 'node') this.selectedId = params.data.id
+    })
+    this.chart.on('dblclick', params => {
+      if (params.dataType === 'node') this.startInlineEdit(params.data.id)
     })
     this.chart.on('mouseup', params => {
       if (!this.editable || params.dataType !== 'node') return
@@ -199,6 +220,8 @@ export default {
       const walk = (node, depth = 0, parent = null) => {
         const position = node.view_position || { x: 80 + depth * 210, y: 70 + row * 76 }
         row += 1
+        const token = node.color_token || 'auto'
+        const colors = COLOR_MAP[token] || COLOR_MAP.auto
         data.push({
           id: node.id,
           name: node.label,
@@ -206,11 +229,11 @@ export default {
           y: position.y,
           symbolSize: node.id === this.rootId ? [150, 48] : [130, 40],
           itemStyle: {
-            color: node.id === this.selectedId ? '#237b70' : node.id === this.rootId ? '#2f897d' : '#f7fbfa',
-            borderColor: node.id === this.selectedId || node.id === this.rootId ? '#237b70' : '#9fc3bb',
+            color: node.id === this.selectedId ? '#237b70' : node.id === this.rootId && token === 'auto' ? '#2f897d' : colors[0],
+            borderColor: node.id === this.selectedId || (node.id === this.rootId && token === 'auto') ? '#237b70' : colors[1],
             borderWidth: 1.4,
           },
-          label: { color: node.id === this.selectedId || node.id === this.rootId ? '#fff' : '#36544e' },
+          label: { color: node.id === this.selectedId || (node.id === this.rootId && token === 'auto') ? '#fff' : colors[2] },
         })
         if (parent) edges.push({ source: parent.id, target: node.id, lineStyle: { color: '#9cbdb6', width: 1.5 } })
         if (!node.collapsed) for (const child of node.children || []) walk(child, depth + 1, node)
@@ -269,6 +292,33 @@ export default {
       if (!this.selectedNode || !this.nodeLabel) return
       this.mutate(() => { this.selectedNode.label = this.nodeLabel.slice(0, 120) })
     },
+    startInlineEdit(id) {
+      const node = this.findNode(id)
+      if (!node) return
+      this.selectedId = id
+      if (!this.editable) this.$emit('request-edit')
+      this.inlineEditingId = id
+      this.inlineLabel = node.label
+      this.$nextTick(() => { if (this.$refs.inlineInput) this.$refs.inlineInput.focus() })
+    },
+    commitInlineEdit() {
+      const node = this.findNode(this.inlineEditingId)
+      const next = this.inlineLabel.trim()
+      if (node && next && next !== node.label) this.mutate(() => { node.label = next.slice(0, 120) })
+      this.inlineEditingId = ''
+      this.inlineLabel = ''
+    },
+    cancelInlineEdit() {
+      this.inlineEditingId = ''
+      this.inlineLabel = ''
+    },
+    colorName(token) {
+      return ({ auto: '按层级自动配色', teal: '青绿', blue: '蓝色', indigo: '靛蓝', violet: '紫色', amber: '琥珀', orange: '橙色', rose: '玫红', slate: '灰蓝' })[token]
+    },
+    setNodeColor(color_token) {
+      if (!this.selectedNode || !COLOR_TOKENS.includes(color_token)) return
+      this.mutate(() => { this.selectedNode.color_token = color_token })
+    },
     deleteNode() {
       if (!this.selectedNode || this.selectedId === this.rootId) return
       const removed = new Set([this.selectedId, ...this.descendantIds(this.selectedNode)])
@@ -298,7 +348,15 @@ export default {
       this.mutate(() => {
         const [node] = parent.children.splice(index, 1)
         parent.children.splice(target, 0, node)
+        this.clearSiblingPositions(parent)
       })
+    },
+    clearSiblingPositions(parent) {
+      const clear = node => {
+        delete node.view_position
+        for (const child of node.children || []) clear(child)
+      }
+      for (const child of (parent && parent.children) || []) clear(child)
     },
     addRelation() {
       if (!this.selectedNode || !this.relationTarget) return
@@ -330,7 +388,20 @@ export default {
       this.emitChange()
     },
     centerGraph() {
-      if (this.chart) this.chart.dispatchAction({ type: 'restore' })
+      if (!this.localDocument.root) return
+      const canvasHeight = (this.$refs.canvas && this.$refs.canvas.clientHeight) || 520
+      let row = 0
+      const visible = this.allNodes.length
+      const startY = Math.max(55, Math.round((canvasHeight - Math.max(1, visible) * 68) / 2))
+      this.mutate(() => {
+        const place = (node, depth = 0) => {
+          node.view_position = { x: 110 + depth * 215, y: startY + row * 68 }
+          row += 1
+          if (!node.collapsed) for (const child of node.children || []) place(child, depth + 1)
+        }
+        place(this.localDocument.root)
+      })
+      this.$nextTick(() => { if (this.chart) this.chart.resize() })
     },
     downloadBlob(blob, filename) {
       const href = URL.createObjectURL(blob)
@@ -350,6 +421,14 @@ export default {
       } else if (format === 'html') {
         this.downloadBlob(new Blob([`<!doctype html><meta charset="utf-8"><title>${base}</title><style>body{margin:0;background:#f7faf9}svg{width:100%;height:auto}</style>${svg}`], { type: 'text/html;charset=utf-8' }), `${base}.html`)
       } else if (format === 'png') {
+        const dataUrl = this.chart && this.chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' })
+        if (dataUrl && dataUrl.startsWith('data:image/png')) {
+          const link = document.createElement('a')
+          link.href = dataUrl
+          link.download = `${base}.png`
+          link.click()
+          return
+        }
         const image = new Image()
         const source = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }))
         image.onload = () => {
@@ -374,9 +453,14 @@ export default {
 .mind-graph-editor { overflow: hidden; border: 1px solid #dce7e4; border-radius: 12px; background: #fff; }
 .graph-toolbar { min-height: 46px; display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-bottom: 1px solid #e4ecea; background: #f8fbfa; }
 .toolbar-hint { margin-left: auto; color: #84928e; font-size: 10px; }
-.graph-body { display: grid; grid-template-columns: minmax(0, 1fr) 250px; min-height: 520px; }
+.graph-body { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 520px; }
+.graph-body.editable { grid-template-columns: minmax(0, 1fr) 250px; }
 .graph-canvas { min-width: 0; min-height: 520px; background-image: linear-gradient(rgba(57, 113, 103, .05) 1px, transparent 1px), linear-gradient(90deg, rgba(57, 113, 103, .05) 1px, transparent 1px); background-size: 24px 24px; }
 .node-inspector { padding: 16px; overflow-y: auto; border-left: 1px solid #e3ebe9; background: #fbfdfc; }
+.inline-node-editor { position: absolute; z-index: 4; top: 64px; left: 50%; width: min(320px, 70%); transform: translateX(-50%); padding: 9px; border: 1px solid #b9d5cf; border-radius: 9px; background: #fff; box-shadow: 0 12px 30px rgba(30, 73, 66, .15); }
+.inline-node-editor small { display: block; margin-top: 5px; color: #879590; font-size: 9px; text-align: right; }
+.color-palette { display: flex; flex-wrap: wrap; gap: 7px; margin: 11px 0; }.color-dot { width: 22px; height: 22px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px #cad8d4; cursor: pointer; }.color-dot.active { box-shadow: 0 0 0 2px #24796e; }
+.color-auto { background: linear-gradient(135deg, #2f897d 0 50%, #dce9f6 50%); }.color-teal { background: #55a99d; }.color-blue { background: #5d91c5; }.color-indigo { background: #6f74c3; }.color-violet { background: #9970c2; }.color-amber { background: #d49b43; }.color-orange { background: #ce7a45; }.color-rose { background: #c46b82; }.color-slate { background: #71878f; }
 .inspector-kicker { display: block; margin-bottom: 10px; color: #338176; font-size: 8px; font-weight: 800; letter-spacing: .13em; }
 .inspector-actions { display: flex; gap: 6px; margin: 9px 0; }
 .node-inspector > .el-select { width: 100%; margin-top: 5px; }

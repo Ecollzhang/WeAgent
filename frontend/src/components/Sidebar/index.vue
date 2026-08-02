@@ -99,7 +99,16 @@ export default {
   data() {
     return {
       collapsed: localStorage.getItem('sidebar_collapsed') === '1',
+      educationContextHydrating: false,
     }
+  },
+  watch: {
+    activeDomain: {
+      immediate: true,
+      handler(value) {
+        if (value === 'edu') this.hydrateEducationContext()
+      },
+    },
   },
   computed: {
     currentUser() {
@@ -211,6 +220,22 @@ export default {
     },
   },
   methods: {
+    async hydrateEducationContext() {
+      if (this.activeCourse || this.educationContextHydrating) return
+      this.educationContextHydrating = true
+      try {
+        const courses = await this.$store.dispatch('education/fetchCourses')
+        const requestedRole = this.activeSubRole
+        const candidate = requestedRole
+          ? courses.find(course => course.membership_role === requestedRole)
+          : courses[0]
+        if (candidate) await this.$store.dispatch('education/selectCourse', candidate.id)
+      } catch (error) {
+        // Keep the generic Education entry usable when the account has no course yet.
+      } finally {
+        this.educationContextHydrating = false
+      }
+    },
     isNavActive(item) {
       if (item.module) {
         return this.$route.meta && this.$route.meta.educationModule === item.module

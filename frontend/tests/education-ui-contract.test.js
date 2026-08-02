@@ -183,10 +183,9 @@ assertContains(
   "isTeacher",
   'course space must render by server membership'
 )
-assertContains(
-  'src/views/education/CourseSpace.vue',
-  'data-testid="course-membership-role"',
-  'UAT must be able to observe the server-authoritative role'
+assert.ok(
+  !read('src/views/education/CourseSpace.vue').includes('data-testid="course-membership-role"'),
+  'course header must not repeat the teacher/student role tag'
 )
 assertContains(
   'src/views/education/CourseSpace.vue',

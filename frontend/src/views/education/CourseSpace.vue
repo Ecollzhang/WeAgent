@@ -5,31 +5,25 @@
     back-to="/education"
   >
     <template #actions>
-      <el-tag
-        v-if="membershipRole"
-        data-testid="course-membership-role"
-        :type="isTeacher ? 'success' : 'info'"
-      >{{ isTeacher ? '教师空间' : '学生空间' }}</el-tag>
-      <el-button icon="el-icon-edit" @click="displayNameDialog = true">修改课程姓名</el-button>
-      <el-button
-        v-if="isTeacher"
+      <div v-if="isTeacher" class="teacher-actions-grid">
+        <el-button icon="el-icon-edit" @click="displayNameDialog = true">修改课程姓名</el-button>
+        <el-button
         data-testid="create-invitation-open"
         icon="el-icon-user"
         @click="createInvitation"
       >邀请学生</el-button>
-      <el-button
-        v-if="isTeacher"
+        <el-button
         data-testid="create-lesson-open"
         icon="el-icon-circle-plus-outline"
         @click="openLessonDialog"
       >新建课时</el-button>
-      <el-button
-        v-if="isTeacher"
+        <el-button
         data-testid="create-assignment-open"
         type="primary"
         icon="el-icon-edit-outline"
         @click="assignmentDialog = true"
       >发布作业</el-button>
+      </div>
     </template>
 
     <el-skeleton v-if="!course" :rows="8" animated />
@@ -315,7 +309,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog title="发布作业" :visible.sync="assignmentDialog" width="720px">
+    <el-dialog title="发布作业" :visible.sync="assignmentDialog" width="720px" custom-class="education-dialog education-dialog--editor">
       <el-form label-position="top">
         <el-form-item label="从文件开始（可选）">
           <div class="assignment-import-row">
@@ -903,6 +897,8 @@ export default {
 </script>
 
 <style scoped>
+.teacher-actions-grid { display: grid; grid-template-columns: repeat(2, minmax(132px, 1fr)); gap: 8px; }
+.teacher-actions-grid :deep(.el-button) { width: 100%; margin: 0; justify-content: center; }
 .course-tabs {
   display: flex; gap: 5px; margin-bottom: 18px; padding: 5px;
   border: 1px solid #e5ebf0; border-radius: 11px; background: #f6f9fb;

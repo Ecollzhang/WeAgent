@@ -13,7 +13,6 @@
           >
             <i class="el-icon-arrow-left"></i>
           </button>
-          <span class="eyebrow">WeAgent Education</span>
           <h1>{{ title }}</h1>
           <p v-if="subtitle">{{ subtitle }}</p>
         </div>
@@ -86,22 +85,14 @@ export default {
 
 .education-header > :deep(.course-context) { grid-area: context; }
 
-.eyebrow {
-  color: #27887e;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-}
-
 h1 {
-  display: -webkit-inline-box;
-  max-width: calc(100% - 150px);
+  display: -webkit-box;
+  max-width: 100%;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   vertical-align: top;
-  margin: 0 0 0 8px;
+  margin: 0;
   color: #18212f;
   font-size: 23px;
 }

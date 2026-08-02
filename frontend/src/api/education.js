@@ -303,6 +303,22 @@ export function createQuestionVersion(questionId, data) {
   return service.post(url(`/questions/${questionId}/versions`), data)
 }
 
+export function getCourseStimuli(courseId) {
+  return service.get(url(`/courses/${courseId}/stimuli`))
+}
+
+export function createCourseStimulus(courseId, data) {
+  return service.post(url(`/courses/${courseId}/stimuli`), data)
+}
+
+export function createStimulusVersion(stimulusId, data) {
+  return service.post(url(`/stimuli/${stimulusId}/versions`), data)
+}
+
+export function publishCourseStimulus(stimulusId) {
+  return service.post(url(`/stimuli/${stimulusId}/publish`))
+}
+
 export function publishCourseQuestion(questionId) {
   return service.post(url(`/questions/${questionId}/publish`))
 }
@@ -317,6 +333,18 @@ export function composeCoursePaper(courseId, data) {
 
 export function publishCoursePaper(paperId) {
   return service.post(url(`/papers/${paperId}/publish`))
+}
+
+export function getCoursePaper(paperId) {
+  return service.get(url(`/papers/${paperId}`))
+}
+
+export function getPaperPreview(paperId, params = {}) {
+  return service.get(url(`/papers/${paperId}/preview`), { params })
+}
+
+export function createPaperVersion(paperId, data) {
+  return service.post(url(`/papers/${paperId}/versions`), data)
 }
 
 export function getKnowledgeResources(courseId) {
@@ -387,4 +415,10 @@ export function getStudentInsights(courseId) {
 
 export function refreshStudentInsights(courseId) {
   return service.post(url(`/courses/${courseId}/student-insights/refresh`))
+}
+
+export function getAssignmentGradeOverview(courseId, assignmentId) {
+  return service.get(url(`/courses/${courseId}/grade-overview`), {
+    params: assignmentId ? { assignment_id: assignmentId } : {},
+  })
 }

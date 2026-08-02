@@ -16,10 +16,12 @@ from .learning_service import (
     LearningServiceError,
     add_mind_map_version,
     attempt_to_dict,
+    build_assignment_grade_overview,
     build_class_insight_overview,
     create_mind_map,
     create_mock_exam,
     create_weakness_snapshot,
+    ensure_weakness_snapshot,
     insight_to_dict,
     mind_map_to_dict,
     mind_map_version_to_dict,
@@ -128,25 +130,8 @@ def get_weakness_route(course_id):
     actor = get_jwt_identity()
     if not active_membership(course_id, actor, "student"):
         return jsonify({"error": "course not found"}), 404
-    snapshot = (
-        WeaknessAnalysisSnapshot.query.filter_by(
-            course_id=course_id,
-            student_user_id=actor,
-        )
-        .order_by(WeaknessAnalysisSnapshot.created_at.desc())
-        .first()
-    )
-    if not snapshot:
-        return jsonify(
-            {
-                "course_id": course_id,
-                "student_user_id": actor,
-                "data_state": "insufficient",
-                "evidence": [],
-                "weaknesses": [],
-                "recommendations": [],
-            }
-        )
+    snapshot = ensure_weakness_snapshot(course_id, actor)
+    db.session.commit()
     return jsonify(weakness_to_dict(snapshot))
 
 
@@ -266,3 +251,19 @@ def list_insights_route(course_id):
             "items": [insight_to_dict(row) for row in latest.values()],
         }
     )
+
+
+@education_learning_api.get("/courses/<course_id>/grade-overview")
+@jwt_required()
+def grade_overview_route(course_id):
+    actor = get_jwt_identity()
+    if not active_membership(course_id, actor, "teacher"):
+        return jsonify({"error": "course not found"}), 404
+    try:
+        payload = build_assignment_grade_overview(
+            course_id,
+            request.args.get("assignment_id"),
+        )
+    except LearningServiceError as error:
+        return _error(error)
+    return jsonify(payload)

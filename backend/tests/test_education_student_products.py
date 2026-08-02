@@ -275,6 +275,14 @@ def test_weakness_includes_released_assignment_feedback_evidence(app):
         },
     ).status_code == 201
 
+    automatic = client.get(
+        f"/api/edu/courses/{course['id']}/weakness-analysis",
+        headers=student,
+    )
+    assert automatic.status_code == 200
+    assert automatic.get_json()["data_state"] == "ready"
+    assert automatic.get_json()["evidence"][0]["submission_id"] == submission["id"]
+
     response = client.post(
         f"/api/edu/courses/{course['id']}/weakness-analysis",
         headers=student,
@@ -296,6 +304,62 @@ def test_weakness_includes_released_assignment_feedback_evidence(app):
         row["submission_id"] == submission["id"]
         for row in payload["evidence"]
     )
+
+
+def test_positive_comment_only_feedback_does_not_become_a_false_weakness(app):
+    client = app.test_client()
+    teacher, student, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Evidence-based interpretation",
+            "learning_domain": "integrated",
+            "theme_code": "literature",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    assignment = client.post(
+        f"/api/edu/lessons/{lesson['id']}/assignments",
+        headers=teacher,
+        json={
+            "title": "Explain the irony",
+            "kind": "writing",
+            "instruction_json": {"prompt": "Explain the ending with evidence."},
+            "evaluation_json": {"rubric": {"evidence": 5, "reasoning": 5}},
+            "max_score": 10,
+        },
+    ).get_json()
+    client.post(
+        f"/api/edu/assignments/{assignment['id']}/publish",
+        headers=teacher,
+    )
+    submission = client.post(
+        f"/api/edu/assignments/{assignment['id']}/submissions",
+        headers=student,
+        json={"answer_json": {"writing": "The ending is ironic because both gifts cannot be used."}},
+    ).get_json()["submission"]
+    assert client.post(
+        f"/api/edu/submissions/{submission['id']}/feedback",
+        headers=teacher,
+        json={
+            "feedback_json": {
+                "comment": "证据选择准确，因果解释清楚；下一次可尝试分析叙述者语气。"
+            },
+            "score": 9,
+        },
+    ).status_code == 201
+
+    payload = client.get(
+        f"/api/edu/courses/{course['id']}/weakness-analysis",
+        headers=student,
+    ).get_json()
+
+    assert payload["data_state"] == "ready"
+    assert payload["weaknesses"] == []
+    assert payload["evidence"][0]["correct"] is True
 
 
 def test_student_mind_map_is_versioned_editable_and_source_linked(app):
@@ -410,7 +474,7 @@ def test_lesson_mind_map_v2_validates_relations_and_exposes_version_history(app)
             "id": "root",
             "label": "Evidence",
             "children": [
-                {"id": "quote", "label": "Quote", "children": []},
+                {"id": "quote", "label": "Quote", "children": [], "color_token": "rose"},
                 {"id": "inference", "label": "Inference", "children": []},
             ],
         },
@@ -427,6 +491,7 @@ def test_lesson_mind_map_v2_validates_relations_and_exposes_version_history(app)
     assert saved.status_code == 201
     assert saved.get_json()["current_version"]["version_number"] == 2
     assert saved.get_json()["current_version"]["relations"][0]["from"] == "quote"
+    assert saved.get_json()["current_version"]["tree"]["children"][0]["color_token"] == "rose"
 
     invalid = {**document, "relations": [{"id": "bad", "from": "quote", "to": "missing", "label": "bad", "type": "cross_link"}]}
     rejected = client.post(
@@ -436,6 +501,24 @@ def test_lesson_mind_map_v2_validates_relations_and_exposes_version_history(app)
     )
     assert rejected.status_code == 400
     assert rejected.get_json()["error_code"] == "invalid_mind_map_relations"
+
+    invalid_color = {
+        **document,
+        "root": {
+            **document["root"],
+            "children": [
+                {"id": "quote", "label": "Quote", "children": [], "color_token": "#ff00ff"},
+                {"id": "inference", "label": "Inference", "children": []},
+            ],
+        },
+    }
+    rejected_color = client.post(
+        f"/api/edu/mind-maps/{mind_map['id']}/versions",
+        headers=student,
+        json={"document": invalid_color, "source_refs": []},
+    )
+    assert rejected_color.status_code == 400
+    assert rejected_color.get_json()["error_code"] == "invalid_mind_map_color"
 
     history = client.get(
         f"/api/edu/mind-maps/{mind_map['id']}/versions", headers=student
@@ -567,3 +650,19 @@ def test_teacher_insight_aggregates_only_confirmed_assignment_scores(app):
         f"/api/edu/courses/{course['id']}/student-insights",
         headers=student_a,
     ).status_code == 404
+
+    grade_overview = client.get(
+        f"/api/edu/courses/{course['id']}/grade-overview?assignment_id={assignment['id']}",
+        headers=teacher,
+    )
+    assert grade_overview.status_code == 200
+    grade_payload = grade_overview.get_json()
+    assert grade_payload["selected_assignment"]["id"] == assignment["id"]
+    assert grade_payload["average_score"] == 70.0
+    assert grade_payload["graded_count"] == 2
+    assert grade_payload["pending_review_count"] == 1
+    assert len(grade_payload["course_assignment_trend"]) == 1
+    assert all(
+        row["assignment_id"] == assignment["id"]
+        for row in grade_payload["course_assignment_trend"]
+    )

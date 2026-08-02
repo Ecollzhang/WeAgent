@@ -310,6 +310,7 @@
       title="逐页视觉检查"
       :visible.sync="visualQaDialog"
       width="760px"
+      custom-class="education-dialog education-dialog--visual"
       data-testid="visual-qa-dialog"
     >
       <div v-loading="visualQaLoading" class="visual-qa-report">
@@ -362,6 +363,7 @@
       :visible.sync="adoptedPreviewDialog"
       width="92%"
       top="4vh"
+      custom-class="education-dialog education-dialog--visual"
       data-testid="courseware-adopted-preview"
     >
       <div v-if="adoptedPreviewEntry" class="adopted-preview-heading">

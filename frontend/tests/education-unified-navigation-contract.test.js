@@ -24,6 +24,14 @@ for (const label of [
 
 assert.ok(sidebar.includes('educationDomainNavItems'), 'Education domains must be computed')
 assert.ok(
+  sidebar.includes('hydrateEducationContext'),
+  'the global sidebar must hydrate a default course when Education becomes active'
+)
+assert.ok(
+  sidebar.includes("activeDomain: {") && sidebar.includes("if (value === 'edu')"),
+  'first entry into Education must reactively resolve teacher/student product navigation'
+)
+assert.ok(
   sidebar.includes("activeSubRole"),
   'Education domains must use the workspace role before a course is selected'
 )

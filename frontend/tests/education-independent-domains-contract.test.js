@@ -57,14 +57,14 @@ for (const fragment of ['作业满分', 'assignmentForm.max_score', 'max_score: 
 }
 
 for (const fragment of [
-  'studentInsightOverview',
+  'gradeOverview',
   '最高分',
   '最低分',
   '平均分',
   '中位数',
-  '完成率',
+  '提交率',
   '成绩分布',
-  '待教师确认',
+  '选择作业',
   'ScoreDistributionChart',
 ]) {
   contains(
