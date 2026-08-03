@@ -2228,7 +2228,8 @@ export default {
     },
 
     startConversation() {
-      this.$router.push({ path: '/dashboard', query: { project_id: this.project.id } })
+      const domain = this.$store.getters['workspace/activeDomain'] || 'rd'
+      this.$router.push({ path: '/dashboard', query: { project_id: this.project.id, domain } })
     },
 
     // ── 项目编辑 ──

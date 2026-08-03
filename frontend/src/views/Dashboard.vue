@@ -657,6 +657,7 @@ export default {
       this.$store.dispatch('agent/fetchAgents'),
     ])
     this.selectConversationFromRoute()
+    this.handleProjectFromRoute()
   },
     beforeDestroy() {
       if (this.currentConversation?.id) {
@@ -702,6 +703,9 @@ export default {
     '$route.query.conversation_id'() {
       this.selectConversationFromRoute()
     },
+    '$route.query.project_id'(newVal) {
+      if (newVal) this.handleProjectFromRoute()
+    },
     activeWorkspaceId(newId, oldId) {
       if (newId && newId !== oldId) {
         this.$store.commit('conversation/SET_CURRENT_CONVERSATION', null)
@@ -717,6 +721,27 @@ export default {
       if (!conversation) return
       if (this.currentConversation?.id === conversationId) return
       this.handleSelectConversation(conversation)
+    },
+
+    async handleProjectFromRoute() {
+      const projectId = this.$route.query.project_id
+      if (!projectId) return
+      // Clear the query so it doesn't re-trigger on refresh
+      if (this.$route.query.project_id) {
+        const q = { ...this.$route.query }
+        delete q.project_id
+        this.$router.replace({ query: q }).catch(() => {})
+      }
+      // Pre-fetch projects so the name shows in preview
+      await this.fetchProjects()
+      if (!this.projectList.find(p => p.id === projectId)) {
+        this.$message.warning('未找到该项目，请确认项目存在')
+        return
+      }
+      // Pre-fill: RD service + project, domain from active workspace
+      this.newConversation.services = ['rd']
+      this.newConversation.projectId = projectId
+      this.showCreateDialog = true
     },
 
     handleSelectConversation(conversation) {
