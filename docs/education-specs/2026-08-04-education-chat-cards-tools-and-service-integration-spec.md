@@ -3,7 +3,7 @@
 ## 0. 文档状态
 
 - 日期：2026-08-04
-- 状态：待用户确认后进入实施计划
+- 状态：已确认，待进入实施计划
 - 适用分支：`feature/education`
 - 目标版本：Education Chat Integration Phase
 - 本文只规定智慧教育与核心聊天、Toolset、RAG 和领域微服务的接入，不重做已经存在的课程、
@@ -30,7 +30,8 @@
 3. 聊天中已有 RD 的项目、需求、缺陷、迭代卡片，尚无课程、课时、课件、作业、试卷、
    知识资源和学情等 Education 业务卡片。
 4. `list_services`、`call_service_api` 已进入通用运行时，但当前会看到完整服务注册表，
-   没有以会话选择的服务作为强制白名单；通用工具的 Capability 归属也被默认记为 RD。
+   没有按执行 Agent 的 Capability、领域策略和 RunGrant 形成强制服务视角；通用工具的
+   Capability 归属也被默认记为 RD。
 
 因此，“弹窗里 EDU 不再显示待上线”只是 UI 状态，不构成上线。完整上线至少要求：
 
@@ -62,12 +63,17 @@
 - RAG 文档由 RAG 服务存储，并受 Education 课程范围约束。
 - sandbox 只保存临时协作文件；`/workspace/...` 路径不能成为业务卡片的正式引用。
 
-### 2.3 选择服务必须成为强授权边界
+### 2.3 每个 Agent 拥有独立服务视角
 
-- `conversation.services` 是服务白名单，不只是 UI 标签。
-- Agent 不能发现、调用未选择的服务。
-- Toolset 绑定决定 Agent 是否具备某种能力；会话白名单决定本次运行能否使用该能力；
-  Education RunGrant 再决定本次能操作哪门课程、什么角色和哪些动作。
+- 普通用户不在会话创建时逐项勾选底层微服务。用户选择 Education 课程、课时和 Agent；
+  系统根据 Agent Capability、当前领域和授权上下文计算服务视角。
+- 同一组多 Agent 会话中，不同 Agent 可以看到不同服务。例如资料研究 Agent 可以看到
+  EDU/RAG，教学审校 Agent 可以只看到 EDU。
+- Toolset 绑定决定 Agent 理论上具备哪些能力；当前 Education 领域、课程成员关系、
+  RunGrant、灰度和服务健康状态共同决定本轮实际可用能力。
+- `conversation.services` 只保存所有参与 Agent 服务视角的并集快照，用于审计、恢复和
+  UI 摘要，不是单个 Agent 的授权来源。
+- Agent 不能借用同一会话中其他 Agent 的服务视角。
 - Prompt 约束不是权限控制，所有边界必须在服务端再次校验。
 
 ### 2.4 Education 写操作不走通用 API 工具
@@ -83,14 +89,15 @@
 
 ### 3.1 本阶段必须完成
 
-1. 普通聊天新建弹窗中的 EDU 正式上线，不再显示“待上线”或仅做静态勾选。
+1. 普通聊天新建弹窗中的 EDU 正式上线，不再显示“待上线”或仅做静态勾选；默认流程不再
+   要求用户选择底层服务。
 2. 从 Education 业务页和全局聊天页都能创建课程绑定的 EDU 会话。
 3. Education 产品任务创建的会话显式保存 `services`，并出现在对应 Education Workspace
    的聊天列表中，刷新后不消失。
 4. 聊天获得课程、可选课时、成员角色、允许动作和课程知识范围。
 5. Toolset 中完成公共微服务工具和 Education 工具的归属迁移与默认绑定。
 6. `list_services`、服务规范读取、`call_service_api`、`rag_search` 和
-   `education_action` 按会话范围正确工作。
+   `education_action` 按当前 Agent 的独立服务视角正确工作。
 7. 增加统一的 Education 业务卡片，至少覆盖课程、课时、课件、作业、题库/试卷、
    知识资源和学情报告。
 8. 支持业务页 → 聊天 → 业务页双向跳转，以及聊天内正式产物预览。
@@ -142,15 +149,21 @@
 
 ### 4.2 从全局聊天新建 EDU 会话
 
-选择“智慧教育”后，弹窗展开 Education 上下文区：
+用户先进入“智慧教育”领域/Workspace，再点击新建会话。领域选择决定主业务空间，不再在
+会话弹窗中出现“选择领域服务”的多选步骤。弹窗展开 Education 上下文区：
 
-1. 当前身份：由课程成员关系显示，不允许前端手工伪造。
-2. 课程：选择一门有权限的课程。
+1. 课程：选择一门有权限的课程。
+2. 当前身份：选定课程后由服务端 `CourseMembership` 自动显示；没有教师/学生选择器。
 3. 课时：可选；生成/编辑课件和课时相关任务时建议选择。
-4. 知识库：默认使用当前课程允许的知识范围，可选择是否启用 RAG。
-5. Agent：优先展示系统 Education Agent；自建 Agent 只有绑定所需 Capability 后才可选。
+4. 资料范围：用业务语言选择“仅当前课程资料”或“允许检索授权知识来源”，不展示
+   `RAG` 微服务名。
+5. Agent：按服务端解析出的课程角色过滤。学生课程不展示教师 Agent；自建 Agent 只有声明
+   兼容角色并绑定所需 Capability 后才可选。
+6. 能力摘要：只读显示选中 Agent 将使用的能力，例如“课程读取、课件写入、知识检索”；
+   用户不直接增删微服务。
 
-创建后的固定字段：
+创建后的字段由服务端计算，客户端不得提交 `role` 或任意 `services` 扩大权限。例如教师
+在一门课程中选择课程设计师和课件制作师时：
 
 ```json
 {
@@ -159,13 +172,15 @@
   "project_id": null,
   "workspace_context": {
     "domain": "edu",
-    "role": "teacher"
+    "role": "teacher",
+    "role_source": "course_membership"
   }
 }
 ```
 
-当用户关闭课程 RAG 时，`services` 为 `["edu"]`。第一阶段不允许在同一个 EDU 会话中同时
-选择 `rd`；如果用户先选择 RD 再选择 EDU，界面要求确定一个主领域。
+如果选中的 Agent 都不需要知识检索，服务并集可以是 `["edu"]`。第一阶段 Education
+领域策略不允许任何 Agent 获得 RD 服务；需要进入 RD 时必须切换到智能研发领域新建另一
+会话。
 
 ### 4.3 用户 Prompt 与系统上下文分离
 
@@ -203,7 +218,7 @@ Education 会话必须满足：
 - Workspace 的 `domain="edu"`。
 - Workspace `sub_role` 只用于界面分组，不能替代实时课程成员校验。
 - `kb_domain="edu"`。
-- `services` 至少包含 `edu`。
+- `services` 是服务端根据参与 Agent 服务视角计算的并集快照，至少包含 `edu`。
 - `project_id` 永远为空，不能复用 RD 字段保存课程 ID。
 
 本阶段不向核心 `conversations` 表新增 `course_id` 或 `lesson_id`，避免把 RD/EDU/Office
@@ -230,6 +245,10 @@ EducationConversationBinding
 约束：
 
 - `membership_role_snapshot` 只用于审计和展示；每次解析上下文仍重新检查当前成员关系。
+- `membership_role_snapshot` 只能由服务端读取 `CourseMembership` 后写入。客户端传入的
+  `role`、Workspace `sub_role`、路由参数和本地缓存都不能改变课程内角色。
+- 同一个用户在课程 A 是教师、在课程 B 是学生时，两组 Binding 分别记录并恢复各自角色；
+  切换课程必须重新解析，不能沿用上一个课程的教师视角。
 - 没有课程的 `course_bootstrap` 不能默认推断用户为教师，必须校验独立的课程创建权限；
   创建成功后写入新 `course_id` 并按真实教师成员关系重新签发 grant。
 - 绑定不是授权 token，不保存明文 RunGrant。
@@ -250,13 +269,19 @@ POST /api/edu/conversations/bootstrap
 - course_id（普通 EDU 会话必填，`course_bootstrap` 除外）
 - lesson_id?
 - agent_ids
-- enable_rag
+- material_policy?（课程资料范围，不是微服务选择）
 - title?
 - source_route?
 
 Education 服务先验证成员和课时归属，再通过现有 CoreRuntimeClient 创建核心会话并保存
 Binding。任何一步失败都回滚未完成的绑定；核心会话已创建但绑定失败时必须删除或标记为
 不可用，不能留下无上下文 EDU 会话。
+
+服务端根据 `agent_ids` 对应的 Capability manifest、Education 领域策略和
+`material_policy` 计算每个 Agent 的服务视角及 `conversation.services` 并集。前端提交
+`role`、`services` 或伪造的 Agent 服务列表时必须忽略或拒绝。
+服务端还必须校验每个 Agent manifest 的 `allowed_education_roles`；学生选择教师 Agent
+或教师写动作时，在创建/预检阶段直接拒绝。
 
 恢复旧聊天时：
 
@@ -281,23 +306,35 @@ conversation_id + 当前用户
 3. **工具运行环境**
    短期 RunGrant、过滤后的服务注册表、RAG scope 和用户认证，由服务端注入，不进入 Prompt。
 
-### 6.2 会话服务白名单
+### 6.2 Agent 级服务视角
 
-核心创建或恢复 sandbox 时，按 `conversation.services` 生成：
-
-- `CONVERSATION_SERVICES`
-- 过滤后的 `SERVICE_REGISTRY`
-- Education/RAG 作用域
-
-不能再把 RD、EDU、RAG、Office 的完整注册表无条件注入所有会话。
-
-工具必须二次验证：
+每个 Agent 的服务视角按以下交集计算：
 
 ```text
-service_name ∈ CONVERSATION_SERVICES
+Agent Capability 声明的 service refs
+∩ 当前领域允许的服务
+∩ 当前用户/课程/角色授权
+∩ 本次 RunGrant 允许的动作
+∩ 当前灰度和健康服务
+= AgentAllowedServices
 ```
 
-即使环境变量被错误配置，服务端工具适配器也必须拒绝未授权服务。
+`conversation.services` 保存所有 `AgentAllowedServices` 的并集，供会话恢复和 UI 摘要使用：
+
+```text
+ConversationServices = union(AgentAllowedServices)
+```
+
+它不能反向扩大单个 Agent 的权限。核心创建或恢复 sandbox 时：
+
+- 为每个 Agent 建立由 host/tool router 持有的服务授权快照。
+- `list_services` 根据当前执行 Agent 返回其 `AgentAllowedServices`。
+- `call_service_api` 根据 `session_id + agent_id + service_name` 再校验。
+- 共享容器中的 `SERVICE_REGISTRY` 即使保存会话并集，也不能成为最终授权依据。
+- Education/RAG scope 按 Agent 和本轮运行分别签发。
+
+不能再把 RD、EDU、RAG、Office 的完整注册表当成所有 Agent 的默认能力，也不能让一个
+只有 EDU 的教学审校 Agent 因为同组资料研究 Agent 使用 RAG，就自动获得 RAG。
 
 ## 7. 微服务规范与 Toolset 迁移
 
@@ -341,19 +378,30 @@ Toolset 调整为：
 - 课程范围 RAG。
 - Education 业务操作。
 
+“默认绑定”不表示每个 Agent 获得相同视角。系统 Agent manifest 必须声明自己的
+`required_services`、`optional_services` 和 Education actions。例如：
+
+| Agent | 默认服务视角 | 典型动作 |
+|---|---|---|
+| 课程设计师 | `edu`，可选 `rag` | 读取课时、教案和课程资料 |
+| 资料研究 Worker | `edu + rag` | 课程知识检索、外部资料候选与证据 |
+| 课件制作师 | `edu`，需要资料时附加 `rag` | 读取上下文、创建课件版本 |
+| 教学审校员 | `edu` | 读取正式输入、检查结果和写入状态 |
+| 学情分析师 | `edu` | 读取正式成绩证据、刷新分析快照 |
+
 自建 Agent 不自动获得 Education 写权限；用户绑定 Capability 后，运行时仍需 RunGrant。
 
 ### 7.3 工具行为
 
 #### `list_services`
 
-- 只返回当前会话选择的服务。
+- 只返回当前执行 Agent 的 `AgentAllowedServices`，不是整个会话的服务并集。
 - 返回显示名、状态、能力摘要和 spec 可用性。
 - 不向模型暴露内部网络地址、token 或内部 key。
 
 #### `call_service_api`
 
-- 只能调用会话白名单中的服务。
+- 只能调用当前执行 Agent 服务视角中的服务。
 - 只能调用服务规范声明为 `agent_read` 的方法和路径。
 - 不允许任意 URL、路径穿越或重定向到未注册主机。
 - Education 写接口返回 `protected_action_required`，提示改用 `education_action`。
@@ -492,6 +540,9 @@ education_card
 | `ui.chat.card.education` | `common` + `["edu"]` | Education 业务卡片 |
 | `feature.education.rag.enabled` | `edu` | 课程范围 RAG |
 
+灰度只控制某能力是否可用，不能让前端把被关闭的服务重新勾选回来。Agent 服务视角在
+服务端计算时必须同时应用灰度结果。
+
 已有 RD 卡片必须收窄为：
 
 ```text
@@ -527,7 +578,8 @@ Education 卡片。
 根据已有 `EducationAgentRun.conversation_id` 回填 Binding：
 
 - course_id、lesson_id、requested_by 和角色来自 Education 数据。
-- `services` 根据 Workflow manifest 回填为 `["edu"]` 或 `["edu", "rag"]`。
+- 每个历史 Agent 的服务视角根据其 Capability/Workflow manifest 回填；
+  `services` 保存这些视角的并集，通常为 `["edu"]` 或 `["edu", "rag"]`。
 - `kb_domain` 修正为 `edu`。
 - `project_id` 保持空。
 
@@ -565,21 +617,27 @@ Education 卡片。
 必须覆盖：
 
 1. EDU 会话 bootstrap 的课程成员、课时归属和回滚。
-2. 普通 EDU 会话与产品任务会话都写入正确的 Workspace、`kb_domain` 和 `services`。
-3. `list_services` 只返回 EDU 会话选择的 `edu/rag`。
-4. EDU 会话尝试调用 RD 被服务端拒绝。
-5. `call_service_api` 尝试调用 EDU 写接口被拒绝并引导使用 `education_action`。
-6. RunGrant 不能跨用户、跨课程、跨角色或超时复用。
-7. RAG 不能读取其他课程、其他学生 private 或教师答案范围。
-8. 成功工具结果生成合法 `education_card`，伪造 canonical reference 被拒绝。
-9. 关闭 Education 灰度后 RD 会话、RD 卡片和现有单/多 Agent 行为不变。
-10. 历史产品会话迁移后能恢复上下文和返回业务页面。
+2. 选定课程后，角色只来自 `CourseMembership`；客户端伪造 `role=teacher` 被忽略或拒绝。
+3. 同一个用户在一门课是教师、另一门课是学生时，切换课程后服务端角色随成员关系变化，
+   不继承上一门课的角色。
+4. 学生课程的 Agent 列表不出现教师 Agent；伪造教师 Agent ID 在预检阶段被拒绝。
+5. 普通 EDU 会话与产品任务会话都写入正确的 Workspace、`kb_domain` 和服务并集快照。
+6. 同一会话中，资料研究 Agent 的 `list_services` 可返回 EDU/RAG，教学审校 Agent 只返回
+   EDU；后者尝试借用 RAG 被拒绝。
+7. 任一 EDU Agent 尝试调用 RD 被服务端拒绝。
+8. `call_service_api` 尝试调用 EDU 写接口被拒绝并引导使用 `education_action`。
+9. RunGrant 不能跨用户、跨课程、跨角色、跨 Agent 或超时复用。
+10. RAG 不能读取其他课程、其他学生 private 或教师答案范围。
+11. 成功工具结果生成合法 `education_card`，伪造 canonical reference 被拒绝。
+12. 关闭 Education 灰度后 RD 会话、RD 卡片和现有单/多 Agent 行为不变。
+13. 历史产品会话迁移后能恢复上下文和返回业务页面。
 
 ### 12.2 真实教师 UAT
 
 使用同一真实教师账号完成：
 
-1. 从全局聊天新建 EDU 会话，选择高中英语课程和一个课时。
+1. 进入智慧教育后新建会话，选择高中英语课程和一个课时；界面自动显示“教师”，没有
+   教师/学生选择器，也没有微服务多选。
 2. 只输入“根据当前教案帮我生成一套 8 页左右的 PPT”。
 3. 聊天显示课程上下文、受控工具进度和课件卡片。
 4. 课件卡可以打开 HTML 预览、下载 PPTX，并返回“PPT 与课件”。
@@ -607,18 +665,38 @@ PPT 与课件
 
 - 关闭 `feature.education.chat.manual_create`：新建弹窗不显示 EDU 创建入口，RD 正常。
 - 仅关闭 `ui.chat.card.education`：Education 聊天保留文本和业务返回入口，RD 卡片正常。
-- EDU 会话只看到 EDU/RAG 服务；RD 会话不出现 Education 卡片。
+- EDU 会话中每个 Agent 只看到自己的服务视角；RD 会话不出现 Education 卡片。
 - 使用旧 RD 项目会话完成一次项目/需求查询，结果与迁移前一致。
+
+### 12.5 固定账号与真实环境
+
+最终 UAT 继续使用现有固定展示数据，不重新创建一套更容易通过的临时账号：
+
+- 教师账号：`edu_teacher_phase4_0802_authentic`
+- 学生账号：`edu_student_1_phase4_0802_authentic`
+- 课程：`高一英语·叙事阅读与写作（真实案例）`
+- 课程 ID：`1821bf81-485d-4c1a-94e3-b90936bceb8d`
+
+密码、Token 和 Provider 凭据只从本地 `.env`/UAT secret 读取，不写入文档、日志、代码或
+Git。真实环境验收要求：
+
+- 启动实际核心服务、Education、RAG、数据库和 Docker sandbox。
+- 使用 `.env` 中配置的真实 Agent Provider，不用 mock Agent 替代最终结果。
+- 使用一份可正常解析的真实 PDF 完成上传、入库、检索和引用回源。
+- 用固定教师账号完成课件生成、课件修改、课时修改、卡片预览和双向跳转。
+- 用固定学生账号进入同一课程，确认角色自动为学生、没有教师选择入口、不能调用教师工具。
+- 同时核对浏览器结果、服务端工具审计、Education 数据库对象和导出文件。
 
 ## 13. 完成定义
 
 只有同时满足以下条件才可标记完成：
 
 - 新建聊天中的“智慧教育”不再是静态入口，能够创建真实课程绑定会话。
+- 选定课程后角色完全由服务端成员关系确定，学生不能切换或伪装成教师。
 - Education 产品任务和普通 EDU 会话都在聊天列表中稳定存在。
 - 用户使用自然语言即可完成课件生成、课件版本修改和课时修改。
 - Toolset 的通用工具与 Education 工具归属、默认绑定和运行白名单正确。
-- Agent 只能列出和调用本会话选择的微服务。
+- 用户不需要勾选微服务；每个 Agent 只能列出和调用自己的服务视角。
 - 所有 Education 写操作都有 RunGrant、idempotency 和审计记录。
 - 聊天中出现可验证的 Education 业务卡片，而不是文件路径或“已完成”文本。
 - 卡片预览、业务页返回和协作历史均能工作。
@@ -641,26 +719,28 @@ PPT 与课件
 
 P0–P3 任何一项缺失都不能用“智慧教育聊天已上线”描述。
 
-## 15. 需要用户确认的决策
+## 15. 已确认决策
 
 ### 决策 1：全局新建 EDU 会话是否必须选择课程
 
-- **A（推荐）**：第一阶段课程必选，课时可选。权限、RAG 和工具范围最清晰。
-- B：允许无课程 EDU 会话，但只能列出/创建课程，不能操作课时、课件或课程知识。
+- **已确认 1A**：第一阶段课程必选，课时可选。受控 `course_bootstrap` 是唯一无课程例外。
+- 选定课程后不再选择角色；角色由服务端课程成员关系自动确定。
 
 ### 决策 2：首阶段是否允许 EDU 与 RD 同时成为一个会话的服务
 
-- **A（推荐）**：不允许。EDU 会话只允许 `edu`，可附加 `rag`；跨领域协作后续单独设计。
-- B：允许 `edu + rd + rag`，但需要额外设计双业务上下文、卡片冲突和两套对象权限。
+- **已确认 2A**：不允许 EDU/RD 双主领域。用户不手工选择服务；Education 领域策略和
+  Agent Capability 只会解析出 EDU 及必要的 RAG。
 
 ### 决策 3：Education 卡片协议
 
-- **A（推荐）**：一个 `education_card`，通过 `object_type` 渲染课程、课时、课件等变体。
-- B：为每种对象建立独立卡片类型，例如 `courseware_card`、`lesson_card`、
-  `assignment_card`。
+- **已确认 3A**：一个 `education_card`，通过 `object_type` 渲染课程、课时、课件等变体。
 
 ### 决策 4：成员导入的聊天权限
 
-- **A（推荐）**：本阶段允许 Agent 调用 `edu.course.members.import`，但执行前只对该高影响
+- **已确认 4A**：本阶段允许 Agent 调用 `edu.course.members.import`，但执行前只对该高影响
   动作做一次明确确认。
-- B：本阶段不允许聊天导入成员，只保留教师业务页面操作。
+
+### 决策 5：微服务视角
+
+- **已确认**：默认 Agent 各自声明服务视角，用户不在会话中勾选微服务。
+- `list_services` 返回当前执行 Agent 的授权服务，不返回会话内其他 Agent 的服务。
