@@ -44,7 +44,8 @@
       "Bash(npm run:*)",
       "Bash(pip show:*)",
       "Bash(docker exec 3b5bb1fb5329:*)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(docker run:*)"
     ]
   }
 }

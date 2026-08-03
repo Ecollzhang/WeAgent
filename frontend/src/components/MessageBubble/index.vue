@@ -28,31 +28,165 @@
       </div>
 
       <div v-if="contentElements.length" class="bubble-elements content-section">
-        <div
-          v-for="(el, i) in contentElements"
-          :key="i"
-          class="el-block"
-          :class="'el-' + el.type"
-          >
-          <!-- Text / Output / Result / Summary — clean inline markdown, no boxes -->
-          <div v-if="el.type === 'text' || el.type === 'output' || el.type === 'result' || el.type === 'summary'" class="el-text" v-html="renderText(elementContent(el))"></div>
-
-          <!-- Progress element -->
-          <div v-else-if="el.type === 'progress'" class="el-progress">
-            <span class="progress-dot" :class="'progress-' + (el.status || 'running')"></span>
-            <span>{{ elementContent(el) }}</span>
-          </div>
-
-          <div v-else-if="el.type === 'error'" class="el-error">
-            <div class="error-title">
-              <i class="el-icon-warning-outline"></i>
-              <span>{{ elementData(el).title || '错误' }}</span>
+        <template v-for="(el, i) in cardGroupedElements">
+          <!-- Card group with collapse (only for requirement/bug cards with > 1 items) -->
+          <div v-if="el._group" :key="'g'+i" class="card-group" :class="'cg-' + el.type">
+            <div class="card-group-header" @click="$set(collapsedCardGroups, el._groupId, !collapsedCardGroups[el._groupId])">
+              <span class="cg-arrow" :class="{ 'cg-collapsed': collapsedCardGroups[el._groupId] }">▾</span>
+              <span class="cg-label">{{ cardGroupLabelMap[el.type] }}</span>
+              <span class="cg-count">{{ el.count }}</span>
             </div>
-            <div class="error-content" v-html="renderText(elementContent(el))"></div>
+            <div v-show="!collapsedCardGroups[el._groupId]" class="card-group-body">
+              <div
+                v-for="(card, ci) in el.cards"
+                :key="ci"
+                class="el-block"
+                :class="'el-' + card.type"
+              >
+                <!-- inline requirement card -->
+                <div v-if="card.type === 'requirement_card'" class="domain-card requirement-card" @click="navigateToDomain(card)">
+                  <div class="dc-row dc-main-row">
+                    <span class="dc-domain-tag">研发</span>
+                    <span class="dc-type-tag">需求</span>
+                    <span class="dc-title">{{ cardTitle(card) }}</span>
+                    <span class="dc-priority-tag" :class="'pri-' + cardPriority(card)">{{ cardPriorityLabel(card) }}</span>
+                    <span class="dc-status-tag" :class="'req-status-' + cardStatus(card)">{{ cardReqStatusLabel(card) }}</span>
+                    <span class="dc-arrow">→</span>
+                  </div>
+                  <div class="dc-row dc-meta-row" v-if="cardMetaItems(card).length">
+                    <span v-for="m in cardMetaItems(card)" :key="m.label" class="dc-meta-item">
+                      <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                    </span>
+                  </div>
+                </div>
+                <!-- inline bug card -->
+                <div v-else-if="card.type === 'bug_card'" class="domain-card bug-card" @click="navigateToDomain(card)">
+                  <div class="dc-row dc-main-row">
+                    <span class="dc-domain-tag">研发</span>
+                    <span class="dc-type-tag bug-type-tag">缺陷</span>
+                    <span class="dc-title">{{ cardTitle(card) }}</span>
+                    <span class="dc-severity-tag" :class="'sev-' + cardSeverity(card)">{{ cardSeverityLabel(card) }}</span>
+                    <span class="dc-status-tag" :class="'bug-status-' + cardStatus(card)">{{ cardBugStatusLabel(card) }}</span>
+                    <span class="dc-arrow">→</span>
+                  </div>
+                  <div class="dc-row dc-meta-row" v-if="cardMetaItems(card).length">
+                    <span v-for="m in cardMetaItems(card)" :key="m.label" class="dc-meta-item">
+                      <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
+          <!-- Non-group elements (original rendering) -->
+          <div
+            v-else
+            :key="'s'+i"
+            class="el-block"
+            :class="'el-' + el.type"
+          >
+            <!-- Text / Output / Result / Summary -->
+            <div v-if="el.type === 'text' || el.type === 'output' || el.type === 'result' || el.type === 'summary'" class="el-text" v-html="renderText(elementContent(el))"></div>
 
-        </div>
+            <!-- Progress element -->
+            <div v-else-if="el.type === 'progress'" class="el-progress">
+              <span class="progress-dot" :class="'progress-' + (el.status || 'running')"></span>
+              <span>{{ elementContent(el) }}</span>
+            </div>
+
+            <div v-else-if="el.type === 'error'" class="el-error">
+              <div class="error-title">
+                <i class="el-icon-warning-outline"></i>
+                <span>{{ elementData(el).title || '错误' }}</span>
+              </div>
+              <div class="error-content" v-html="renderText(elementContent(el))"></div>
+            </div>
+
+            <!-- Requirement Card -->
+            <div v-else-if="el.type === 'requirement_card'" class="domain-card requirement-card" @click="navigateToDomain(el)">
+              <div class="dc-row dc-main-row">
+                <span class="dc-domain-tag">研发</span>
+                <span class="dc-type-tag">需求</span>
+                <span class="dc-title">{{ cardTitle(el) }}</span>
+                <span class="dc-priority-tag" :class="'pri-' + cardPriority(el)">{{ cardPriorityLabel(el) }}</span>
+                <span class="dc-status-tag" :class="'req-status-' + cardStatus(el)">{{ cardReqStatusLabel(el) }}</span>
+                <span class="dc-arrow">→</span>
+              </div>
+              <div class="dc-row dc-meta-row" v-if="cardMetaItems(el).length">
+                <span v-for="m in cardMetaItems(el)" :key="m.label" class="dc-meta-item">
+                  <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Bug Card -->
+            <div v-else-if="el.type === 'bug_card'" class="domain-card bug-card" @click="navigateToDomain(el)">
+              <div class="dc-row dc-main-row">
+                <span class="dc-domain-tag">研发</span>
+                <span class="dc-type-tag bug-type-tag">缺陷</span>
+                <span class="dc-title">{{ cardTitle(el) }}</span>
+                <span class="dc-severity-tag" :class="'sev-' + cardSeverity(el)">{{ cardSeverityLabel(el) }}</span>
+                <span class="dc-status-tag" :class="'bug-status-' + cardStatus(el)">{{ cardBugStatusLabel(el) }}</span>
+                <span class="dc-arrow">→</span>
+              </div>
+              <div class="dc-row dc-meta-row" v-if="cardMetaItems(el).length">
+                <span v-for="m in cardMetaItems(el)" :key="m.label" class="dc-meta-item">
+                  <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Iteration Card -->
+            <div v-else-if="el.type === 'iteration_card'" class="domain-card iteration-card" @click="navigateToDomain(el)">
+              <div class="dc-header">
+                <span class="dc-domain-tag">智能研发</span>
+                <span class="dc-type-tag iteration-type-tag">迭代</span>
+                <span class="dc-status-tag" :class="'iter-status-' + cardStatus(el)">{{ cardIterStatusLabel(el) }}</span>
+              </div>
+              <div class="dc-body">
+                <div class="dc-title">{{ cardTitle(el) }}</div>
+                <div class="dc-summary" v-if="cardSummary(el)">{{ cardSummary(el) }}</div>
+                <div class="dc-iter-progress" v-if="cardIterProgress(el) !== null">
+                  <div class="dc-progress-bar">
+                    <div class="dc-progress-fill" :style="{ width: cardIterProgress(el) + '%' }"></div>
+                  </div>
+                  <span class="dc-progress-text">{{ cardIterProgress(el) }}%</span>
+                </div>
+              </div>
+              <div class="dc-meta" v-if="cardMetaItems(el).length">
+                <span v-for="m in cardMetaItems(el)" :key="m.label" class="dc-meta-item">
+                  <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                </span>
+              </div>
+              <div class="dc-actions">
+                <el-button size="mini" type="primary" @click.stop="navigateToDomain(el)">查看详情 →</el-button>
+              </div>
+            </div>
+
+            <!-- Project Card -->
+            <div v-else-if="el.type === 'project_card'" class="domain-card project-card" @click="navigateToDomain(el)">
+              <div class="dc-header">
+                <span class="dc-domain-tag">智能研发</span>
+                <span class="dc-type-tag project-type-tag">项目</span>
+              </div>
+              <div class="dc-body">
+                <div class="dc-title">{{ cardTitle(el) }}</div>
+                <div class="dc-summary" v-if="cardSummary(el)">{{ cardSummary(el) }}</div>
+                <div class="dc-project-stats" v-if="cardProjectStats(el).length">
+                  <span v-for="s in cardProjectStats(el)" :key="s.label" class="dc-project-stat">
+                    <span class="dc-stat-num">{{ s.value }}</span>
+                    <span class="dc-stat-label">{{ s.label }}</span>
+                  </span>
+                </div>
+              </div>
+              <div class="dc-actions">
+                <el-button size="mini" type="primary" @click.stop="navigateToDomain(el)">查看项目 →</el-button>
+              </div>
+            </div>
+
+          </div>
+        </template>
       </div>
 
       <!-- Artifact rendering -->
@@ -376,6 +510,7 @@ import { formatTime } from '../../utils/format'
 import { getFileTree, getSessionRawFileUrl, getWorkspaceFileUrl, getServiceLogs, restartService, stopService, writeFile } from '@/api/sandbox'
 import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
+import { checkVisible } from '../../store/modules/grayscale'
 
 export default {
   name: 'MessageBubble',
@@ -403,6 +538,8 @@ export default {
       serviceLogsLoading: false,
       serviceLogsData: null,
       serviceBusyKey: '',
+
+      collapsedCardGroups: {},
     }
   },
   watch: {
@@ -422,6 +559,55 @@ export default {
   computed: {
     hasElements() {
       return this.message && Array.isArray(this.message.elements) && this.message.elements.length > 0
+    },
+    activeDomain() {
+      return this.$store.getters['workspace/activeDomain']
+    },
+    visibleDomainCards() {
+      const domain = this.activeDomain
+      const s = this.$store.state.grayscale
+      const visible = new Set()
+      if (checkVisible(s, domain, 'ui.chat.card.requirement')) visible.add('requirement_card')
+      if (checkVisible(s, domain, 'ui.chat.card.bug')) visible.add('bug_card')
+      if (checkVisible(s, domain, 'ui.chat.card.iteration')) visible.add('iteration_card')
+      if (checkVisible(s, domain, 'ui.chat.card.project')) visible.add('project_card')
+      return visible
+    },
+    cardGroupedElements() {
+      const domainTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card']
+      const raw = this.contentElements
+      const result = []
+      let i = 0
+      while (i < raw.length) {
+        const el = raw[i]
+        if (!domainTypes.includes(el?.type)) {
+          result.push(el)
+          i++
+          continue
+        }
+        // Collect consecutive same-type cards
+        const groupType = el.type
+        const group = []
+        while (i < raw.length && raw[i]?.type === groupType) {
+          group.push(raw[i])
+          i++
+        }
+        if (group.length === 1) {
+          result.push(group[0])
+        } else {
+          const groupId = `${groupType}_${i}`
+          result.push({ _group: true, _groupId: groupId, type: groupType, cards: group, count: group.length })
+        }
+      }
+      return result
+    },
+    cardGroupLabelMap() {
+      return {
+        requirement_card: '需求',
+        bug_card: '缺陷',
+        iteration_card: '迭代',
+        project_card: '项目'
+      }
     },
     providerLabel() {
       const provider = this.message?.meta?.provider || this.latestEventProvider()
@@ -456,14 +642,25 @@ export default {
       return merged
     },
     contentElements() {
+      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card']
+      const allowedCards = this.visibleDomainCards
+      const isDomainCard = type => domainCardTypes.includes(type)
+
       // When raw_output is the primary display, hide ALL text/result/output/summary
       // elements — they are derived from the same LLM output and would be duplicates.
-      // Only errors (genuinely new information) should still show.
+      // Only errors (genuinely new information) and visible domain cards should still show.
       if (this.visibleRawOutput) {
-        return this.renderedElements.filter(el => el?.type === 'error')
+        return this.renderedElements.filter(el => {
+          if (el?.type === 'error') return true
+          if (isDomainCard(el?.type)) return allowedCards.has(el?.type)
+          return false
+        })
       }
       return this.renderedElements.filter(el => {
-        return ['text', 'summary', 'result', 'error', 'output'].includes(el?.type)
+        const baseTypes = ['text', 'summary', 'result', 'error', 'output']
+        if (baseTypes.includes(el?.type)) return true
+        if (isDomainCard(el?.type)) return allowedCards.has(el?.type)
+        return false
       })
     },
     progressElements() {
@@ -1945,6 +2142,108 @@ export default {
       if (text.startsWith('/workspace/') || text.startsWith('workspace/')) return text
       return ''
     },
+
+    // ── Domain Card Helpers ──
+    cardData(el) {
+      return el?.data || {}
+    },
+    cardTitle(el) {
+      const d = this.cardData(el)
+      return d.title || d.name || ''
+    },
+    cardSummary(el) {
+      const d = this.cardData(el)
+      return d.summary || d.description || ''
+    },
+    cardPriority(el) {
+      return this.cardData(el).priority || this.cardData(el).meta?.priority || ''
+    },
+    cardSeverity(el) {
+      return this.cardData(el).severity || this.cardData(el).meta?.severity || ''
+    },
+    cardStatus(el) {
+      return this.cardData(el).status || this.cardData(el).meta?.status || ''
+    },
+    cardMetaItems(el) {
+      const d = this.cardData(el)
+      const meta = d.meta || {}
+      const items = []
+      const pushIf = (icon, label, value) => {
+        if (value !== undefined && value !== null && value !== '') {
+          items.push({ icon, label, value })
+        }
+      }
+      pushIf('el-icon-user', '负责人', meta.assignee || d.assignee)
+      pushIf('el-icon-date', '截止', meta.deadline || meta.due_date || d.deadline)
+      pushIf('el-icon-date', '日期', meta.start_date || d.start_date || meta.end_date || d.end_date)
+      pushIf('el-icon-s-flag', '迭代', meta.iteration_name || d.iteration_name)
+      pushIf('el-icon-collection-tag', '标签', meta.labels || d.labels)
+      return items
+    },
+    cardProjectStats(el) {
+      const d = this.cardData(el)
+      const meta = d.meta || {}
+      const stats = []
+      const pushIf = (label, value) => {
+        if (value !== undefined && value !== null && value !== '') {
+          stats.push({ label, value })
+        }
+      }
+      pushIf('需求', meta.requirement_count || d.requirement_count)
+      pushIf('缺陷', meta.bug_count || d.bug_count)
+      pushIf('迭代', meta.iteration_count || d.iteration_count)
+      pushIf('仓库', meta.repo_count || d.repo_count)
+      return stats
+    },
+    cardPriorityLabel(el) {
+      const labels = { p0: 'P0 紧急', p1: 'P1 高', p2: 'P2 中', p3: 'P3 低' }
+      return labels[this.cardPriority(el)] || this.cardPriority(el)
+    },
+    cardSeverityLabel(el) {
+      const labels = { critical: '致命', major: '严重', minor: '一般', trivial: '轻微' }
+      return labels[this.cardSeverity(el)] || this.cardSeverity(el)
+    },
+    cardReqStatusLabel(el) {
+      const labels = { backlog: '待规划', todo: '待办', in_progress: '进行中', in_review: '审查中', done: '已完成', closed: '已关闭' }
+      return labels[this.cardStatus(el)] || this.cardStatus(el)
+    },
+    cardBugStatusLabel(el) {
+      const labels = { open: '待处理', in_progress: '处理中', fixed: '已修复', verified: '已验证', closed: '已关闭', reopened: '重开' }
+      return labels[this.cardStatus(el)] || this.cardStatus(el)
+    },
+    cardIterStatusLabel(el) {
+      const labels = { planned: '计划中', active: '进行中', completed: '已完成' }
+      return labels[this.cardStatus(el)] || this.cardStatus(el)
+    },
+    cardIterProgress(el) {
+      const d = this.cardData(el)
+      if (d.progress !== undefined && d.progress !== null) return Number(d.progress) || 0
+      if (d.meta?.progress !== undefined && d.meta?.progress !== null) return Number(d.meta.progress) || 0
+      return null
+    },
+    navigateToDomain(el) {
+      const d = this.cardData(el)
+      const projectId = d.project_id || d.meta?.project_id || ''
+      const itemId = d.id || d.meta?.id || ''
+      const type = el?.type
+      if (!itemId) return
+
+      let route = {}
+      if (type === 'requirement_card') {
+        route = { name: 'requirementDetail', params: { id: projectId, rid: itemId } }
+      } else if (type === 'bug_card') {
+        route = { name: 'bugDetail', params: { id: projectId, bid: itemId } }
+      } else if (type === 'iteration_card') {
+        if (projectId) {
+          route = { name: 'projectDetail', params: { id: projectId }, query: { tab: 'iterations' }, hash: '#iter-' + itemId }
+        }
+      } else if (type === 'project_card') {
+        route = { name: 'projectDetail', params: { id: itemId } }
+      }
+      if (route.name) {
+        this.$router.push(route).catch(() => {})
+      }
+    },
   },
 }
 </script>
@@ -2168,6 +2467,260 @@ export default {
 
 .el-block {
   width: 100%;
+}
+
+/* ── Domain Cards (requirement / bug / iteration) ── */
+.domain-card {
+  margin: 6px 0;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  overflow: hidden;
+  cursor: pointer;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.domain-card:hover {
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  border-color: #cbd5e1;
+}
+
+/* ---- compact row layout ---- */
+.dc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dc-main-row {
+  padding: 8px 12px;
+}
+.dc-meta-row {
+  padding: 0 12px 7px 12px;
+  gap: 14px;
+}
+
+.dc-domain-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #eef2ff;
+  color: #4f6ef7;
+  flex-shrink: 0;
+}
+.dc-type-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.requirement-card .dc-type-tag {
+  background: #e8f4fd;
+  color: #409eff;
+}
+.bug-type-tag {
+  background: #fde8e8;
+  color: #f56c6c;
+}
+.iteration-type-tag {
+  background: #e8f8e8;
+  color: #67c23a;
+}
+.project-type-tag {
+  background: #f0f9ff;
+  color: #2563eb;
+}
+
+.dc-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.dc-priority-tag,
+.dc-severity-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.pri-p0, .sev-critical { background: #fef2f2; color: #dc2626; }
+.pri-p1, .sev-major   { background: #fff7ed; color: #ea580c; }
+.pri-p2, .sev-minor   { background: #f0f9ff; color: #2563eb; }
+.pri-p3, .sev-trivial { background: #f8fafc; color: #64748b; }
+
+.dc-status-tag {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.req-status-todo, .bug-status-open, .iter-status-planned {
+  background: #f1f5f9; color: #64748b;
+}
+.req-status-in_progress, .bug-status-in_progress, .iter-status-active {
+  background: #ecf5ff; color: #409eff;
+}
+.req-status-in_review, .bug-status-verified {
+  background: #fdf6e8; color: #e6a23c;
+}
+.req-status-done, .req-status-closed, .bug-status-fixed, .bug-status-closed, .iter-status-completed {
+  background: #f0f9eb; color: #67c23a;
+}
+.req-status-backlog {
+  background: #f9f0ff; color: #7c3aed;
+}
+
+.dc-arrow {
+  color: #c0c8d4;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
+.domain-card:hover .dc-arrow {
+  color: #409eff;
+}
+
+.dc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 0 12px 7px 12px;
+}
+.dc-meta-item {
+  font-size: 11px;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.dc-meta-item i {
+  font-size: 11px;
+}
+
+/* ---- collapsible card group ---- */
+.card-group {
+  margin: 6px 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.card-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #f8fafc;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: #64748b;
+  border-bottom: 1px solid #f1f5f9;
+}
+.card-group-header:hover {
+  background: #f1f5f9;
+}
+.cg-arrow {
+  font-size: 10px;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+.cg-arrow.cg-collapsed {
+  transform: rotate(-90deg);
+}
+.cg-label {
+  font-weight: 600;
+  color: #334155;
+}
+.cg-count {
+  background: #e2e8f0;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #64748b;
+}
+.card-group-body .domain-card {
+  margin: 0;
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid #f1f5f9;
+}
+.card-group-body .domain-card:last-child {
+  border-bottom: none;
+}
+
+/* ---- body / summary (used by iteration/project cards) ---- */
+.dc-body {
+  padding: 8px 14px 4px 14px;
+}
+.dc-summary {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dc-iter-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.dc-progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+.dc-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #409eff, #67c23a);
+  transition: width 0.4s ease;
+}
+.dc-progress-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  min-width: 36px;
+  text-align: right;
+}
+
+.dc-project-stats {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}
+.dc-project-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.dc-stat-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.dc-stat-label {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+/* ---- actions (used by iteration/project cards) ---- */
+.dc-actions {
+  padding: 6px 14px 10px 14px;
+  border-top: 1px solid #f1f5f9;
 }
 
 /* Text element — clean inline rendering */

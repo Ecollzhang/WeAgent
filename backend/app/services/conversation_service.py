@@ -81,6 +81,21 @@ def _build_services_summary(services):
                 desc = ep.get('description', '')
                 lines.append(f"   curl -s -H 'Authorization: $USER_AUTH_TOKEN' '{base_url}{path}' — {desc}")
     lines.append("\n直接curl获取数据，再回答用户。不要在文件系统中找API数据。")
+
+    # ── 领域特定报告卡片指引（按服务隔离，防止跨领域推送错误类型）──
+    if 'rd' in services:
+        lines.append("""
+## 智能研发(RD)专用报告卡片
+RD 数据展示优先级：领域卡片 > table > 纯文本。
+查询到需求/缺陷/迭代/项目列表时，**第一优先级：必须**用 weagent-report 逐条发送结构化卡片。
+summer 对比/汇总信息可以补充用 table（如"以下是查询汇总"后跟汇总表），但每条具体数据必须先用卡片上报。
+只有在卡片无法表达的补充说明才用纯文本，不要用大段 Markdown 列表或表格来替代卡片：
+- 需求卡片: weagent-report '{"type":"requirement_card","data":{"id":"<id>","title":"<标题>","project_id":"项目ID","priority":"p0/p1/p2/p3","status":"backlog/todo/in_progress/in_review/done","meta":{"assignee":"负责人","iteration_name":"迭代名"}}}'
+- 缺陷卡片: weagent-report '{"type":"bug_card","data":{"id":"<id>","title":"<标题>","project_id":"项目ID","severity":"critical/major/minor/trivial","status":"open/in_progress/fixed/verified/closed","meta":{"assignee":"负责人","iteration_name":"迭代名"}}}'
+- 迭代卡片: weagent-report '{"type":"iteration_card","data":{"id":"<id>","title":"<名称>","project_id":"项目ID","status":"planned/active/completed","meta":{"start_date":"开始日期","end_date":"截止日期"},"progress":75}}'
+- 项目卡片: weagent-report '{"type":"project_card","data":{"id":"<id>","title":"<项目名>","summary":"<描述>","project_id":"<id>","meta":{"requirement_count":5,"bug_count":3}}"}'
+每个卡片独立发送一条 weagent-report，一条消息可以发多个不同类型的卡片。""")
+    # 未来扩展: if 'edu' in services: ...  if 'office' in services: ...
     return '\n'.join(lines)
 
 
@@ -89,6 +104,24 @@ def _build_user_context(user):
     return f"""用户信息:
 - 用户名: {user.username}
 - 你可以通过 call_service_api 以该用户身份调用微服务 API"""
+
+
+def _build_rd_base_context():
+    """RD 基础上下文（无选定项目时），提供项目管理 CRUD 入口。"""
+    return """项目上下文:
+- 当前未选定项目，你可以通过 RD 服务 API 列出/创建/查询项目。
+- RD服务地址: http://host.docker.internal:5101
+- 认证方式: curl -H "Authorization: $USER_AUTH_TOKEN"
+
+常用命令（直接复制到bash执行）：
+# 列出所有项目
+curl -s -H "Authorization: $USER_AUTH_TOKEN" "http://host.docker.internal:5101/api/rd/projects"
+# 创建新项目
+curl -s -X POST -H "Authorization: $USER_AUTH_TOKEN" -H "Content-Type: application/json" -d '{"name":"项目名","description":"描述"}' "http://host.docker.internal:5101/api/rd/projects"
+# 查看单个项目详情
+curl -s -H "Authorization: $USER_AUTH_TOKEN" "http://host.docker.internal:5101/api/rd/projects/<project_id>"
+
+API返回JSON数据后，用 weagent-report 发送 project_card 或 requirement_card 展示结果。"""
 
 
 def _build_project_context(project_id):
@@ -362,8 +395,11 @@ class ConversationService:
 
         # ── [NEW] 项目上下文 ───────────────────────────────
         project_context = ""
-        if 'rd' in services_list and conversation.project_id:
-            project_context = _build_project_context(conversation.project_id)
+        if 'rd' in services_list:
+            if conversation.project_id:
+                project_context = _build_project_context(conversation.project_id)
+            else:
+                project_context = _build_rd_base_context()
 
         # ── [NEW] 服务能力摘要 ─────────────────────────────
         services_summary = _build_services_summary(services_list) if services_list else ""
