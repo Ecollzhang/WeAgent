@@ -15,7 +15,7 @@ import urllib.request
 
 LOG_DIR = "/workspace/.session/logs"
 SCRIPT_LOG = os.path.join(LOG_DIR, "weagent-report.log")
-REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service"}
+REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service", "requirement_card", "bug_card", "iteration_card", "project_card"}
 REPORT_STATUSES = {"running", "done", "error", "stopped", "starting", "stopping", "failed", "exited"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
@@ -57,24 +57,34 @@ def validate_payload(payload: object) -> list[str]:
     elif report_type not in REPORT_TYPES:
         errors.append(f"invalid type '{report_type}', allowed: {', '.join(sorted(REPORT_TYPES))}")
 
-    title = payload.get("title")
-    if not isinstance(title, str) or not title.strip():
-        errors.append("missing required non-empty string field: title")
-
-    status = payload.get("status")
-    if status is not None and str(status).strip().lower() not in REPORT_STATUSES:
-        errors.append(f"invalid status '{status}', allowed: {', '.join(sorted(REPORT_STATUSES))}")
-
     data = payload.get("data")
     if data is not None and not isinstance(data, dict):
         errors.append("field data must be an object when provided")
         data = {}
     data = data or {}
 
+    DOMAIN_CARD_TYPES = {"requirement_card", "bug_card", "iteration_card", "project_card"}
+
+    title = payload.get("title")
+    if not isinstance(title, str) or not title.strip():
+        # 领域卡片允许 title 在 data 中
+        if report_type in DOMAIN_CARD_TYPES:
+            title = str(data.get("title") or "").strip()
+        if not title:
+            errors.append("missing required non-empty string field: title")
+
+    status = payload.get("status")
+    if status is not None and str(status).strip().lower() not in REPORT_STATUSES:
+        errors.append(f"invalid status '{status}', allowed: {', '.join(sorted(REPORT_STATUSES))}")
+
     content = payload.get("content")
-    if report_type not in {"table"}:
+    if report_type not in {"table"} and report_type not in DOMAIN_CARD_TYPES:
         if not isinstance(content, str) or not content.strip():
             errors.append("missing required non-empty string field: content")
+    # 领域卡片：content 可选，默认取 data.summary 或 title
+    if report_type in DOMAIN_CARD_TYPES:
+        if not isinstance(content, str) or not content.strip():
+            content = str(data.get("summary") or data.get("description") or title or "")
 
     if report_type == "table":
         headers = data.get("headers")

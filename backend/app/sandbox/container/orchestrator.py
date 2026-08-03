@@ -278,7 +278,11 @@ class Orchestrator:
 
             parse_elapsed = time.time() - start_parse
 
-            result = {"status": "ok", "agent_id": agent_id, "reply": reply}
+            result = {
+                "status": "ok",
+                "agent_id": agent_id,
+                "reply": self._strip_tool_calls(reply),
+            }
             if capability_run_id:
                 result["capability_run_id"] = capability_run_id
             skill_drafts = self.collect_skill_drafts(agent_id)
@@ -349,46 +353,80 @@ class Orchestrator:
                 # Snapshot workspace before each agent in the chain
                 chain_baseline = self._snapshot_workspace()
 
-                reply = agent.send(full_msg)
-                log_agent(agent_id, "chain_step_reply_received", role=role, reply_len=len(reply or ""))
-                session_store.save_message(agent_id, "assistant", reply)
-                if self._is_agent_runtime_error(reply):
-                    push_event(agent_id, "error", {
-                        "agent_id": agent_id,
-                        "error": reply,
-                    })
-                    results.append({"status": "error", "agent_id": agent_id, "error": reply, "reply": reply})
-                    continue
+                # ── Multi-turn loop for this chain step ──
+                CHAIN_MAX_TOOL_TURNS = 5
+                all_step_tool_results = []
+                final_step_reply = None
+                current_step_msg = full_msg
+                chain_step_error = False
 
-                tool_results = []
-                if self._should_collect_agent_files(agent_id):
-                    tool_results = self._execute_tool_calls(
-                        agent_id, reply, run_id=capability_run_id
-                    )
-                    if not tool_results:
-                        tool_results = self._parse_and_write_code_blocks(agent_id, reply)
-                    if not tool_results:
-                        tool_results = self._detect_written_files(
-                            agent_id, reply, baseline=chain_baseline)
+                for _cturn in range(CHAIN_MAX_TOOL_TURNS):
+                    reply = agent.send(current_step_msg)
+                    log_agent(agent_id, "chain_step_reply_received", role=role, reply_len=len(reply or ""))
+                    session_store.save_message(agent_id, "assistant", reply)
+                    final_step_reply = reply
 
-                entry = {"status": "ok", "agent_id": agent_id, "reply": reply}
+                    if self._is_agent_runtime_error(reply):
+                        push_event(agent_id, "error", {
+                            "agent_id": agent_id,
+                            "error": reply,
+                        })
+                        results.append({"status": "error", "agent_id": agent_id, "error": reply, "reply": reply})
+                        chain_step_error = True
+                        break
+
+                    step_tool_results = []
+                    if self._should_collect_agent_files(agent_id):
+                        step_tool_results = self._execute_tool_calls(
+                            agent_id, reply, run_id=capability_run_id
+                        )
+                    all_step_tool_results.extend(step_tool_results)
+
+                    if step_tool_results:
+                        # Feed tool results back to the agent
+                        fb_parts = ["工具执行结果："]
+                        for tr in step_tool_results:
+                            fb_parts.append(
+                                f"\n[{tr.get('tool', 'unknown')}]: {tr.get('result', '')}"
+                            )
+                        current_step_msg = "\n".join(fb_parts)
+                        continue
+
+                    # No tool calls — extract file artifacts (final turn)
+                    if self._should_collect_agent_files(agent_id):
+                        code_blocks = self._parse_and_write_code_blocks(agent_id, reply)
+                        if code_blocks:
+                            all_step_tool_results.extend(code_blocks)
+                        else:
+                            detected = self._detect_written_files(
+                                agent_id, reply, baseline=chain_baseline)
+                            if detected:
+                                all_step_tool_results.extend(detected)
+                    break  # Agent is done
+
+                if chain_step_error:
+                    continue  # Skip to next chain item
+
+                clean_reply = self._strip_tool_calls(final_step_reply or "")
+
+                entry = {"status": "ok", "agent_id": agent_id, "reply": clean_reply}
                 if capability_run_id:
                     entry["capability_run_id"] = capability_run_id
                 skill_drafts = self.collect_skill_drafts(agent_id)
                 if skill_drafts:
                     entry["skill_drafts"] = skill_drafts
-                if tool_results:
-                    entry["tool_results"] = tool_results
+                if all_step_tool_results:
+                    entry["tool_results"] = all_step_tool_results
 
                 push_event(agent_id, "agent_task_completed", {
                     "agent_id": agent_id, "role": role,
                     "message": f"{role} 链式任务完成",
-                    "file_count": len(tool_results) if tool_results else 0,
-                    "files": [t.get("file", "") for t in (tool_results or [])],
+                    "file_count": len(all_step_tool_results) if all_step_tool_results else 0,
+                    "files": [t.get("file", "") for t in (all_step_tool_results or [])],
                 })
-                log_agent(agent_id, "chain_step_completed", role=role, file_count=len(tool_results or []))
+                log_agent(agent_id, "chain_step_completed", role=role, file_count=len(all_step_tool_results or []))
 
-                accumulated_context += f"\n\n[{role} 的输出]:\n{reply}"
+                accumulated_context += f"\n\n[{role} 的输出]:\n{clean_reply}"
                 results.append(entry)
             except Exception as e:
                 log_agent(agent_id, "chain_step_exception", level="error", role=role, error=str(e))
@@ -810,6 +848,18 @@ class Orchestrator:
             )
         return reply, all_results, None
 
+    @staticmethod
+    def _strip_tool_calls(text: str) -> str:
+        """Remove <tool_call> XML blocks from agent reply for clean display."""
+        if not text:
+            return text
+        return re.sub(
+            r"<tool_call>\s*\{.*?\}\s*</tool_call>",
+            "",
+            text,
+            flags=re.DOTALL,
+        ).strip()
+
     def _execute_tool_calls(self, agent_id: str, response: str,
                             run_id: str = None) -> list[dict]:
         """Parse <tool_call> blocks from agent response and execute them."""
@@ -842,10 +892,18 @@ class Orchestrator:
                     except (json.JSONDecodeError, AttributeError):
                         card_result = None
                 if tool_name == "rag_search" and isinstance(card_result, dict):
+                    self._push_rag_result_card(agent_id, args.get("query", ""), card_result)
+                elif (
+                    tool_name == "call_service_api"
+                    and args.get("service_name") == "rag"
+                    and "/api/rag/search" in str(args.get("path", ""))
+                    and isinstance(card_result, dict)
+                ):
+                    body = args.get("body") or {}
                     self._push_rag_result_card(
                         agent_id,
-                        args.get("query", ""),
-                        card_result,
+                        body.get("query", ""),
+                        card_result.get("data", card_result),
                     )
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})
@@ -905,25 +963,31 @@ class Orchestrator:
                 )
                 for n in (item.get("tool_names") or []):
                     seen_tools.add(n)
-            # 始终包含 rag_search（知识库检索）工具
-            if "rag_search" not in seen_tools and "rag_search" in self.tools._tools:
+            # 始终包含微服务调用工具（list_services / call_service_api）
+            if "list_services" not in seen_tools and "list_services" in self.tools._tools:
                 tool_lines.append(
-                    "  - 知识库检索: 搜索知识库中的文档内容，返回相关文本片段\n"
-                    "    参数: query(必填,搜索关键词), top_k(可选,默认5,返回数量),\n"
-                    "    domain(可选,如rd/edu/office,过滤领域), workspace_id(可选,过滤工作空间),\n"
-                    "    score_threshold(可选,默认0.0,相关性阈值0-1)\n"
-                    "    (status: implemented; tools: rag_search)"
+                    "  - 列出微服务: 列出所有可用的后端微服务及其访问地址\n"
+                    "    (status: implemented; tools: list_services)"
+                )
+            if "call_service_api" not in seen_tools and "call_service_api" in self.tools._tools:
+                tool_lines.append(
+                    "  - 调用服务API: 通用微服务API调用工具，可调用任何已注册服务的接口\n"
+                    "    参数: service_name(必填,服务名如rag/rd), method(默认GET), path(必填,如/api/rag/search),\n"
+                    "    body(可选,POST/PUT的JSON请求体), query_params(可选,URL查询参数)\n"
+                    "    每个服务都有 /api/{service}/spec 端点可查询所有可用接口\n"
+                    "    (status: implemented; tools: call_service_api)"
                 )
             tool_list = "\n".join(tool_lines)
             tool_hint = (
                 "只调用上面列出的 Tool。需要更多说明时，先读取对应 doc 路径中的 TOOL.md。\n"
+                "微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
             )
         else:
             tools = self.tools.list_tools()
             if not tools:
                 return ""
             tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
-            tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n"
+            tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
         work_dir = self._agent_work_dir(agent_id)
         return (
             "\n\n===== 沙箱协作和工具说明 =====\n"
@@ -1572,7 +1636,7 @@ class Orchestrator:
         filename = os.path.basename(real_path)
         return content, mime_type, filename
 
-    REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service"}
+    REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service", "requirement_card", "bug_card", "iteration_card", "project_card"}
     REPORT_STATUSES = {"running", "done", "error", "stopped", "starting", "stopping", "failed", "exited"}
     REPORT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
@@ -1637,11 +1701,19 @@ class Orchestrator:
             content = ""
         content = str(content)
         title = str(report.get("title") or "").strip()
+
+        # 领域卡片类型：title/content 从 data 中提取，content 可选
+        DOMAIN_CARD_TYPES = {"requirement_card", "bug_card", "iteration_card", "project_card"}
+        if element_type in DOMAIN_CARD_TYPES:
+            if not title:
+                title = str(data.get("title") or "").strip()
+            if not content.strip():
+                content = str(data.get("summary") or data.get("description") or title)
         if not title:
             return {}, self._report_usage_error("missing required non-empty string field: title")
         step_id = str(report.get("step_id") or data.get("step_id") or "").strip()
 
-        if element_type != "table" and not content.strip():
+        if element_type != "table" and element_type not in DOMAIN_CARD_TYPES and not content.strip():
             return {}, self._report_usage_error("missing required non-empty string field: content")
 
         normalized = {
@@ -1725,7 +1797,7 @@ class Orchestrator:
             f"WEAGENT_REPORT_VALIDATION_ERROR: {message}\n"
             "weagent-report 只接受一个 JSON 对象字符串。\n"
             "必填字段：type、title；除 table 外还必须有非空 content。\n"
-            "type 只能是 progress/result/summary/text/table/image/code/file/error/service。\n"
+            "type 只能是 progress/result/summary/text/table/image/code/file/error/service/requirement_card/bug_card/iteration_card/project_card。\n"
             "status 可选，只能是 running/done/error/stopped/starting/stopping/failed/exited。\n"
             "table 格式：{\"type\":\"table\",\"title\":\"任务分派计划\",\"data\":{\"headers\":[\"Agent\",\"任务\",\"产出\"],\"rows\":[[\"frontend\",\"实现登录页\",\"index.html\"]]}}\n"
             "file 格式：{\"type\":\"file\",\"title\":\"前端页面\",\"content\":\"/workspace/agents/frontend/index.html\",\"data\":{\"path\":\"/workspace/agents/frontend/index.html\"}}\n"

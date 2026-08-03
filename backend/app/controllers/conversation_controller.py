@@ -44,6 +44,9 @@ def create_conversation():
         workspace_context=data.get('workspace_context') or {},
         kb_domain=data.get('kb_domain') or '',
         agent_configs=data.get('agent_configs') or {},
+        kb_document_ids=data.get('kb_document_ids'),
+        services=data.get('services') or [],
+        project_id=data.get('project_id') or None,
     )
 
     if error:
@@ -66,6 +69,23 @@ def get_conversation(conversation_id):
         return error_response(error, code=404)
 
     return success_response(result)
+
+
+@conversation_bp.route('/<conversation_id>/kb', methods=['PATCH'])
+@jwt_required()
+def update_conversation_kb(conversation_id):
+    """Update KB settings for a conversation (mid-conversation)."""
+    user_id = get_jwt_identity()
+    data = request.json or {}
+    result, error = conversation_service.update_conversation_kb(
+        conversation_id,
+        user_id,
+        kb_domain=data.get('kb_domain'),
+        kb_document_ids=data.get('kb_document_ids'),
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message='KB settings updated')
 
 
 @conversation_bp.route('/<conversation_id>/favorite', methods=['POST', 'PATCH'])

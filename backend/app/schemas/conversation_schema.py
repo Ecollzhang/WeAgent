@@ -10,6 +10,10 @@ class CreateConversationSchema(Schema):
     workspace_context = fields.Dict(required=False, load_default=dict)
     kb_domain = fields.String(required=False, allow_none=True, validate=validate.OneOf(['', 'all', 'rd', 'edu', 'office']))
     agent_configs = fields.Raw(required=False, load_default=dict)
+    kb_document_ids = fields.List(fields.String(), required=False, allow_none=True)
+    services = fields.List(fields.String(), required=False, allow_none=True,
+                           validate=validate.ContainsOnly(['rd', 'rag', 'edu', 'office']))
+    project_id = fields.String(required=False, allow_none=True)
 
 
 class ConversationResponseSchema(Schema):

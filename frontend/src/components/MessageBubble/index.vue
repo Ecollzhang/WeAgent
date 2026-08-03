@@ -27,47 +27,166 @@
         <div class="raw-rendered-content" v-html="renderMarkdown(visibleRawOutput)"></div>
       </div>
 
-      <div v-else-if="contentElements.length" class="bubble-elements content-section">
-        <div
-          v-for="(el, i) in contentElements"
-          :key="i"
-          class="el-block"
-          :class="'el-' + el.type"
+      <div v-if="contentElements.length" class="bubble-elements content-section">
+        <template v-for="(el, i) in cardGroupedElements">
+          <!-- Card group with collapse (only for requirement/bug cards with > 1 items) -->
+          <div v-if="el._group" :key="'g'+i" class="card-group" :class="'cg-' + el.type">
+            <div class="card-group-header" @click="$set(collapsedCardGroups, el._groupId, !collapsedCardGroups[el._groupId])">
+              <span class="cg-arrow" :class="{ 'cg-collapsed': collapsedCardGroups[el._groupId] }">▾</span>
+              <span class="cg-label">{{ cardGroupLabelMap[el.type] }}</span>
+              <span class="cg-count">{{ el.count }}</span>
+            </div>
+            <div v-show="!collapsedCardGroups[el._groupId]" class="card-group-body">
+              <div
+                v-for="(card, ci) in el.cards"
+                :key="ci"
+                class="el-block"
+                :class="'el-' + card.type"
+              >
+                <!-- inline requirement card -->
+                <div v-if="card.type === 'requirement_card'" class="domain-card requirement-card" @click="navigateToDomain(card)">
+                  <div class="dc-row dc-main-row">
+                    <span class="dc-domain-tag">研发</span>
+                    <span class="dc-type-tag">需求</span>
+                    <span class="dc-title">{{ cardTitle(card) }}</span>
+                    <span class="dc-priority-tag" :class="'pri-' + cardPriority(card)">{{ cardPriorityLabel(card) }}</span>
+                    <span class="dc-status-tag" :class="'req-status-' + cardStatus(card)">{{ cardReqStatusLabel(card) }}</span>
+                    <span class="dc-arrow">→</span>
+                  </div>
+                  <div class="dc-row dc-meta-row" v-if="cardMetaItems(card).length">
+                    <span v-for="m in cardMetaItems(card)" :key="m.label" class="dc-meta-item">
+                      <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                    </span>
+                  </div>
+                </div>
+                <!-- inline bug card -->
+                <div v-else-if="card.type === 'bug_card'" class="domain-card bug-card" @click="navigateToDomain(card)">
+                  <div class="dc-row dc-main-row">
+                    <span class="dc-domain-tag">研发</span>
+                    <span class="dc-type-tag bug-type-tag">缺陷</span>
+                    <span class="dc-title">{{ cardTitle(card) }}</span>
+                    <span class="dc-severity-tag" :class="'sev-' + cardSeverity(card)">{{ cardSeverityLabel(card) }}</span>
+                    <span class="dc-status-tag" :class="'bug-status-' + cardStatus(card)">{{ cardBugStatusLabel(card) }}</span>
+                    <span class="dc-arrow">→</span>
+                  </div>
+                  <div class="dc-row dc-meta-row" v-if="cardMetaItems(card).length">
+                    <span v-for="m in cardMetaItems(card)" :key="m.label" class="dc-meta-item">
+                      <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Non-group elements (original rendering) -->
+          <div
+            v-else
+            :key="'s'+i"
+            class="el-block"
+            :class="'el-' + el.type"
           >
-          <!-- Text element -->
-          <div v-if="el.type === 'text'" class="el-text" v-html="renderText(elementContent(el))"></div>
+            <!-- Text / Output / Result / Summary -->
+            <div v-if="el.type === 'text' || el.type === 'output' || el.type === 'result' || el.type === 'summary'" class="el-text" v-html="renderText(elementContent(el))"></div>
 
-          <!-- Progress element -->
-          <div v-else-if="el.type === 'progress'" class="el-progress">
-            <span class="progress-dot" :class="'progress-' + (el.status || 'running')"></span>
-            <span>{{ elementContent(el) }}</span>
-          </div>
-
-          <div v-else-if="el.type === 'error'" class="el-error">
-            <div class="error-title">
-              <i class="el-icon-warning-outline"></i>
-              <span>{{ elementData(el).title || '错误' }}</span>
+            <!-- Progress element -->
+            <div v-else-if="el.type === 'progress'" class="el-progress">
+              <span class="progress-dot" :class="'progress-' + (el.status || 'running')"></span>
+              <span>{{ elementContent(el) }}</span>
             </div>
-            <div class="error-content" v-html="renderText(elementContent(el))"></div>
-          </div>
 
-          <div v-else-if="el.type === 'result'" class="el-result">
-            <div class="result-title">
-              <i class="el-icon-finished"></i>
-              <span>{{ elementData(el).title || '执行结果' }}</span>
+            <div v-else-if="el.type === 'error'" class="el-error">
+              <div class="error-title">
+                <i class="el-icon-warning-outline"></i>
+                <span>{{ elementData(el).title || '错误' }}</span>
+              </div>
+              <div class="error-content" v-html="renderText(elementContent(el))"></div>
             </div>
-            <div class="result-content" v-html="renderText(elementContent(el))"></div>
-          </div>
 
-          <div v-else-if="el.type === 'summary'" class="el-result">
-            <div class="result-title">
-              <i class="el-icon-finished"></i>
-              <span>{{ elementData(el).title || '完成摘要' }}</span>
+            <!-- Requirement Card -->
+            <div v-else-if="el.type === 'requirement_card'" class="domain-card requirement-card" @click="navigateToDomain(el)">
+              <div class="dc-row dc-main-row">
+                <span class="dc-domain-tag">研发</span>
+                <span class="dc-type-tag">需求</span>
+                <span class="dc-title">{{ cardTitle(el) }}</span>
+                <span class="dc-priority-tag" :class="'pri-' + cardPriority(el)">{{ cardPriorityLabel(el) }}</span>
+                <span class="dc-status-tag" :class="'req-status-' + cardStatus(el)">{{ cardReqStatusLabel(el) }}</span>
+                <span class="dc-arrow">→</span>
+              </div>
+              <div class="dc-row dc-meta-row" v-if="cardMetaItems(el).length">
+                <span v-for="m in cardMetaItems(el)" :key="m.label" class="dc-meta-item">
+                  <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                </span>
+              </div>
             </div>
-            <div class="result-content" v-html="renderText(elementContent(el))"></div>
-          </div>
 
-        </div>
+            <!-- Bug Card -->
+            <div v-else-if="el.type === 'bug_card'" class="domain-card bug-card" @click="navigateToDomain(el)">
+              <div class="dc-row dc-main-row">
+                <span class="dc-domain-tag">研发</span>
+                <span class="dc-type-tag bug-type-tag">缺陷</span>
+                <span class="dc-title">{{ cardTitle(el) }}</span>
+                <span class="dc-severity-tag" :class="'sev-' + cardSeverity(el)">{{ cardSeverityLabel(el) }}</span>
+                <span class="dc-status-tag" :class="'bug-status-' + cardStatus(el)">{{ cardBugStatusLabel(el) }}</span>
+                <span class="dc-arrow">→</span>
+              </div>
+              <div class="dc-row dc-meta-row" v-if="cardMetaItems(el).length">
+                <span v-for="m in cardMetaItems(el)" :key="m.label" class="dc-meta-item">
+                  <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Iteration Card -->
+            <div v-else-if="el.type === 'iteration_card'" class="domain-card iteration-card" @click="navigateToDomain(el)">
+              <div class="dc-header">
+                <span class="dc-domain-tag">智能研发</span>
+                <span class="dc-type-tag iteration-type-tag">迭代</span>
+                <span class="dc-status-tag" :class="'iter-status-' + cardStatus(el)">{{ cardIterStatusLabel(el) }}</span>
+              </div>
+              <div class="dc-body">
+                <div class="dc-title">{{ cardTitle(el) }}</div>
+                <div class="dc-summary" v-if="cardSummary(el)">{{ cardSummary(el) }}</div>
+                <div class="dc-iter-progress" v-if="cardIterProgress(el) !== null">
+                  <div class="dc-progress-bar">
+                    <div class="dc-progress-fill" :style="{ width: cardIterProgress(el) + '%' }"></div>
+                  </div>
+                  <span class="dc-progress-text">{{ cardIterProgress(el) }}%</span>
+                </div>
+              </div>
+              <div class="dc-meta" v-if="cardMetaItems(el).length">
+                <span v-for="m in cardMetaItems(el)" :key="m.label" class="dc-meta-item">
+                  <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                </span>
+              </div>
+              <div class="dc-actions">
+                <el-button size="mini" type="primary" @click.stop="navigateToDomain(el)">查看详情 →</el-button>
+              </div>
+            </div>
+
+            <!-- Project Card -->
+            <div v-else-if="el.type === 'project_card'" class="domain-card project-card" @click="navigateToDomain(el)">
+              <div class="dc-header">
+                <span class="dc-domain-tag">智能研发</span>
+                <span class="dc-type-tag project-type-tag">项目</span>
+              </div>
+              <div class="dc-body">
+                <div class="dc-title">{{ cardTitle(el) }}</div>
+                <div class="dc-summary" v-if="cardSummary(el)">{{ cardSummary(el) }}</div>
+                <div class="dc-project-stats" v-if="cardProjectStats(el).length">
+                  <span v-for="s in cardProjectStats(el)" :key="s.label" class="dc-project-stat">
+                    <span class="dc-stat-num">{{ s.value }}</span>
+                    <span class="dc-stat-label">{{ s.label }}</span>
+                  </span>
+                </div>
+              </div>
+              <div class="dc-actions">
+                <el-button size="mini" type="primary" @click.stop="navigateToDomain(el)">查看项目 →</el-button>
+              </div>
+            </div>
+
+          </div>
+        </template>
       </div>
 
       <!-- Artifact rendering -->
@@ -196,7 +315,7 @@
 
             <div v-if="isArtifactGroupExpanded(group.key, group)" class="artifact-detail-pane">
             <div v-if="group.type === 'workflow'" class="artifact-block artifact-detail-card code-card detail-card">
-              <pre class="code-body code-body-soft"><code>{{ workflowRawJson(group) }}</code></pre>
+              <pre class="code-body"><code>{{ workflowRawJson(group) }}</code></pre>
             </div>
 
             <div v-else-if="group.type === 'code' || group.type === 'text'" class="artifact-block artifact-detail-card code-card detail-card">
@@ -406,6 +525,7 @@ import { formatTime } from '../../utils/format'
 import { getFileTree, getServiceLogs, readSessionRawFile, restartService, stopService, writeFile } from '@/api/sandbox'
 import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
+import { checkVisible } from '../../store/modules/grayscale'
 
 export default {
   name: 'MessageBubble',
@@ -435,6 +555,8 @@ export default {
       serviceLogsLoading: false,
       serviceLogsData: null,
       serviceBusyKey: '',
+
+      collapsedCardGroups: {},
     }
   },
   watch: {
@@ -455,6 +577,55 @@ export default {
     hasElements() {
       return this.message && Array.isArray(this.message.elements) && this.message.elements.length > 0
     },
+    activeDomain() {
+      return this.$store.getters['workspace/activeDomain']
+    },
+    visibleDomainCards() {
+      const domain = this.activeDomain
+      const s = this.$store.state.grayscale
+      const visible = new Set()
+      if (checkVisible(s, domain, 'ui.chat.card.requirement')) visible.add('requirement_card')
+      if (checkVisible(s, domain, 'ui.chat.card.bug')) visible.add('bug_card')
+      if (checkVisible(s, domain, 'ui.chat.card.iteration')) visible.add('iteration_card')
+      if (checkVisible(s, domain, 'ui.chat.card.project')) visible.add('project_card')
+      return visible
+    },
+    cardGroupedElements() {
+      const domainTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card']
+      const raw = this.contentElements
+      const result = []
+      let i = 0
+      while (i < raw.length) {
+        const el = raw[i]
+        if (!domainTypes.includes(el?.type)) {
+          result.push(el)
+          i++
+          continue
+        }
+        // Collect consecutive same-type cards
+        const groupType = el.type
+        const group = []
+        while (i < raw.length && raw[i]?.type === groupType) {
+          group.push(raw[i])
+          i++
+        }
+        if (group.length === 1) {
+          result.push(group[0])
+        } else {
+          const groupId = `${groupType}_${i}`
+          result.push({ _group: true, _groupId: groupId, type: groupType, cards: group, count: group.length })
+        }
+      }
+      return result
+    },
+    cardGroupLabelMap() {
+      return {
+        requirement_card: '需求',
+        bug_card: '缺陷',
+        iteration_card: '迭代',
+        project_card: '项目'
+      }
+    },
     providerLabel() {
       const provider = this.message?.meta?.provider || this.latestEventProvider()
       if (!provider) return ''
@@ -467,21 +638,20 @@ export default {
     renderedElements() {
       const elements = Array.isArray(this.message?.elements) ? this.message.elements : []
       const merged = []
+      const seenContent = new Set()
       elements.forEach(el => {
-        if (this.shouldHideRawTextElement(el)) {
-          return
+        if (this.shouldHideRawTextElement(el)) return
+        // Dedup: skip elements whose content we've already seen
+        // (backend may send same content as text + result + output)
+        const elNorm = this.normalizeDisplayText(this.elementContent(el))
+        if (elNorm && elNorm.length >= 20 && ['text', 'result', 'output', 'summary'].includes(el?.type)) {
+          if (seenContent.has(elNorm)) return
+          seenContent.add(elNorm)
         }
         const last = merged[merged.length - 1]
         if (el?.type === 'text' && last?.type === 'text') {
           const content = this.elementContent(last) + this.elementContent(el)
-          merged[merged.length - 1] = {
-            ...last,
-            content,
-            data: {
-              ...(last.data || {}),
-              content,
-            },
-          }
+          merged[merged.length - 1] = { ...last, content, data: { ...(last.data || {}), content } }
         } else {
           merged.push(el)
         }
@@ -489,7 +659,26 @@ export default {
       return merged
     },
     contentElements() {
-      return this.renderedElements.filter(el => ['text', 'summary', 'result', 'error'].includes(el?.type))
+      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card']
+      const allowedCards = this.visibleDomainCards
+      const isDomainCard = type => domainCardTypes.includes(type)
+
+      // When raw_output is the primary display, hide ALL text/result/output/summary
+      // elements — they are derived from the same LLM output and would be duplicates.
+      // Only errors (genuinely new information) and visible domain cards should still show.
+      if (this.visibleRawOutput) {
+        return this.renderedElements.filter(el => {
+          if (el?.type === 'error') return true
+          if (isDomainCard(el?.type)) return allowedCards.has(el?.type)
+          return false
+        })
+      }
+      return this.renderedElements.filter(el => {
+        const baseTypes = ['text', 'summary', 'result', 'error', 'output']
+        if (baseTypes.includes(el?.type)) return true
+        if (isDomainCard(el?.type)) return allowedCards.has(el?.type)
+        return false
+      })
     },
     progressElements() {
       return this.renderedElements.filter(el => el?.type === 'progress')
@@ -569,6 +758,15 @@ export default {
           type: this.artifactGroupType(group),
           primaryElement: this.artifactGroupPrimaryElement(group),
         }))
+        .filter(group => {
+          // Hide groups that represent non-existent files.
+          // These have no edit button — they are file-type groups with no
+          // actual content (agent mentioned a file but didn't create it).
+          if (this.isSummaryTableGroup(group)) return true
+          if (group.diffElement) return true
+          if (['workflow', 'code', 'webpage', 'table', 'image'].includes(group.type)) return true
+          return false
+        })
         .sort((a, b) => {
           const aSummary = this.isSummaryTableGroup(a)
           const bSummary = this.isSummaryTableGroup(b)
@@ -600,15 +798,12 @@ export default {
       return this.renderMarkdown(this.message.content)
     },
     visibleRawOutput() {
+      // Raw output is the PRIMARY display for agent messages.
+      // When raw_output exists, contentElements hides all text/result/output/summary
+      // to prevent duplication (see contentElements computed).
       if (!this.message || this.message.sender_type !== 'agent') return ''
       const raw = String(this.message.raw_output || '').trim()
       if (!raw) return ''
-      if (this.contentElements.length) return ''
-      const content = String(this.message.content || '').trim()
-      if (content && content === raw) return ''
-      if (this.contentElements.some(el => this.normalizeDisplayText(this.elementContent(el)) === this.normalizeDisplayText(raw))) {
-        return ''
-      }
       const output = this.artifactElements.some(el => el?.type === 'table') ? this.stripMarkdownTables(raw) : raw
       return this.formatRawOutputForDisplay(output)
     },
@@ -2005,6 +2200,108 @@ export default {
       })
       this.artifactPreviewObjectUrls = {}
     },
+
+    // ── Domain Card Helpers ──
+    cardData(el) {
+      return el?.data || {}
+    },
+    cardTitle(el) {
+      const d = this.cardData(el)
+      return d.title || d.name || ''
+    },
+    cardSummary(el) {
+      const d = this.cardData(el)
+      return d.summary || d.description || ''
+    },
+    cardPriority(el) {
+      return this.cardData(el).priority || this.cardData(el).meta?.priority || ''
+    },
+    cardSeverity(el) {
+      return this.cardData(el).severity || this.cardData(el).meta?.severity || ''
+    },
+    cardStatus(el) {
+      return this.cardData(el).status || this.cardData(el).meta?.status || ''
+    },
+    cardMetaItems(el) {
+      const d = this.cardData(el)
+      const meta = d.meta || {}
+      const items = []
+      const pushIf = (icon, label, value) => {
+        if (value !== undefined && value !== null && value !== '') {
+          items.push({ icon, label, value })
+        }
+      }
+      pushIf('el-icon-user', '负责人', meta.assignee || d.assignee)
+      pushIf('el-icon-date', '截止', meta.deadline || meta.due_date || d.deadline)
+      pushIf('el-icon-date', '日期', meta.start_date || d.start_date || meta.end_date || d.end_date)
+      pushIf('el-icon-s-flag', '迭代', meta.iteration_name || d.iteration_name)
+      pushIf('el-icon-collection-tag', '标签', meta.labels || d.labels)
+      return items
+    },
+    cardProjectStats(el) {
+      const d = this.cardData(el)
+      const meta = d.meta || {}
+      const stats = []
+      const pushIf = (label, value) => {
+        if (value !== undefined && value !== null && value !== '') {
+          stats.push({ label, value })
+        }
+      }
+      pushIf('需求', meta.requirement_count || d.requirement_count)
+      pushIf('缺陷', meta.bug_count || d.bug_count)
+      pushIf('迭代', meta.iteration_count || d.iteration_count)
+      pushIf('仓库', meta.repo_count || d.repo_count)
+      return stats
+    },
+    cardPriorityLabel(el) {
+      const labels = { p0: 'P0 紧急', p1: 'P1 高', p2: 'P2 中', p3: 'P3 低' }
+      return labels[this.cardPriority(el)] || this.cardPriority(el)
+    },
+    cardSeverityLabel(el) {
+      const labels = { critical: '致命', major: '严重', minor: '一般', trivial: '轻微' }
+      return labels[this.cardSeverity(el)] || this.cardSeverity(el)
+    },
+    cardReqStatusLabel(el) {
+      const labels = { backlog: '待规划', todo: '待办', in_progress: '进行中', in_review: '审查中', done: '已完成', closed: '已关闭' }
+      return labels[this.cardStatus(el)] || this.cardStatus(el)
+    },
+    cardBugStatusLabel(el) {
+      const labels = { open: '待处理', in_progress: '处理中', fixed: '已修复', verified: '已验证', closed: '已关闭', reopened: '重开' }
+      return labels[this.cardStatus(el)] || this.cardStatus(el)
+    },
+    cardIterStatusLabel(el) {
+      const labels = { planned: '计划中', active: '进行中', completed: '已完成' }
+      return labels[this.cardStatus(el)] || this.cardStatus(el)
+    },
+    cardIterProgress(el) {
+      const d = this.cardData(el)
+      if (d.progress !== undefined && d.progress !== null) return Number(d.progress) || 0
+      if (d.meta?.progress !== undefined && d.meta?.progress !== null) return Number(d.meta.progress) || 0
+      return null
+    },
+    navigateToDomain(el) {
+      const d = this.cardData(el)
+      const projectId = d.project_id || d.meta?.project_id || ''
+      const itemId = d.id || d.meta?.id || ''
+      const type = el?.type
+      if (!itemId) return
+
+      let route = {}
+      if (type === 'requirement_card') {
+        route = { name: 'requirementDetail', params: { id: projectId, rid: itemId } }
+      } else if (type === 'bug_card') {
+        route = { name: 'bugDetail', params: { id: projectId, bid: itemId } }
+      } else if (type === 'iteration_card') {
+        if (projectId) {
+          route = { name: 'projectDetail', params: { id: projectId }, query: { tab: 'iterations' }, hash: '#iter-' + itemId }
+        }
+      } else if (type === 'project_card') {
+        route = { name: 'projectDetail', params: { id: itemId } }
+      }
+      if (route.name) {
+        this.$router.push(route).catch(() => {})
+      }
+    },
   },
   beforeDestroy() {
     this.releaseArtifactPreviewUrls()
@@ -2084,58 +2381,74 @@ export default {
 
 .bubble-inner {
   background: #ffffff;
-  padding: 12px 14px;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
-  border: 1px solid #e8edf5;
+  padding: 14px 16px;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 0 0 1px rgba(15, 23, 42, 0.03);
+  border: 1px solid #eef1f6;
+  transition: box-shadow 0.2s ease;
+}
+
+.bubble-inner:hover {
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(15, 23, 42, 0.03);
 }
 
 .own .bubble-inner {
-  background: #f0f5ff;
-  border-color: #e0ebff;
+  background: linear-gradient(135deg, #f4f8ff 0%, #f0f5ff 100%);
+  border-color: #dce8fc;
 }
 
 /* ===== Elements ===== */
 .bubble-elements {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .artifact-section {
-  margin-top: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f3f8;
 }
 
 .content-section + .artifact-section,
 .raw-rendered + .artifact-section {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .section-title {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
-  color: #64748b;
+  color: #8b9ab5;
   font-weight: 600;
-  margin-bottom: -2px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
 }
 
 .current-progress {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  margin-bottom: 10px;
-  border: 1px solid #dbeafe;
-  border-radius: 8px;
-  background: #f8fbff;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f8fbff 0%, #f0f7ff 100%);
+  border: 1px solid #d6e6ff;
   color: #334155;
   font-size: 12px;
+  animation: progressPulse 2s ease-in-out infinite;
+}
+
+@keyframes progressPulse {
+  0%, 100% { border-color: #d6e6ff; }
+  50% { border-color: #b0d0ff; }
 }
 
 .current-progress-label {
   color: #2563eb;
   font-weight: 600;
   white-space: nowrap;
+  font-size: 11px;
 }
 
 .current-progress-text {
@@ -2144,34 +2457,27 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #475569;
 }
 
 .el-progress {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  background: #f8fbff;
-  border: 1px solid #e2ecf8;
-  border-radius: 6px;
-  font-size: 12px;
-  color: #475569;
-}
-
-.el-result {
-  padding: 10px 12px;
-  border: 1px solid #d7e8ff;
+  padding: 6px 10px;
+  background: #fafcff;
   border-radius: 8px;
-  background: #f8fbff;
-  max-width: 100%;
-  width: 100%;
+  font-size: 12px;
+  color: #5b6e8c;
+  border-left: 3px solid #d0ddf0;
 }
 
 .el-error {
-  padding: 10px 12px;
-  border: 1px solid #fde2e2;
-  border-radius: 8px;
-  background: #fff5f5;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fff5f5 0%, #fef2f2 100%);
+  border: 1px solid #fecaca;
+  border-left: 4px solid #ef4444;
 }
 
 .error-title {
@@ -2186,123 +2492,10 @@ export default {
 
 .error-content {
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: #7f1d1d;
 }
 
-.result-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-  color: #2563eb;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.result-content {
-  font-size: 13px;
-  line-height: 1.68;
-  color: #1e293b;
-  max-width: 100%;
-  width: 100%;
-}
-
-.result-content :deep(p) {
-  margin: 0 0 6px;
-}
-
-.result-content :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.result-content :deep(h1),
-.result-content :deep(h2),
-.result-content :deep(h3) {
-  margin: 10px 0 7px;
-  line-height: 1.35;
-  color: #0f172a;
-}
-
-.result-content :deep(h1) {
-  font-size: 18px;
-}
-
-.result-content :deep(h2) {
-  font-size: 16px;
-}
-
-.result-content :deep(h3) {
-  font-size: 15px;
-}
-
-.result-content :deep(ul) {
-  margin: 4px 0 8px;
-  padding-left: 20px;
-}
-
-.result-content :deep(li) {
-  margin: 2px 0;
-}
-
-.result-content :deep(blockquote) {
-  margin: 8px 0;
-  padding: 7px 10px;
-  border-left: 3px solid #93c5fd;
-  background: #f8fafc;
-  color: #475569;
-}
-
-.result-content :deep(pre) {
-  background: #111827;
-  color: #e5e7eb;
-  padding: 12px;
-  border-radius: 7px;
-  overflow: auto;
-  max-height: 420px;
-  font-size: 12px;
-  margin: 8px 0;
-  border: 1px solid #1f2937;
-}
-
-.result-content :deep(code) {
-  background: #f1f5f9;
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: #b45309;
-}
-
-.result-content :deep(pre code) {
-  background: transparent;
-  padding: 0;
-  color: inherit;
-}
-
-.result-content :deep(.markdown-table-wrap) {
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.result-content :deep(.markdown-table) {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  background: #fff;
-}
-
-.result-content :deep(.markdown-table th),
-.result-content :deep(.markdown-table td) {
-  border: 1px solid #e2e8f0;
-  padding: 7px 9px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.result-content :deep(.markdown-table th) {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #334155;
-}
 
 .progress-dot {
   width: 8px;
@@ -2310,28 +2503,291 @@ export default {
   border-radius: 50%;
   background: #4080ff;
   flex-shrink: 0;
+  animation: dotPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
 }
 
 .progress-done {
-  background: #67c23a;
+  background: #22c55e;
+  animation: none;
 }
 
 .progress-error {
-  background: #f56c6c;
+  background: #ef4444;
+  animation: none;
 }
 
 .progress-stopped {
-  background: #909399;
+  background: #94a3b8;
+  animation: none;
 }
 
 .el-block {
   width: 100%;
 }
 
-/* Text element — inline rendering */
+/* ── Domain Cards (requirement / bug / iteration) ── */
+.domain-card {
+  margin: 6px 0;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  overflow: hidden;
+  cursor: pointer;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.domain-card:hover {
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  border-color: #cbd5e1;
+}
+
+/* ---- compact row layout ---- */
+.dc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dc-main-row {
+  padding: 8px 12px;
+}
+.dc-meta-row {
+  padding: 0 12px 7px 12px;
+  gap: 14px;
+}
+
+.dc-domain-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #eef2ff;
+  color: #4f6ef7;
+  flex-shrink: 0;
+}
+.dc-type-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.requirement-card .dc-type-tag {
+  background: #e8f4fd;
+  color: #409eff;
+}
+.bug-type-tag {
+  background: #fde8e8;
+  color: #f56c6c;
+}
+.iteration-type-tag {
+  background: #e8f8e8;
+  color: #67c23a;
+}
+.project-type-tag {
+  background: #f0f9ff;
+  color: #2563eb;
+}
+
+.dc-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.dc-priority-tag,
+.dc-severity-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.pri-p0, .sev-critical { background: #fef2f2; color: #dc2626; }
+.pri-p1, .sev-major   { background: #fff7ed; color: #ea580c; }
+.pri-p2, .sev-minor   { background: #f0f9ff; color: #2563eb; }
+.pri-p3, .sev-trivial { background: #f8fafc; color: #64748b; }
+
+.dc-status-tag {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.req-status-todo, .bug-status-open, .iter-status-planned {
+  background: #f1f5f9; color: #64748b;
+}
+.req-status-in_progress, .bug-status-in_progress, .iter-status-active {
+  background: #ecf5ff; color: #409eff;
+}
+.req-status-in_review, .bug-status-verified {
+  background: #fdf6e8; color: #e6a23c;
+}
+.req-status-done, .req-status-closed, .bug-status-fixed, .bug-status-closed, .iter-status-completed {
+  background: #f0f9eb; color: #67c23a;
+}
+.req-status-backlog {
+  background: #f9f0ff; color: #7c3aed;
+}
+
+.dc-arrow {
+  color: #c0c8d4;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
+.domain-card:hover .dc-arrow {
+  color: #409eff;
+}
+
+.dc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 0 12px 7px 12px;
+}
+.dc-meta-item {
+  font-size: 11px;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.dc-meta-item i {
+  font-size: 11px;
+}
+
+/* ---- collapsible card group ---- */
+.card-group {
+  margin: 6px 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.card-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #f8fafc;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: #64748b;
+  border-bottom: 1px solid #f1f5f9;
+}
+.card-group-header:hover {
+  background: #f1f5f9;
+}
+.cg-arrow {
+  font-size: 10px;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+.cg-arrow.cg-collapsed {
+  transform: rotate(-90deg);
+}
+.cg-label {
+  font-weight: 600;
+  color: #334155;
+}
+.cg-count {
+  background: #e2e8f0;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #64748b;
+}
+.card-group-body .domain-card {
+  margin: 0;
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid #f1f5f9;
+}
+.card-group-body .domain-card:last-child {
+  border-bottom: none;
+}
+
+/* ---- body / summary (used by iteration/project cards) ---- */
+.dc-body {
+  padding: 8px 14px 4px 14px;
+}
+.dc-summary {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dc-iter-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.dc-progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+.dc-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #409eff, #67c23a);
+  transition: width 0.4s ease;
+}
+.dc-progress-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  min-width: 36px;
+  text-align: right;
+}
+
+.dc-project-stats {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}
+.dc-project-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.dc-stat-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.dc-stat-label {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+/* ---- actions (used by iteration/project cards) ---- */
+.dc-actions {
+  padding: 6px 14px 10px 14px;
+  border-top: 1px solid #f1f5f9;
+}
+
+/* Text element — clean inline rendering */
 .el-text {
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: #1e293b;
   word-wrap: break-word;
 }
@@ -2352,43 +2808,38 @@ export default {
 .bubble-content :deep(h1),
 .bubble-content :deep(h2),
 .bubble-content :deep(h3) {
-  margin: 8px 0 6px;
+  margin: 12px 0 6px;
   line-height: 1.35;
   color: #0f172a;
+  font-weight: 600;
 }
 
 .el-text :deep(h1),
-.bubble-content :deep(h1) {
-  font-size: 18px;
-}
-
+.bubble-content :deep(h1) { font-size: 19px; }
 .el-text :deep(h2),
-.bubble-content :deep(h2) {
-  font-size: 16px;
-}
-
+.bubble-content :deep(h2) { font-size: 16px; }
 .el-text :deep(h3),
-.bubble-content :deep(h3) {
-  font-size: 15px;
-}
+.bubble-content :deep(h3) { font-size: 14px; }
 
 .el-text :deep(ul),
 .bubble-content :deep(ul) {
-  margin: 4px 0 8px;
+  margin: 4px 0 10px;
   padding-left: 20px;
 }
 
 .el-text :deep(li),
 .bubble-content :deep(li) {
-  margin: 2px 0;
+  margin: 3px 0;
+  line-height: 1.6;
 }
 
 .el-text :deep(blockquote),
 .bubble-content :deep(blockquote) {
-  margin: 6px 0;
-  padding: 6px 10px;
+  margin: 8px 0;
+  padding: 8px 12px;
   border-left: 3px solid #c7d2fe;
   background: #f8fafc;
+  border-radius: 0 6px 6px 0;
   color: #475569;
 }
 
@@ -2396,17 +2847,21 @@ export default {
 .bubble-content :deep(a) {
   color: #4080ff;
   text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s;
 }
 
 .el-text :deep(a:hover),
 .bubble-content :deep(a:hover) {
-  text-decoration: underline;
+  border-bottom-color: #4080ff;
 }
 
 .el-text :deep(.markdown-table-wrap),
 .bubble-content :deep(.markdown-table-wrap) {
   overflow-x: auto;
-  margin: 8px 0;
+  margin: 10px 0;
+  border-radius: 8px;
+  border: 1px solid #e8ecf2;
 }
 
 .el-text :deep(.markdown-table),
@@ -2421,8 +2876,8 @@ export default {
 .el-text :deep(.markdown-table td),
 .bubble-content :deep(.markdown-table th),
 .bubble-content :deep(.markdown-table td) {
-  border: 1px solid #e2e8f0;
-  padding: 7px 9px;
+  border: 1px solid #eef1f6;
+  padding: 8px 10px;
   text-align: left;
   vertical-align: top;
 }
@@ -2432,35 +2887,40 @@ export default {
   background: #f8fafc;
   font-weight: 600;
   color: #334155;
+  font-size: 12px;
 }
 
 .el-text :deep(.markdown-table tr:nth-child(even) td),
 .bubble-content :deep(.markdown-table tr:nth-child(even) td) {
-  background: #fbfdff;
+  background: #fafcff;
 }
 
 .el-text :deep(pre) {
-  background: #f8f9fa;
-  padding: 12px;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  padding: 14px;
   border-radius: 8px;
   overflow: auto;
-  max-height: 360px;
-  font-size: 13px;
-  margin: 8px 0;
+  max-height: 400px;
+  font-size: 12.5px;
+  margin: 10px 0;
+  line-height: 1.55;
+  border: 1px solid #2d3148;
 }
 
 .el-text :deep(code) {
-  background: #f8f9fa;
+  background: #f1f5f9;
   padding: 2px 6px;
   border-radius: 4px;
-  font-size: 13px;
-  color: #e96900;
+  font-size: 12.5px;
+  color: #b45309;
 }
 
 .el-text :deep(pre code) {
   background: none;
   padding: 0;
   color: inherit;
+  font-size: inherit;
 }
 
 .code-actions {
@@ -2475,18 +2935,19 @@ export default {
 }
 
 .code-body {
-  padding: 12px;
+  padding: 14px;
   margin: 0;
-  background: #f3f6fb;
-  color: #111827;
-  font-size: 12px;
-  line-height: 1.5;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  font-size: 12.5px;
+  line-height: 1.55;
   text-align: left;
   white-space: pre;
   overflow-x: auto;
-  max-height: 360px;
+  max-height: 380px;
   overflow-y: auto;
-  border: 1px solid #dde6f2;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
 }
 
 .code-body,
@@ -2496,7 +2957,7 @@ export default {
 .service-preview-frame,
 .webpage-frame {
   scrollbar-width: thin;
-  scrollbar-color: #c7d3e4 transparent;
+  scrollbar-color: #3d4460 transparent;
 }
 
 .code-body::-webkit-scrollbar,
@@ -2505,8 +2966,8 @@ export default {
 .service-log-section pre::-webkit-scrollbar,
 .service-preview-frame::-webkit-scrollbar,
 .webpage-frame::-webkit-scrollbar {
-  width: 3px;
-  height: 3px;
+  width: 4px;
+  height: 4px;
 }
 
 .code-body::-webkit-scrollbar-track,
@@ -2524,15 +2985,10 @@ export default {
 .service-log-section pre::-webkit-scrollbar-thumb,
 .service-preview-frame::-webkit-scrollbar-thumb,
 .webpage-frame::-webkit-scrollbar-thumb {
-  background: #c7d3e4;
+  background: #3d4460;
   border-radius: 999px;
 }
 
-.code-body-soft {
-  padding: 10px 12px;
-  font-size: 11px;
-  color: #111827;
-}
 
 .artifact-json-summary {
   display: grid;
@@ -2547,21 +3003,22 @@ export default {
 .artifact-json-summary small { color: #85948f; font-size: 9px; }
 
 .code-body code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   text-align: left;
   white-space: pre;
 }
 
 /* Artifacts */
 .artifact-block {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fbfdff;
+  border: 1px solid #e8ecf2;
+  border-radius: 10px;
+  background: #fcfdff;
   overflow: hidden;
+  transition: border-color 0.2s;
 }
 
 .artifact-group {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .artifact-group:last-child {
@@ -2572,25 +3029,27 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .preview-toggle-chip {
-  border: 1px solid #d7dfeb;
+  border: 1px solid #dde3ef;
   background: #ffffff;
   color: #475569;
   border-radius: 999px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: 11px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
+  transition: all 0.15s;
 }
 
 .preview-toggle-chip:hover {
   background: #f8fbff;
   border-color: #bcd2f7;
+  color: #2563eb;
 }
 
 .preview-toggle-box {
@@ -2604,6 +3063,7 @@ export default {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition: all 0.15s;
 }
 
 .preview-toggle-box.checked {
@@ -2621,12 +3081,12 @@ export default {
   flex-direction: column;
   align-items: stretch;
   gap: 0;
-  padding: 10px 12px;
-  border: 1px solid #dbe4f0;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f2;
   border-radius: 10px;
   background: #ffffff;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  transition: all 0.2s ease;
 }
 
 .artifact-file-mainline {
@@ -2637,16 +3097,17 @@ export default {
 }
 
 .artifact-file-row:hover {
-  border-color: #9fc7ff;
-  background: #f8fbff;
-  box-shadow: 0 2px 8px rgba(64, 128, 255, 0.08);
+  border-color: #b0cffc;
+  background: #fafcff;
+  box-shadow: 0 2px 12px rgba(64, 128, 255, 0.07);
+  transform: translateY(-1px);
 }
 
 .artifact-toggle-btn {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border: none;
-  border-radius: 6px;
+  border-radius: 7px;
   background: #f1f5f9;
   color: #64748b;
   display: inline-flex;
@@ -2654,20 +3115,22 @@ export default {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
+  transition: all 0.15s;
 }
 
 .artifact-toggle-btn:hover {
-  background: #e6edf5;
+  background: #e2eaf5;
+  color: #334155;
 }
 
 .artifact-toggle-spacer {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
 }
 
 .artifact-kind-chip {
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
   background: #eef2ff;
   color: #5b6b8c;
@@ -2678,7 +3141,7 @@ export default {
 }
 
 .file-size-inline-text {
-  color: #7b8aa5;
+  color: #8b9ab8;
   font-size: 11px;
   font-weight: 400;
   white-space: nowrap;
@@ -2689,13 +3152,19 @@ export default {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .artifact-detail-pane {
-  margin-top: 8px;
-  margin-left: 18px;
+  margin-top: 10px;
+  margin-left: 20px;
+  animation: detailSlideDown 0.2s ease-out;
+}
+
+@keyframes detailSlideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .artifact-detail-card {
@@ -3362,27 +3831,29 @@ export default {
 /* Fallback content */
 .bubble-content {
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: #1e293b;
   word-wrap: break-word;
 }
 
 .bubble-content :deep(pre) {
-  background: #f8f9fa;
-  padding: 12px;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  padding: 14px;
   border-radius: 8px;
   overflow: auto;
-  max-height: 360px;
-  font-size: 13px;
-  margin: 8px 0;
+  max-height: 400px;
+  font-size: 12.5px;
+  margin: 10px 0;
+  line-height: 1.55;
 }
 
 .bubble-content :deep(code) {
-  background: #f8f9fa;
+  background: #f1f5f9;
   padding: 2px 6px;
   border-radius: 4px;
-  font-size: 13px;
-  color: #e96900;
+  font-size: 12.5px;
+  color: #b45309;
 }
 
 .bubble-content :deep(pre code) {
@@ -3391,14 +3862,720 @@ export default {
   color: inherit;
 }
 
-/* Meta */
+/* ===== Table styles (shared) ===== */
+.table-scroll {
+  overflow-x: auto;
+  padding: 10px;
+}
+
+.table-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 0;
+}
+
+.table-path-btn {
+  max-width: calc(100% - 72px);
+}
+
+.table-meta-summary {
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.summary-table-meta-row {
+  padding: 0 0 8px;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.summary-table-scroll {
+  padding: 0;
+}
+
+.summary-table-plain {
+  padding: 0;
+}
+
+.summary-table-plain :deep(.el-table th.el-table__cell) {
+  background: #eef6ff;
+}
+
+.table-block :deep(.el-table) {
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.table-block :deep(.el-table th.el-table__cell) {
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+}
+
+/* ===== Image ===== */
+.image-frame {
+  padding: 10px;
+  background: #ffffff;
+}
+
+.artifact-image-compact {
+  max-height: 280px;
+}
+
+.artifact-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  border: 1px solid #e8ecf2;
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: zoom-in;
+  transition: transform 0.2s;
+}
+
+.artifact-image:hover {
+  transform: scale(1.02);
+}
+
+.el-text :deep(.inline-markdown-image),
+.bubble-content :deep(.inline-markdown-image) {
+  display: block;
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+  border: 1px solid #e8ecf2;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+/* ===== Webpage ===== */
+.webpage-path {
+  padding: 8px 10px 0;
+}
+
+.webpage-preview {
+  padding: 10px;
+  background: #ffffff;
+}
+
+.webpage-frame {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.webpage-preview-paused {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  border: 1px dashed #d0d7e2;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+/* ===== File Card ===== */
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.file-card:hover {
+  border-color: #9fc7ff;
+  background: #f7fbff;
+}
+
+.file-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #eff6ff 0%, #e8f0fe 100%);
+  color: #4080ff;
+  flex-shrink: 0;
+}
+
+.file-icon i {
+  font-size: 18px;
+}
+
+.file-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.file-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.file-info-stack {
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.file-attr-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 130px;
+  flex: 0 0 auto;
+  margin-left: 30px;
+  margin-right: auto;
+  flex-shrink: 0;
+}
+
+.file-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.file-link-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: #1e293b;
+  font-size: 14px;
+  line-height: 1.3;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.file-link-btn:hover {
+  color: #4080ff;
+}
+
+.file-path {
+  color: #8fa0b7;
+  font-size: 12px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-meta-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.file-diff-inline-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eef2f7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.file-diff-inline-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.file-diff-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.file-diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-diff-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text) {
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 12px;
+  min-height: auto;
+  line-height: 1.2;
+  border: 1px solid #d8e6ff;
+  border-radius: 999px;
+  background: #f8fbff;
+  transition: all 0.15s;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text:hover),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text:hover) {
+  color: #1d4ed8;
+  border-color: #bfd5ff;
+  background: #eef5ff;
+}
+
+.artifact-row-actions :deep(.artifact-action-btn.el-button--text + .artifact-action-btn.el-button--text),
+.file-diff-actions :deep(.artifact-action-btn.el-button--text + .artifact-action-btn.el-button--text) {
+  margin-left: 0;
+}
+
+.file-diff-note {
+  color: #7b8aa5;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.file-meta-line .file-path {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.artifact-attached-diff {
+  margin-top: 12px;
+  padding-top: 4px;
+}
+
+/* ===== Diff Card ===== */
+.diff-card {
+  padding: 12px 14px;
+  border: 1px solid #dce4f2;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f6faff 100%);
+}
+
+.diff-path {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  word-break: break-all;
+}
+
+.diff-body {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-stat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.diff-add {
+  background: #e6f7ec;
+  color: #1f8f55;
+}
+
+.diff-del {
+  background: #fff0f0;
+  color: #d14343;
+}
+
+/* ===== Service Card ===== */
+.service-card {
+  padding: 0;
+  background: #ffffff;
+}
+
+.service-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid #e8edf5;
+  background: #f8fbff;
+}
+
+.service-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #eff6ff 0%, #e8f0fe 100%);
+  color: #4080ff;
+  flex-shrink: 0;
+}
+
+.service-title-wrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.service-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.service-description {
+  padding: 10px 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #334155;
+}
+
+.service-description :deep(p) {
+  margin: 0 0 6px;
+}
+
+.service-url-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  background: #f8fbff;
+  font-size: 12px;
+}
+
+.service-url-row i {
+  color: #4080ff;
+}
+
+.service-url-row a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.service-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  margin: 10px 12px 0;
+}
+
+.service-meta-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+}
+
+.service-meta-item span {
+  width: 34px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.service-meta-item code {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 12px;
+}
+
+/* ===== Steps / History ===== */
+.steps-collapse {
+  margin-top: 12px;
+  border-top: 1px solid #f0f3f8;
+  border-bottom: none;
+}
+
+.steps-collapse :deep(.el-collapse-item__header) {
+  height: 32px;
+  line-height: 32px;
+  font-size: 12px;
+  color: #64748b;
+  border-bottom: none;
+  font-weight: 500;
+}
+
+.steps-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.steps-panel {
+  padding: 10px 12px;
+  border: 1px solid #eef1f6;
+  border-radius: 10px;
+  background: #fcfdff;
+}
+
+.steps-title {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 5px 0;
+}
+
+.step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  background: #94a3b8;
+  flex-shrink: 0;
+}
+
+.step-agent_task_started { background: #4080ff; }
+.step-file_write { background: #22c55e; }
+.step-agent_task_completed { background: #22c55e; }
+.step-error { background: #ef4444; }
+
+.step-main {
+  min-width: 0;
+}
+
+.step-title {
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.step-file {
+  display: block;
+  border: none;
+  background: transparent;
+  padding: 1px 0;
+  color: #4080ff;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== Raw Output (collapsed) ===== */
+.raw-collapse {
+  margin-top: 12px;
+  border-top: 1px solid #f0f3f8;
+  border-bottom: none;
+}
+
+.raw-collapse :deep(.el-collapse-item__header) {
+  height: 32px;
+  line-height: 32px;
+  font-size: 12px;
+  color: #64748b;
+  border-bottom: none;
+}
+
+.raw-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.raw-output {
+  margin: 0;
+  padding: 12px;
+  max-height: 280px;
+  overflow: auto;
+  background: #1a1d2e;
+  color: #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+/* ===== Raw rendered output (fallback only — no box, clean text) ===== */
+.raw-rendered {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.raw-rendered-content {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #334155;
+  word-wrap: break-word;
+}
+
+.raw-rendered-content :deep(p) {
+  margin: 0 0 8px;
+}
+
+.raw-rendered-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.raw-rendered-content :deep(pre) {
+  background: #1a1d2e;
+  color: #e2e8f0;
+  padding: 14px;
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 420px;
+  font-size: 12.5px;
+  margin: 10px 0;
+  border: 1px solid #2d3148;
+  line-height: 1.55;
+}
+
+.raw-rendered-content :deep(code) {
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #b45309;
+  font-size: 12.5px;
+}
+
+.raw-rendered-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.raw-rendered-content :deep(.markdown-table-wrap) {
+  overflow-x: auto;
+  margin: 8px 0;
+  border-radius: 8px;
+  border: 1px solid #e8ecf2;
+}
+
+.raw-rendered-content :deep(.markdown-table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #fff;
+}
+
+.raw-rendered-content :deep(.markdown-table th),
+.raw-rendered-content :deep(.markdown-table td) {
+  border: 1px solid #eef1f6;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.raw-rendered-content :deep(.markdown-table th) {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
+}
+
+.raw-rendered-content :deep(h1),
+.raw-rendered-content :deep(h2),
+.raw-rendered-content :deep(h3) {
+  margin: 12px 0 7px;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.raw-rendered-content :deep(h1) { font-size: 19px; }
+.raw-rendered-content :deep(h2) { font-size: 16px; }
+.raw-rendered-content :deep(h3) { font-size: 14px; }
+
+.raw-rendered-content :deep(ul) {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+
+.raw-rendered-content :deep(blockquote) {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-left: 3px solid #93c5fd;
+  background: #f8fafc;
+  border-radius: 0 6px 6px 0;
+  color: #475569;
+}
+
+/* ===== Meta bar ===== */
 .bubble-meta {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f5f6f8;
   font-size: 11px;
-  color: #c0c4cc;
+  color: #bcc4d2;
 }
 
 .bubble-time {
@@ -3417,7 +4594,7 @@ export default {
   white-space: nowrap;
   border: 1px solid #dbeafe;
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 2px 9px;
   background: #eff6ff;
   color: #2563eb;
   font-size: 11px;
@@ -3433,150 +4610,14 @@ export default {
   color: #e6a23c;
 }
 
-.raw-collapse {
-  margin-top: 10px;
-  border-top: 1px solid #f0f0f0;
-  border-bottom: none;
-}
-
-.raw-rendered {
-  margin-top: 10px;
-  padding: 12px 13px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.raw-rendered-content {
-  font-size: 14px;
-  line-height: 1.68;
-  color: #1e293b;
-  word-wrap: break-word;
-}
-
-.raw-rendered-content :deep(p) {
-  margin: 0 0 8px;
-}
-
-.raw-rendered-content :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.raw-rendered-content :deep(pre) {
-  background: #111827;
-  color: #e5e7eb;
-  padding: 12px;
-  border-radius: 7px;
-  overflow: auto;
-  max-height: 420px;
-  font-size: 12px;
-  margin: 8px 0;
-  border: 1px solid #1f2937;
-}
-
-.raw-rendered-content :deep(code) {
-  background: #f1f5f9;
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: #b45309;
-}
-
-.raw-rendered-content :deep(pre code) {
-  background: transparent;
-  padding: 0;
-  color: inherit;
-}
-
-.raw-rendered-content :deep(.markdown-table-wrap) {
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.raw-rendered-content :deep(.markdown-table) {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  background: #fff;
-}
-
-.raw-rendered-content :deep(.markdown-table th),
-.raw-rendered-content :deep(.markdown-table td) {
-  border: 1px solid #e2e8f0;
-  padding: 7px 9px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.raw-rendered-content :deep(.markdown-table th) {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #334155;
-}
-
-.raw-rendered-content :deep(h1),
-.raw-rendered-content :deep(h2),
-.raw-rendered-content :deep(h3) {
-  margin: 10px 0 7px;
-  line-height: 1.35;
-  color: #0f172a;
-}
-
-.raw-rendered-content :deep(h1) {
-  font-size: 18px;
-}
-
-.raw-rendered-content :deep(h2) {
-  font-size: 16px;
-}
-
-.raw-rendered-content :deep(h3) {
-  font-size: 15px;
-}
-
-.raw-rendered-content :deep(ul) {
-  margin: 4px 0 8px;
-  padding-left: 20px;
-}
-
-.raw-rendered-content :deep(blockquote) {
-  margin: 8px 0;
-  padding: 7px 10px;
-  border-left: 3px solid #93c5fd;
-  background: #f8fafc;
-  color: #475569;
-}
-
-.raw-collapse :deep(.el-collapse-item__header) {
-  height: 32px;
-  line-height: 32px;
-  font-size: 12px;
-  color: #64748b;
-  border-bottom: none;
-}
-
-.raw-collapse :deep(.el-collapse-item__wrap) {
-  border-bottom: none;
-}
-
-.raw-output {
-  margin: 0;
-  padding: 10px;
-  max-height: 260px;
-  overflow: auto;
-  background: #0f172a;
-  color: #e2e8f0;
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.5;
-  text-align: left;
-  white-space: pre;
-}
-
+/* ===== Streaming indicator ===== */
 .streaming-line {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f3f8;
   font-size: 12px;
   color: #4080ff;
 }
@@ -3585,6 +4626,7 @@ export default {
   margin-top: 4px;
 }
 
+/* ===== Service dialogs ===== */
 .service-preview-dialog :deep(.el-dialog) {
   border-radius: 18px;
   overflow: hidden;

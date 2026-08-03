@@ -24,3 +24,30 @@ def test_grayscale_migration_runs_on_sqlite_and_preserves_disabled_flags():
         migrated = GrayscaleConfig.query.get(config.id)
         assert migrated.enabled is False
         assert migrated.visible is False
+
+
+def test_chat_tab_migration_preserves_operator_disabled_choice():
+    app = create_app("testing")
+
+    with app.app_context():
+        config = GrayscaleConfig.query.filter_by(
+            config_key="ui.chat.tabs.agent_config",
+            domain="common",
+        ).first()
+        assert config is not None
+
+        config.enabled = False
+        config.visible = False
+        db.session.commit()
+
+        from app import _migrate_grayscale_configs
+
+        _migrate_grayscale_configs()
+        db.session.expire_all()
+
+        migrated = GrayscaleConfig.query.filter_by(
+            config_key="ui.chat.tabs.agent_config",
+            domain="common",
+        ).one()
+        assert migrated.enabled is False
+        assert migrated.visible is False

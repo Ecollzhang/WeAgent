@@ -85,6 +85,16 @@ def public_profiles():
     return success_response({'items': auth_service.get_public_profiles(user_ids)})
 
 
+@auth_bp.route('/users', methods=['GET'])
+@jwt_required()
+def list_users():
+    """List all registered users (for member selection)."""
+    result, error = auth_service.list_users()
+    if error:
+        return error_response(error, code=500)
+    return success_response(result)
+
+
 @auth_bp.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():

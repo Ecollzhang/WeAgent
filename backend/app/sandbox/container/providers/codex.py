@@ -45,7 +45,13 @@ class CodexRunner(ProviderRunner):
 
     def build_command(self, message: str, retry_with_resume: bool = True) -> tuple[list[str], bool]:
         runtime = self.runtime
-        full_message = f"{runtime._runtime_instruction()}\n\n用户任务：\n{message}"
+        # 极简 prompt 结构：上下文 + 指令 + 任务
+        parts = []
+        if runtime.system_prompt:
+            parts.append(runtime.system_prompt)
+        parts.append(runtime._runtime_instruction())
+        parts.append(message)
+        full_message = "\n\n".join(parts)
         use_resume = retry_with_resume and os.path.exists(self.resume_marker)
         if use_resume:
             cmd = [

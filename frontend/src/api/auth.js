@@ -12,6 +12,10 @@ export function getProfile() {
   return service.get('/auth/profile')
 }
 
+export function getUsers() {
+  return service.get('/auth/users')
+}
+
 export function refreshToken() {
   return service.post('/auth/refresh')
 }

@@ -39,6 +39,11 @@ BUILTIN_TOOLSET_CATEGORIES = [
         "icon": "el-icon-setting", "color": "#f59e0b", "sort_order": 60,
     },
     {
+        "id": "tool_service", "domain": "rd",
+        "name": "领域服务", "slug": "tool_service",
+        "icon": "el-icon-connection", "color": "#8b5cf6", "sort_order": 70,
+    },
+    {
         "id": "tool_custom", "domain": "rd",
         "name": "自定义", "slug": "tool_custom",
         "icon": "el-icon-plus", "color": "#64748b", "sort_order": 999,

@@ -37,8 +37,13 @@ class OpenCodeRunner(ProviderRunner):
 
     def build_command(self, message: str, retry_with_resume: bool = True) -> tuple[list[str], bool]:
         runtime = self.runtime
-        full_message = f"{runtime._runtime_instruction()}\n\n用户任务：\n{message}"
-        final_reply_rule = (
+        parts = []
+        if runtime.system_prompt:
+            parts.append(runtime.system_prompt)
+        parts.append(runtime._runtime_instruction())
+        parts.append(message)
+        full_message = "\n\n".join(parts)
+        final_rule = (
             "OpenCode final response rule:\n"
             "- weagent-report is only for progress/artifact cards; it is not the final chat reply.\n"
             "- Before finishing, call weagent-report with type=summary and a concise user-facing summary.\n"
@@ -46,7 +51,7 @@ class OpenCodeRunner(ProviderRunner):
             "- The final assistant text must answer the user's request directly and must not be JSON or a weagent-report payload.\n"
             "- Do not end with placeholder text such as 'ready to reply', 'done', or 'task complete'.\n"
         )
-        full_message = f"{full_message}\n\n{final_reply_rule}"
+        full_message = f"{full_message}\n\n{final_rule}"
         use_continue = retry_with_resume and os.path.exists(self.resume_marker)
         cmd = [
             "opencode",
@@ -238,7 +243,7 @@ class OpenCodeRunner(ProviderRunner):
                             "name": model,
                             "limit": {
                                 "context": 128000,
-                                "output": 32000,
+                                "output": 65536,
                             },
                         },
                     },

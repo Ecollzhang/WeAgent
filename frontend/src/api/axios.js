@@ -10,8 +10,9 @@ const service = axios.create({
 // Request interceptor - attach JWT token
 service.interceptors.request.use(
   config => {
+    const isAuthRequest = config.url.includes('/auth/login') || config.url.includes('/auth/register')
     const token = localStorage.getItem('access_token')
-    if (token) {
+    if (token && !isAuthRequest) {
       config.headers.Authorization = `Bearer ${token}`
     }
     return config
@@ -37,7 +38,7 @@ service.interceptors.response.use(
 
       switch (status) {
         case 401:
-          if (config.url === '/auth/login' || config.url === '/auth/register') {
+          if (config.url.includes('/auth/login') || config.url.includes('/auth/register')) {
             Message.error(data?.message || '用户名或密码错误')
           } else {
             // Token expired or invalid
@@ -53,6 +54,11 @@ service.interceptors.response.use(
           Message.error(data?.message || 'Resource not found')
           break
         case 422:
+          // JWT token 无效时 flask_jwt_extended 返回 422
+          // 静默处理，让页面使用演示数据
+          if (config.url && config.url.includes('/domain/')) {
+            break
+          }
           Message.error(data?.message || 'Validation error')
           break
         case 500:

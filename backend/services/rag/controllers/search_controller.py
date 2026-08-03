@@ -84,8 +84,9 @@ def semantic_search():
     scope = g.rag_search_scope
     domain = scope.domain
     workspace_id = scope.workspace_id if scope.internal else None
+    document_ids = data.get('document_ids')  # optional: list of document IDs to filter by
 
-    # 构建 ChromaDB 过滤条件
+    # 构建过滤条件
     filter_meta = {}
     if domain:
         filter_meta['domain'] = domain
@@ -94,13 +95,16 @@ def semantic_search():
     if not filter_meta:
         filter_meta = None
 
-    # 生成 query embedding → 搜索 ChromaDB
+    # 生成 query embedding → 搜索
     try:
         query_emb = embedding_service.embed_single(query)
     except Exception as e:
         return _error(f'Embedding failed: {e}')
 
-    results = vector_service.search(query_emb, top_k=top_k, filter_meta=filter_meta)
+    results = vector_service.search(
+        query_emb, top_k=top_k, filter_meta=filter_meta,
+        document_ids=document_ids if document_ids else None,
+    )
 
     # 过滤低分结果
     if score_threshold > 0:

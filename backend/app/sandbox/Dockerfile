@@ -21,16 +21,16 @@ RUN apt-get update && apt-get install -y \
     && npm install @anthropic-ai/claude-code-linux-x64 --no-save \
     && node install.cjs \
     && cd / \
-    && npm install -g @openai/codex opencode-ai \
-    && pip install --no-cache-dir codex-relay \
     && fc-cache -fv \
     && npm cache clean --force \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && claude --version \
-    && codex --version \
-    && codex-relay --help >/dev/null \
-    && opencode --version
+    && claude --version
+
+# Optional tools — install failures are non-fatal
+RUN npm install -g @openai/codex 2>&1 || echo "[warn] @openai/codex unavailable"
+RUN npm install -g opencode-ai 2>&1 || echo "[warn] opencode-ai unavailable"
+RUN pip install --no-cache-dir codex-relay 2>&1 || echo "[warn] codex-relay unavailable"
 
 # ---- 安装 Orchestrator Python 依赖 ----
 RUN pip install --no-cache-dir flask requests simple-websocket

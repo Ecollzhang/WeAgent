@@ -50,3 +50,7 @@ export function deleteConversationAttachment(conversationId, path, agentId) {
     data: { path, agent_id: agentId },
   })
 }
+
+export function updateConversationKb(conversationId, data) {
+  return service.patch(`/conversations/${conversationId}/kb`, data)
+}

@@ -123,6 +123,12 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_server_fallback BOOLEAN NOT NULL DEFAULT 0'))
             if 'sandbox_agent_adapters' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_agent_adapters JSON DEFAULT NULL'))
+            if 'kb_document_ids' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_document_ids JSON DEFAULT NULL'))
+            if 'services' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN services JSON DEFAULT NULL'))
+            if 'project_id' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN project_id VARCHAR(36) DEFAULT NULL'))
             conn.commit()
 
     # workspaces table — sub_role column
@@ -245,6 +251,11 @@ def _migrate_grayscale_configs():
             'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
             'ui.sidebar.reports', 'ui.sidebar.schedules',
             'feature.education.enabled',
+            # RD 领域卡片
+            'ui.chat.card.requirement', 'ui.chat.card.bug', 'ui.chat.card.iteration', 'ui.chat.card.project',
+            # 聊天标签页
+            'ui.chat.tabs.agent_config', 'ui.chat.tabs.artifacts', 'ui.chat.tabs.logs',
+            'ui.chat.tabs.workflow', 'ui.chat.tabs.knowledge_base',
         }
         cleanup_statement = _text(
             "DELETE FROM grayscale_config WHERE config_key NOT IN :keys"
@@ -305,6 +316,45 @@ def _migrate_grayscale_configs():
                 "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
             ), {'key': key})
 
+        # 5. Ensure domain card configs exist in common
+        card_keys = [
+            ('ui.chat.card.requirement', '聊天-需求卡片'),
+            ('ui.chat.card.bug', '聊天-缺陷卡片'),
+            ('ui.chat.card.iteration', '聊天-迭代卡片'),
+            ('ui.chat.card.project', '聊天-项目卡片'),
+        ]
+        for key, name in card_keys:
+            exists = conn.execute(_text(
+                "SELECT id FROM grayscale_config WHERE config_key = :key AND domain = 'common'"
+            ), {'key': key}).first()
+            if not exists:
+                conn.execute(_text(
+                    "INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) "
+                    "VALUES (:key, :name, 'ui', 'common', 1, 1, :domains)"
+                ), {'key': key, 'name': name, 'domains': all_domains_json})
+            # Remove any per-domain duplicates
+            conn.execute(_text(
+                "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
+            ), {'key': key})
+
+        # 6. Ensure chat tab configs exist in common
+        chat_tab_keys = [
+            ('ui.chat.tabs.agent_config', '聊天标签-Agent配置'),
+            ('ui.chat.tabs.artifacts', '聊天标签-产物'),
+            ('ui.chat.tabs.logs', '聊天标签-日志'),
+            ('ui.chat.tabs.workflow', '聊天标签-工作流'),
+            ('ui.chat.tabs.knowledge_base', '聊天标签-知识库'),
+        ]
+        for key, name in chat_tab_keys:
+            exists = conn.execute(_text(
+                "SELECT id FROM grayscale_config WHERE config_key = :key AND domain = 'common'"
+            ), {'key': key}).first()
+            if not exists:
+                conn.execute(_text(
+                    "INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) "
+                    "VALUES (:key, :name, 'ui', 'common', 1, 1, :domains)"
+                ), {'key': key, 'name': name, 'domains': all_domains_json})
+
         conn.commit()
 
 
@@ -326,10 +376,19 @@ def _seed_grayscale_configs():
             ('ui.chat.workspace', '聊天-工作目录', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.chat.services', '聊天-预览服务', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.chat.attachments', '聊天-上传文件', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.tabs.agent_config', '聊天标签-Agent配置', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.tabs.artifacts', '聊天标签-产物', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.tabs.logs', '聊天标签-日志', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.tabs.workflow', '聊天标签-工作流', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.tabs.knowledge_base', '聊天标签-知识库', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.sidebar.agents', '侧边栏-我的Agent', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.sidebar.favorites', '侧边栏-我的收藏', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.sidebar.knowledge', '侧边栏-知识库', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.card.requirement', '聊天-需求卡片', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.card.bug', '聊天-缺陷卡片', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.card.iteration', '聊天-迭代卡片', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.card.project', '聊天-项目卡片', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             # ===== 智能研发 (rd) =====
             ('ui.sidebar.projects', '侧边栏-项目管理', 'ui', 'rd', 1, 1),
             ('ui.sidebar.repos', '侧边栏-代码仓库', 'ui', 'rd', 1, 1),

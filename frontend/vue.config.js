@@ -8,6 +8,10 @@ const ragHost = process.env.RAG_HOST || '127.0.0.1'
 const ragPort = process.env.RAG_PORT || '5104'
 const ragTarget = process.env.RAG_PROXY_TARGET || `http://${ragHost}:${ragPort}`
 
+const rdHost = process.env.RD_HOST || '127.0.0.1'
+const rdPort = process.env.RD_PORT || '5101'
+const rdTarget = process.env.RD_PROXY_TARGET || `http://${rdHost}:${rdPort}`
+
 module.exports = defineConfig({
   transpileDependencies: [],
   chainWebpack: (config) => {
@@ -47,6 +51,18 @@ module.exports = defineConfig({
     proxy: {
       '/api/rag': {
         target: ragTarget,
+        changeOrigin: true,
+      },
+      '/api/rd': {
+        target: rdTarget,
+        changeOrigin: true,
+      },
+      '/domain/rd': {
+        target: rdTarget,
+        changeOrigin: true,
+      },
+      '/domain': {
+        target: backendTarget,
         changeOrigin: true,
       },
       '/api': {

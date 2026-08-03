@@ -48,7 +48,7 @@ for (const fragment of [
   )
 }
 
-for (const fragment of ['作业满分', 'assignmentForm.max_score', 'max_score: this.assignmentForm.max_score']) {
+for (const fragment of ['fixed-score-card', 'max_score: 100', 'evaluation_json: {}']) {
   contains(
     'src/views/education/CourseSpace.vue',
     fragment,
