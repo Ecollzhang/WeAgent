@@ -283,6 +283,15 @@ class OrchestratorClient:
             timeout=_timeout_from_env("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", 5),
         )
 
+    def update_runtime_config(self, config: dict) -> dict:
+        """Hot-update allowlisted request-scoped runtime configuration."""
+        return self._request(
+            "POST",
+            "/api/config/runtime",
+            config,
+            timeout=_timeout_from_env("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", 5),
+        )
+
     # ---- Progress ----
 
     def get_agent_progress(self, agent_id: str) -> dict:

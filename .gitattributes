@@ -1,4 +1,4 @@
 *.pdf binary
 # Shell scripts and Python scripts copied into Linux containers must use LF
 *.sh text eol=lf
-app/sandbox/bin/* text eol=lf
+backend/app/sandbox/bin/* text eol=lf

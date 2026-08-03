@@ -34,6 +34,7 @@ class FakeManager:
         )
         self.destroyed = []
         self.restored = []
+        self.runtime_auth_updates = []
 
     def get_session(self, session_id):
         return self.session
@@ -50,6 +51,10 @@ class FakeManager:
     def destroy_session(self, session_id):
         self.destroyed.append(session_id)
         self.session = None
+
+    def update_runtime_auth(self, session_id, authorization):
+        self.runtime_auth_updates.append((session_id, authorization))
+        return {"status": "ok"}
 
 
 @pytest.fixture()
@@ -209,3 +214,24 @@ def test_stopped_runtime_rehydrates_snapshot_as_a_new_generation(lifecycle_app):
             "allow_server_fallback": True,
             "rehydrating": True,
         }
+
+
+def test_live_runtime_refreshes_user_authorization_from_current_request(
+    lifecycle_app,
+):
+    manager = FakeManager()
+    with lifecycle_app.test_request_context(
+        headers={"Authorization": "Bearer fresh-token"},
+    ):
+        conversation = Conversation.query.get("conversation-1")
+        result, error = conversation_service.ensure_sandbox_runtime(
+            conversation,
+            user_id="user-1",
+            manager=manager,
+        )
+
+    assert error is None
+    assert result["rehydrated"] is False
+    assert manager.runtime_auth_updates == [
+        ("conversation-1", "Bearer fresh-token"),
+    ]

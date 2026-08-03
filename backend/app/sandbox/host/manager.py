@@ -657,6 +657,23 @@ class DockerContainerManager:
                 config[key] = value
         return session.client.update_model_config(config)
 
+    def update_runtime_auth(self, session_id: str, authorization: str) -> dict:
+        """Refresh the user authorization inherited by new Agent processes."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        authorization = str(authorization or "").strip()
+        if (
+            not authorization.startswith("Bearer ")
+            or len(authorization) > 8192
+            or "\r" in authorization
+            or "\n" in authorization
+        ):
+            raise ValueError("valid user authorization required")
+        return session.client.update_runtime_config({
+            "USER_AUTH_TOKEN": authorization,
+        })
+
     def update_model_config_for_user_sessions(self, user_id: str, env_vars: dict) -> dict:
         """Hot-update model configuration for all running containers owned by a user."""
         self.recover_sessions()

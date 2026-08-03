@@ -5,6 +5,7 @@ frontend/.env
 frontend/.env.local
 frontend/.env.*.local
 backend/services/edu/data/uploads/
+backend/services/rag/uploads/
 backend/instance/
 
 # ===== Python 依赖 =====

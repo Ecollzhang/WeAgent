@@ -32,15 +32,19 @@ def service_status():
     except Exception as e:
         components['vector_store'] = f'error: {e}'
 
-    # 检查 Embedding 服务
-    if not embedding_service.configured:
-        components['embedding'] = 'not_configured'
+    # Probe the provider. A configured URL alone is not evidence of health.
+    embedding_status = embedding_service.health_status()
+    if embedding_status['healthy']:
+        components['embedding'] = (
+            "ok "
+            f"(provider: {embedding_status['provider']}, "
+            f"model: {embedding_status['model']}, "
+            f"dim: {embedding_status['dimension']})"
+        )
     else:
-        try:
-            dim = embedding_service.dimension
-            components['embedding'] = f'ok (provider: {embedding_service.provider}, model: {embedding_service.model}, dim: {dim})'
-        except Exception as e:
-            components['embedding'] = f'error: {e}'
+        components['embedding'] = (
+            f"error: {embedding_status.get('error', 'provider unavailable')}"
+        )
 
     all_ok = all(
         not str(v).startswith('error') and v != 'not_configured'

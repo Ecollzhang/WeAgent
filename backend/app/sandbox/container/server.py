@@ -442,6 +442,20 @@ def update_model_config():
     return jsonify(result)
 
 
+@app.route("/api/config/runtime", methods=["POST"])
+def update_runtime_config():
+    """Refresh allowlisted per-request runtime values without logging secrets."""
+    data = request.get_json(force=True) or {}
+    log_event(
+        "api_update_runtime_config",
+        has_user_auth=bool(data.get("USER_AUTH_TOKEN")),
+    )
+    result = orchestrator.update_runtime_config(data)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
 @app.route("/api/agents", methods=["GET"])
 def list_agents():
     log_event("api_list_agents", agent_count=len(orchestrator.agents))

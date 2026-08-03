@@ -16,7 +16,7 @@
           <div class="header-actions">
             <el-button size="small" icon="el-icon-edit" @click="openEditProject">编辑</el-button>
             <el-button size="small" icon="el-icon-chat-dot-round" type="primary" @click="startConversation">
-              新建对话
+              AI 对话
             </el-button>
           </div>
         </div>
@@ -1394,6 +1394,7 @@ import {
 } from './demoData'
 import * as rdApi from '@/api/rd'
 import { getUsers } from '@/api/auth'
+import { getConversations } from '@/api/conversation'
 
 export default {
   name: 'RdProjectDetail',
@@ -2227,8 +2228,26 @@ export default {
       return (this.requirements || []).filter(r => r.iteration_id === iterId && r.start_date && r.due_date)
     },
 
-    startConversation() {
+    async startConversation() {
       const domain = this.$store.getters['workspace/activeDomain'] || 'rd'
+      try {
+        const response = await getConversations()
+        const linkedConversation = (response?.data || []).find(
+          conversation =>
+            conversation.project_id === this.project.id &&
+            Array.isArray(conversation.services) &&
+            conversation.services.includes('rd')
+        )
+        if (linkedConversation) {
+          this.$router.push({
+            path: '/dashboard',
+            query: { conversation_id: linkedConversation.id, domain },
+          })
+          return
+        }
+      } catch (error) {
+        // The create-conversation flow below remains available if history fails.
+      }
       this.$router.push({ path: '/dashboard', query: { project_id: this.project.id, domain } })
     },
 

@@ -48,7 +48,17 @@ class Config:
     INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', os.getenv('RAG_INTERNAL_API_KEY', 'weagent-rag-internal-key'))
 
     # ── Embedding 模型 ──────────────────────────────────────
-    EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'ollama')  # 'ollama' | 'openai'
-    EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'nomic-embed-text:latest')
+    EMBEDDING_PROVIDER = os.getenv(
+        'EMBEDDING_PROVIDER',
+        'local',
+    )  # 'local' | 'ollama' | 'openai'
+    EMBEDDING_MODEL = os.getenv(
+        'EMBEDDING_MODEL',
+        (
+            'local-hash-embedding-v1'
+            if EMBEDDING_PROVIDER == 'local'
+            else 'nomic-embed-text:latest'
+        ),
+    )
     EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', '')
     EMBEDDING_BASE_URL = os.getenv('EMBEDDING_BASE_URL', 'http://localhost:11434')

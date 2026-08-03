@@ -133,6 +133,10 @@ def test_hidden_execution_context_is_dispatched_but_not_saved_as_user_content(
         "app.services.message_service.threading.Thread",
         ImmediateThread,
     )
+    monkeypatch.setattr(
+        "app.services.conversation_service.conversation_service.ensure_sandbox_runtime",
+        lambda conversation, user_id=None: (object(), None),
+    )
 
     with app.app_context():
         conversation = Conversation(

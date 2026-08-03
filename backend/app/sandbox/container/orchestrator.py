@@ -2014,6 +2014,19 @@ class Orchestrator:
             "agents": list(self.agents.keys()),
         }
 
+    def update_runtime_config(self, config: dict) -> dict:
+        """Refresh narrowly allowlisted runtime values for a live session."""
+        authorization = str(config.get("USER_AUTH_TOKEN") or "").strip()
+        if (
+            not authorization.startswith("Bearer ")
+            or len(authorization) > 8192
+            or "\r" in authorization
+            or "\n" in authorization
+        ):
+            return {"error": "valid USER_AUTH_TOKEN required"}
+        os.environ["USER_AUTH_TOKEN"] = authorization
+        return {"status": "ok", "updated": ["USER_AUTH_TOKEN"]}
+
     # ---- Internal ----
 
     def _with_capability_bootstrap(self, agent_id: str, system_prompt: str) -> str:

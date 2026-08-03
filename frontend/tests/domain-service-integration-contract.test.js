@@ -30,6 +30,19 @@ assert.ok(
     projectDetail.includes('project_id: this.project.id'),
   'RD project pages must carry project context into the conversation shortcut'
 )
+assert.ok(
+  projectDetail.includes("import { getConversations } from '@/api/conversation'") &&
+    projectDetail.includes('conversation.project_id === this.project.id') &&
+    projectDetail.includes("query: { conversation_id: linkedConversation.id, domain }"),
+  'RD project pages must reopen a linked conversation before offering to create another one'
+)
+
+const chatWindow = read('src/components/ChatWindow/index.vue')
+assert.ok(
+  chatWindow.includes('this.conversation?.project_id') &&
+    chatWindow.includes("this.$router.push(`/rd/projects/${this.conversation.project_id}`)"),
+  'an RD conversation must provide a direct return path to its project'
+)
 
 const bubble = read('src/components/MessageBubble/index.vue')
 for (const key of [

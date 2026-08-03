@@ -30,6 +30,36 @@ def test_model_config_update_uses_short_timeout(monkeypatch):
     ]
 
 
+def test_runtime_config_update_uses_short_timeout(monkeypatch):
+    calls = []
+
+    def fake_request(self, method, path, body=None, timeout=None):
+        calls.append({
+            "method": method,
+            "path": path,
+            "body": body,
+            "timeout": timeout,
+        })
+        return {"status": "ok"}
+
+    monkeypatch.setenv("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", "4")
+    monkeypatch.setattr(OrchestratorClient, "_request", fake_request)
+
+    result = OrchestratorClient().update_runtime_config({
+        "USER_AUTH_TOKEN": "Bearer fresh-token",
+    })
+
+    assert result == {"status": "ok"}
+    assert calls == [
+        {
+            "method": "POST",
+            "path": "/api/config/runtime",
+            "body": {"USER_AUTH_TOKEN": "Bearer fresh-token"},
+            "timeout": 4,
+        }
+    ]
+
+
 def test_health_check_uses_short_timeout(monkeypatch):
     calls = []
 

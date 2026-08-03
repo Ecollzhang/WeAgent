@@ -405,6 +405,17 @@ class MessageService:
             has_agent = any(p.participant_type == 'agent'
                             for p in conversation.participants)
             if has_agent:
+                from app.services.conversation_service import conversation_service
+                _, runtime_error = conversation_service.ensure_sandbox_runtime(
+                    conversation,
+                    user_id=conversation.owner_id,
+                )
+                if runtime_error:
+                    self._emit_system_error(
+                        conversation.id,
+                        f'沙箱恢复失败，聊天和既有产物仍已保留：{runtime_error}',
+                    )
+                    return result, None
                 dispatch_content = (
                     str(execution_context)
                     if execution_context and conversation.kb_domain == 'edu'

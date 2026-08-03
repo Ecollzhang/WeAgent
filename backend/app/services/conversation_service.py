@@ -55,15 +55,28 @@ def _fetch_service_spec_cached(name, ttl=300):
     base_url = SERVICE_REGISTRY_URLS.get(name, "")
     if not base_url:
         return None
-    try:
-        resp = _requests.get(f"{base_url}/api/{name}/spec", timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            spec = data.get("data", data)
-            _spec_cache[name] = (spec, now + ttl)
-            return spec
-    except Exception:
-        pass
+    discovery_urls = [base_url]
+    if "://host.docker.internal" in base_url:
+        discovery_urls.append(
+            base_url.replace(
+                "://host.docker.internal",
+                "://127.0.0.1",
+                1,
+            )
+        )
+    for discovery_url in discovery_urls:
+        try:
+            resp = _requests.get(
+                f"{discovery_url}/api/{name}/spec",
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                spec = data.get("data", data)
+                _spec_cache[name] = (spec, now + ttl)
+                return spec
+        except Exception:
+            continue
     return None
 
 
@@ -845,6 +858,16 @@ class ConversationService:
             else None
         )
         if session and getattr(session, '_check_alive', lambda: True)():
+            authorization = _current_authorization_header()
+            refresh_auth = getattr(manager, 'update_runtime_auth', None)
+            if authorization and callable(refresh_auth):
+                try:
+                    refresh_auth(
+                        conversation.sandbox_session_id,
+                        authorization,
+                    )
+                except Exception as exc:
+                    return None, f'刷新沙箱领域服务授权失败：{exc}'
             conversation.sandbox_status = 'running'
             conversation.last_active_at = beijing_now()
             conversation.sandbox_expires_at = (

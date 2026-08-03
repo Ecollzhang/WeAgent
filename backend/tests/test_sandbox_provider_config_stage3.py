@@ -89,6 +89,22 @@ class ProviderConfigStage3Test(unittest.TestCase):
             self.assertEqual("1", os.environ["CODEX_USE_RELAY"])
             self.assertEqual("https://token-plan-cn.xiaomimimo.com/v1", result["codex_base_url"])
 
+    def test_update_runtime_config_refreshes_only_user_authorization(self):
+        with patch("app.sandbox.container.orchestrator.os.makedirs"), \
+             patch("app.sandbox.container.orchestrator.trust_projects"), \
+             patch("app.sandbox.container.orchestrator.register_builtin_tools"), \
+             patch("app.sandbox.container.orchestrator.log_event"), \
+             patch.dict(os.environ, {}, clear=True):
+            orchestrator = Orchestrator()
+            result = orchestrator.update_runtime_config({
+                "USER_AUTH_TOKEN": "Bearer fresh-token",
+                "RAG_SCOPE_DOMAIN": "forbidden-override",
+            })
+
+            self.assertEqual({"status": "ok", "updated": ["USER_AUTH_TOKEN"]}, result)
+            self.assertEqual("Bearer fresh-token", os.environ["USER_AUTH_TOKEN"])
+            self.assertNotIn("RAG_SCOPE_DOMAIN", os.environ)
+
     def test_unexpected_provider_status_is_runtime_error(self):
         self.assertTrue(Orchestrator._is_agent_runtime_error(
             "unexpected status 404 Not Found, url: https://example.com/responses"
