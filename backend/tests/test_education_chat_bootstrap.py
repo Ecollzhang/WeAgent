@@ -270,7 +270,7 @@ def test_course_bootstrap_is_the_only_no_course_conversation_and_binds_on_create
     assert payload["binding"]["binding_mode"] == "course_bootstrap"
     assert payload["context"]["membership_role"] == "course_creator"
     assert payload["agent_service_views"] == {"_edu_1": ["edu"]}
-    assert runtime.created[-1]["workspace_role"] == ""
+    assert runtime.created[-1]["workspace_role"] == "course_creator"
 
     grant = runtime.created[-1]["education_run_grant"]
     adopted = client.post(

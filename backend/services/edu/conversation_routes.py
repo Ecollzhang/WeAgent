@@ -265,7 +265,13 @@ def bootstrap_conversation():
             authorization=authorization,
             title=title,
             agent_ids=list(agent_service_views),
-            workspace_role=membership.role if membership else "",
+            workspace_role=(
+                membership.role
+                if membership
+                else "course_creator"
+                if binding_mode == "course_bootstrap"
+                else ""
+            ),
             services=services,
             agent_service_views=agent_service_views,
             visible_context=visible_context,

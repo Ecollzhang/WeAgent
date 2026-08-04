@@ -2,10 +2,26 @@
   <div class="chat-window">
     <div class="chat-header" v-if="conversation">
       <div class="header-left">
-        <h3
-          :class="{ 'compact-education-title': compactEducationTitle }"
-          :title="compactEducationTitle ? conversation.title : null"
-        >{{ conversation.title }}</h3>
+        <el-popover
+          v-if="compactEducationTitle"
+          placement="bottom-start"
+          width="420"
+          trigger="click"
+          popper-class="education-title-popover"
+        >
+          <div class="education-title-card">
+            <span class="education-title-card__eyebrow">智慧教育会话</span>
+            <strong>{{ conversation.title }}</strong>
+            <span class="education-title-card__meta">{{ participantCount }} 个参与者 · 点击标题可随时查看完整名称</span>
+          </div>
+          <h3
+            slot="reference"
+            class="compact-education-title"
+            :title="conversation.title"
+            tabindex="0"
+          >{{ conversation.title }}</h3>
+        </el-popover>
+        <h3 v-else>{{ conversation.title }}</h3>
         <span class="participant-count">
           {{ participantCount }} 个参与者
         </span>
@@ -1737,10 +1753,44 @@ export default {
 }
 
 .header-left h3.compact-education-title {
+  cursor: pointer;
   overflow: hidden;
   max-width: clamp(320px, 48vw, 680px);
   white-space: nowrap;
   text-overflow: ellipsis;
+  transition: color 0.18s ease;
+}
+
+.header-left h3.compact-education-title:hover,
+.header-left h3.compact-education-title:focus {
+  color: #476582;
+  outline: none;
+}
+
+.education-title-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 4px 2px;
+  color: #1e293b;
+}
+
+.education-title-card__eyebrow {
+  color: #8291a7;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.education-title-card strong {
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.education-title-card__meta {
+  color: #94a3b8;
+  font-size: 12px;
 }
 
 .header-left .text-primary {

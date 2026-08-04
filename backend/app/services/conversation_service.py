@@ -235,6 +235,7 @@ def _trusted_education_runtime_env(agent_configs, kb_domain=''):
     if kb_domain != 'edu' or not isinstance(agent_configs, dict):
         return {}
     grants = set()
+    membership_roles = set()
     for config in agent_configs.values():
         if not isinstance(config, dict):
             continue
@@ -244,22 +245,32 @@ def _trusted_education_runtime_env(agent_configs, kb_domain=''):
         token = str(context.get('run_grant') or '').strip()
         if token:
             grants.add(token)
+        membership_role = str(
+            context.get('membership_role') or ''
+        ).strip()
+        if membership_role:
+            membership_roles.add(membership_role)
     if not grants:
         return {}
     if len(grants) != 1:
         raise ValueError('conflicting Education run grants')
+    if len(membership_roles) > 1:
+        raise ValueError('conflicting Education membership roles')
     token = grants.pop()
     import re
     if not re.fullmatch(r'[A-Za-z0-9._~-]{20,256}', token):
         raise ValueError('invalid Education run grant')
     import os
-    return {
+    environment = {
         'EDUCATION_RUN_GRANT': token,
         'EDUCATION_SERVICE_URL': os.getenv(
             'EDUCATION_SERVICE_URL',
             'http://host.docker.internal:5102',
         ).rstrip('/'),
     }
+    if membership_roles:
+        environment['EDUCATION_MEMBERSHIP_ROLE'] = membership_roles.pop()
+    return environment
 
 
 def _validate_education_runtime_grant(token, actor_user_id):
@@ -1074,13 +1085,13 @@ class ConversationService:
                             'agent_service_views'
                         ],
                         'services': education_context['services'],
+                        'membership_role': education_context.get(
+                            'membership_role'
+                        ),
                     }
                     if education_context.get('course_id'):
                         refresh_kwargs.update({
                             'course_id': education_context['course_id'],
-                            'membership_role': education_context.get(
-                                'membership_role'
-                            ),
                             'actor_user_id': user_id,
                         })
                     refresh_result = refresh_context(

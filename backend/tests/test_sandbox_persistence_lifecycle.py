@@ -270,9 +270,10 @@ def test_live_runtime_refreshes_user_authorization_from_current_request(
                 "authorization": "Bearer fresh-token",
                 "run_grant": "A" * 48,
                 "service_url": "http://host.docker.internal:5102",
-                "agent_service_views": {"agent-1": ["edu", "rag"]},
-                "services": ["edu", "rag"],
-            },
+                    "agent_service_views": {"agent-1": ["edu", "rag"]},
+                    "services": ["edu", "rag"],
+                    "membership_role": "teacher",
+                },
         )
     ]
 

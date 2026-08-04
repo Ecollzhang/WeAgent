@@ -967,16 +967,27 @@ export default {
           this.conversationSelectionKey(workspaceId)
         ) || ''
       } catch (error) {
-        return false
+        // Fall back to a visible workspace conversation below.
       }
-      if (!conversationId) return false
-      const conversation = this.conversations.find(item => (
+      const routeConversationId = String(this.$route.query.conversation_id || '')
+      const routeConversation = this.conversations.find(item => (
+        item.id === routeConversationId && item.workspace_id === workspaceId
+      ))
+      let conversation = routeConversation || this.conversations.find(item => (
         item.id === conversationId && item.workspace_id === workspaceId
       ))
-      if (!conversation) {
-        window.localStorage.removeItem(this.conversationSelectionKey(workspaceId))
-        return false
+      if (!conversation && conversationId) {
+        try {
+          window.localStorage.removeItem(this.conversationSelectionKey(workspaceId))
+        } catch (error) {
+          // Browser storage is optional; the workspace fallback remains usable.
+        }
       }
+      const fallbackConversation = this.conversations.find(
+        item => item.workspace_id === workspaceId
+      )
+      conversation = conversation || fallbackConversation
+      if (!conversation) return false
       if (this.currentConversation?.id !== conversation.id) {
         this.handleSelectConversation(conversation)
       }

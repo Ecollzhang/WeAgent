@@ -71,6 +71,23 @@ def test_education_runtime_context_is_not_added_outside_education_sessions():
     }
 
 
+def test_education_runtime_context_projects_trusted_course_creator_role():
+    configs = {
+        "_edu_1": {
+            "education_tool_context": {
+                "run_grant": "A" * 48,
+                "membership_role": "course_creator",
+            }
+        }
+    }
+
+    assert _trusted_education_runtime_env(configs, kb_domain="edu") == {
+        "EDUCATION_RUN_GRANT": "A" * 48,
+        "EDUCATION_SERVICE_URL": "http://host.docker.internal:5102",
+        "EDUCATION_MEMBERSHIP_ROLE": "course_creator",
+    }
+
+
 def test_education_runtime_context_rejects_malformed_or_conflicting_grants():
     malformed = {
         "_edu_1": {"education_tool_context": {"run_grant": "short"}}

@@ -390,3 +390,42 @@ def test_literal_tool_provider_receives_exact_authorized_tool_contracts():
     assert '"service_name":"edu"' in prompt
     assert '"query_params":{}' in prompt
     assert "Never invent payload, params, service, workspaceId" in prompt
+
+
+def test_course_creator_receives_one_exact_bounded_course_create_contract():
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    provider = type("Provider", (), {"requires_literal_tool_calls": True})()
+    agent = type(
+        "Agent",
+        (),
+        {
+            "role": "Course designer",
+            "workspace_name": "course-designer",
+            "provider_runner": provider,
+        },
+    )()
+    orchestrator.agents = {"_edu_1": agent}
+    orchestrator.capability_projection = {
+        "agents": {
+            "_edu_1": {
+                "tool_index": [{
+                    "name": "Education operations",
+                    "description": "Course-scoped actions",
+                    "tool_names": ["education_action"],
+                    "status": "implemented",
+                }]
+            }
+        }
+    }
+
+    with patch.dict(
+        os.environ,
+        {"EDUCATION_MEMBERSHIP_ROLE": "course_creator"},
+    ):
+        prompt = orchestrator._tool_instructions("_edu_1")
+
+    assert '"action":"edu.course.create"' in prompt
+    assert '"subject_code":"high_school_english"' in prompt
+    assert '"grade_band":"senior_high"' in prompt
+    assert "Do not call edu.course.context.get" in prompt
+    assert "one stable unique idempotency_key" in prompt

@@ -119,6 +119,7 @@ class ProviderConfigStage3Test(unittest.TestCase):
                 "USER_AUTH_TOKEN": "Bearer fresh-token",
                 "EDUCATION_RUN_GRANT": "A" * 48,
                 "EDUCATION_SERVICE_URL": "http://host.docker.internal:5102",
+                "EDUCATION_MEMBERSHIP_ROLE": "course_creator",
                 "AGENT_SERVICE_VIEWS": '{"_edu_1":["edu","rag"]}',
                 "CONVERSATION_SERVICES": '["edu","rag"]',
                 "RAG_SCOPE_USER_ID": "teacher-1",
@@ -135,6 +136,10 @@ class ProviderConfigStage3Test(unittest.TestCase):
             )
             self.assertEqual("course-1", os.environ["RAG_SCOPE_WORKSPACE_ID"])
             self.assertEqual("teacher", os.environ["RAG_SCOPE_EDUCATION_ROLE"])
+            self.assertEqual(
+                "course_creator",
+                os.environ["EDUCATION_MEMBERSHIP_ROLE"],
+            )
 
     def test_unexpected_provider_status_is_runtime_error(self):
         self.assertTrue(Orchestrator._is_agent_runtime_error(

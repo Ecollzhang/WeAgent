@@ -1001,14 +1001,32 @@ class Orchestrator:
             }
         contracts = []
         if "education_action" in names:
-            contracts.append(
-                '- education_action read example: '
-                '<tool_call>{"name":"education_action","args":'
-                '{"action":"edu.course.context.get"}}</tool_call>. '
-                'For writes, args may additionally contain "arguments":{} '
-                'and a stable unique "idempotency_key". Trusted course, '
-                'lesson, user, role and authorization scope is server-injected.'
-            )
+            if os.environ.get("EDUCATION_MEMBERSHIP_ROLE") == "course_creator":
+                contracts.append(
+                    '- course bootstrap has exactly one write action: '
+                    'edu.course.create. Do not call edu.course.context.get, '
+                    'rag_search, list_services, or call_service_api first. '
+                    'Call it once with this exact shape: '
+                    '<tool_call>{"name":"education_action","args":'
+                    '{"action":"edu.course.create","arguments":'
+                    '{"title":"...","subject_code":"high_school_english",'
+                    '"grade_band":"senior_high","description":"..."},'
+                    '"idempotency_key":"..."}}</tool_call>. '
+                    'The only other supported subject pair is '
+                    'subject_code "primary_chinese" with grade_band "primary". '
+                    'Use one stable unique idempotency_key and never reuse it '
+                    'with different arguments. Return the trusted tool result; '
+                    'do not create a substitute HTML or file card.'
+                )
+            else:
+                contracts.append(
+                    '- education_action read example: '
+                    '<tool_call>{"name":"education_action","args":'
+                    '{"action":"edu.course.context.get"}}</tool_call>. '
+                    'For writes, args may additionally contain "arguments":{} '
+                    'and a stable unique "idempotency_key". Trusted course, '
+                    'lesson, user, role and authorization scope is server-injected.'
+                )
         if "rag_search" in names:
             contracts.append(
                 '- rag_search exact shape: '
@@ -2159,13 +2177,18 @@ class Orchestrator:
             "AGENT_SERVICE_VIEWS",
             "CONVERSATION_SERVICES",
         }
+        education_role_keys = {"EDUCATION_MEMBERSHIP_ROLE"}
         education_rag_keys = {
             "RAG_SCOPE_USER_ID",
             "RAG_SCOPE_DOMAIN",
             "RAG_SCOPE_WORKSPACE_ID",
             "RAG_SCOPE_EDUCATION_ROLE",
         }
-        if education_keys.intersection(config) or education_rag_keys.intersection(config):
+        if (
+            education_keys.intersection(config)
+            or education_role_keys.intersection(config)
+            or education_rag_keys.intersection(config)
+        ):
             if not education_keys.issubset(config):
                 return {"error": "complete Education runtime scope required"}
             if (
@@ -2186,6 +2209,15 @@ class Orchestrator:
                 or "\n" in service_url
             ):
                 return {"error": "valid EDUCATION_SERVICE_URL required"}
+            membership_role = str(
+                config.get("EDUCATION_MEMBERSHIP_ROLE") or ""
+            ).strip()
+            if (
+                education_role_keys.intersection(config)
+                and membership_role
+                not in {"teacher", "student", "course_creator"}
+            ):
+                return {"error": "valid Education membership role required"}
             try:
                 views = json.loads(str(config["AGENT_SERVICE_VIEWS"]))
                 services = json.loads(str(config["CONVERSATION_SERVICES"]))
@@ -2226,10 +2258,18 @@ class Orchestrator:
                 )
             ):
                 return {"error": "valid Education service scope required"}
-            for key in education_keys | (
-                education_rag_keys
-                if education_rag_keys.issubset(config)
-                else set()
+            for key in (
+                education_keys
+                | (
+                    education_role_keys
+                    if education_role_keys.issubset(config)
+                    else set()
+                )
+                | (
+                    education_rag_keys
+                    if education_rag_keys.issubset(config)
+                    else set()
+                )
             ):
                 os.environ[key] = str(config[key])
                 updated.append(key)

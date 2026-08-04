@@ -746,6 +746,7 @@ class DockerContainerManager:
                 "USER_AUTH_TOKEN": authorization,
                 "EDUCATION_RUN_GRANT": run_grant,
                 "EDUCATION_SERVICE_URL": service_url,
+                "EDUCATION_MEMBERSHIP_ROLE": str(membership_role or ""),
                 "AGENT_SERVICE_VIEWS": json.dumps(agent_service_views),
                 "CONVERSATION_SERVICES": json.dumps(services),
         }

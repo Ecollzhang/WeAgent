@@ -8,7 +8,9 @@ const read = relPath => fs.readFileSync(path.join(root, relPath), 'utf8')
 const dashboard = read('src/views/Dashboard.vue')
 assert.ok(
   dashboard.includes('rememberConversationSelection') &&
-    dashboard.includes('restoreConversationSelection'),
+    dashboard.includes('restoreConversationSelection') &&
+    dashboard.includes('fallbackConversation') &&
+    dashboard.includes('routeConversation'),
   'chat selection must survive refresh and workspace switches instead of hiding the composer'
 )
 
@@ -16,8 +18,9 @@ const chatWindow = read('src/components/ChatWindow/index.vue')
 assert.ok(
   chatWindow.includes("'ui.chat.header.compact_title'") &&
     chatWindow.includes('compact-education-title') &&
-    chatWindow.includes(':title="compactEducationTitle ? conversation.title : null"'),
-  'Education chat titles must use a gray-controlled single-line tooltip treatment'
+    chatWindow.includes('education-title-popover') &&
+    chatWindow.includes('trigger="click"'),
+  'Education chat titles must use a gray-controlled single-line click popover treatment'
 )
 
 const courseware = read('src/views/education/CoursewareLibrary.vue')
