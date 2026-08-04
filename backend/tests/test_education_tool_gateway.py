@@ -1,9 +1,51 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from flask_jwt_extended import create_access_token
 
 from services.edu.extensions import db
+
+
+def test_courseware_version_visual_error_lists_page_and_code():
+    from services.edu.tool_gateway import (
+        ToolGatewayError,
+        _validate_version_payload,
+    )
+
+    report = {
+        "status": "warning",
+        "slides": [{
+            "number": 3,
+            "status": "warning",
+            "findings": [{
+                "code": "slide_text_dense",
+                "message": "shorten the slide",
+                "severity": "warning",
+            }],
+        }],
+    }
+    with (
+        patch(
+            "services.edu.runtime_client.validate_education_artifact",
+            return_value={"ok": True},
+        ),
+        patch(
+            "services.edu.presentation_quality.inspect_slide_document",
+            return_value=report,
+        ),
+        pytest.raises(ToolGatewayError) as caught,
+    ):
+        _validate_version_payload(
+            SimpleNamespace(kind="slide_document"),
+            {"title": "Deck", "slides": []},
+            "<!doctype html><html><body>" + ("preview " * 12) + "</body></html>",
+        )
+
+    assert caught.value.error_code == "courseware_visual_quality_failed"
+    assert '"slide": 3' in caught.value.message
+    assert "slide_text_dense" in caught.value.message
 
 
 class ToolGatewayTestConfig:
@@ -73,6 +115,11 @@ def issue_grant(client, headers, course_id, tools):
             "allowed_tools": tools,
             "agent_run_id": "agent-run-1",
             "capability_ids": ["builtin-education-actions"],
+            "confirmed_actions": (
+                ["edu.course.members.import"]
+                if "edu.course.members.import" in tools
+                else []
+            ),
         },
     )
     assert response.status_code == 201
@@ -602,6 +649,164 @@ def test_lesson_scoped_run_injects_lesson_into_courseware_write(app):
 
         version = EducationContentVersion.query.get(created["version"]["id"])
         assert version.source_agent_run_id == "scoped-agent-run"
+
+
+def test_chat_tools_update_lesson_and_append_courseware_version(app):
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Original lesson title",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    grant = issue_grant(
+        client,
+        teacher,
+        course["id"],
+        [
+            "edu.lesson.update",
+            "edu.courseware.create",
+            "edu.courseware.get",
+            "edu.courseware.version.create",
+        ],
+    )
+
+    updated = invoke(
+        client,
+        grant["token"],
+        "edu.lesson.update",
+        {
+            "lesson_id": lesson["id"],
+            "title": "Evidence to inference",
+            "duration_minutes": 50,
+        },
+        "lesson-update-1",
+    )
+    assert updated.status_code == 200
+    assert updated.get_json()["result"]["title"] == "Evidence to inference"
+    assert updated.get_json()["result"]["duration_minutes"] == 50
+
+    created = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "lesson_id": lesson["id"],
+            "kind": "rich_document",
+            "schema_name": "weagent.education.rich-document",
+            "source_json": {
+                "title": "Teacher handout",
+                "sections": [{"title": "Evidence", "body": "First draft"}],
+            },
+            "rendered_html": "<article><h1>Teacher handout</h1></article>",
+        },
+        "courseware-create-1",
+    ).get_json()["result"]
+    content_id = created["content"]["id"]
+
+    read = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.get",
+        {"content_id": content_id},
+        agent_id="_edu_2",
+    )
+    assert read.status_code == 200
+    assert read.get_json()["result"]["version"]["version_number"] == 1
+
+    versioned = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.version.create",
+        {
+            "content_id": content_id,
+            "source_json": {
+                "title": "Teacher handout",
+                "sections": [
+                    {"title": "Evidence", "body": "Revised second draft"}
+                ],
+            },
+            "rendered_html": "<article><h1>Teacher handout v2</h1></article>",
+            "change_summary": "Revise evidence scaffold",
+        },
+        "courseware-version-2",
+        agent_id="_edu_2",
+    )
+    assert versioned.status_code == 200
+    result = versioned.get_json()["result"]
+    assert result["version"]["version_number"] == 2
+    assert result["version"]["parent_version_id"] == created["version"]["id"]
+
+    with app.app_context():
+        from services.edu.content_models import EducationContentVersion
+
+        assert EducationContentVersion.query.filter_by(
+            content_id=content_id
+        ).count() == 2
+
+
+def test_tool_grant_is_bound_to_agents_and_injects_default_lesson(app):
+    client = app.test_client()
+    teacher, _, course = setup_course(client, app)
+    lesson = client.post(
+        f"/api/edu/courses/{course['id']}/lessons",
+        headers=teacher,
+        json={
+            "title": "Server scoped lesson",
+            "learning_domain": "integrated",
+            "text_genre_code": "narrative",
+            "lesson_type_code": "reading_writing",
+            "duration_minutes": 45,
+        },
+    ).get_json()
+    response = client.post(
+        "/api/edu/tool-grants",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "lesson_id": lesson["id"],
+            "agent_ids": ["_edu_2"],
+            "allowed_tools": ["edu.courseware.create"],
+        },
+    )
+    assert response.status_code == 201
+    grant = response.get_json()
+
+    rejected = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "kind": "rich_document",
+            "schema_name": "weagent.education.rich-document",
+            "source_json": {"title": "Forbidden caller"},
+        },
+        "wrong-agent-1",
+        agent_id="_edu_1",
+    )
+    assert rejected.status_code == 403
+    assert rejected.get_json()["error_code"] == "agent_not_in_grant"
+
+    accepted = invoke(
+        client,
+        grant["token"],
+        "edu.courseware.create",
+        {
+            "kind": "rich_document",
+            "schema_name": "weagent.education.rich-document",
+            "source_json": {"title": "Scoped content"},
+        },
+        "right-agent-1",
+        agent_id="_edu_2",
+    )
+    assert accepted.status_code == 200
+    assert accepted.get_json()["result"]["content"]["lesson_id"] == lesson["id"]
 
 
 def test_courseware_tool_rejects_noncanonical_lesson_plan_objects(app):

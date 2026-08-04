@@ -28,6 +28,7 @@ def test_internal_search_scope_rejects_model_requested_workspace_override():
                 "X-WeAgent-User-ID": "teacher-1",
                 "X-WeAgent-Domain": "edu",
                 "X-WeAgent-Workspace-ID": "workspace-allowed",
+                "X-WeAgent-Education-Role": "teacher",
             },
             payload={
                 "domain": "edu",
@@ -48,6 +49,55 @@ def test_jwt_search_scope_is_bound_to_authenticated_user():
     assert scope.domain == "edu"
     assert scope.workspace_id == "workspace-1"
     assert scope.internal is False
+
+
+def test_internal_education_scope_requires_a_course_role():
+    with pytest.raises(PermissionError, match="role"):
+        resolve_search_scope(
+            internal=True,
+            headers={
+                "X-WeAgent-User-ID": "teacher-1",
+                "X-WeAgent-Domain": "edu",
+                "X-WeAgent-Workspace-ID": "course-1",
+            },
+            payload={"domain": "edu", "workspace_id": "course-1"},
+        )
+
+
+def test_student_scope_cannot_read_teacher_private_course_document():
+    teacher_scope = resolve_search_scope(
+        internal=True,
+        headers={
+            "X-WeAgent-User-ID": "teacher-1",
+            "X-WeAgent-Domain": "edu",
+            "X-WeAgent-Workspace-ID": "course-1",
+            "X-WeAgent-Education-Role": "teacher",
+        },
+        payload={"domain": "edu", "workspace_id": "course-1"},
+    )
+    student_scope = resolve_search_scope(
+        internal=True,
+        headers={
+            "X-WeAgent-User-ID": "student-1",
+            "X-WeAgent-Domain": "edu",
+            "X-WeAgent-Workspace-ID": "course-1",
+            "X-WeAgent-Education-Role": "student",
+        },
+        payload={"domain": "edu", "workspace_id": "course-1"},
+    )
+    document = type(
+        "DocumentStub",
+        (),
+        {
+            "domain": "edu",
+            "workspace_id": "course-1",
+            "user_id": "teacher-1",
+            "extra_meta": {"visibility_scope": "course_teacher"},
+        },
+    )()
+
+    assert access_scope.document_allowed(document, teacher_scope) is True
+    assert access_scope.document_allowed(document, student_scope) is False
 
 
 class _Response:
@@ -80,7 +130,9 @@ def test_sandbox_rag_search_uses_server_scope_not_tool_arguments():
         "RAG_SCOPE_USER_ID": "teacher-1",
         "RAG_SCOPE_DOMAIN": "edu",
         "RAG_SCOPE_WORKSPACE_ID": "workspace-allowed",
+        "RAG_SCOPE_EDUCATION_ROLE": "teacher",
         "RAG_INTERNAL_API_KEY": "test-only",
+        "AGENT_SERVICE_VIEWS": json.dumps({"_edu_1": ["edu", "rag"]}),
     }
     with (
         patch.dict("os.environ", env, clear=False),
@@ -90,12 +142,14 @@ def test_sandbox_rag_search_uses_server_scope_not_tool_arguments():
             "lesson",
             domain="rd",
             workspace_id="workspace-other",
+            _weagent_agent_id="_edu_1",
         )
 
     payload = json.loads(response.request.data)
     assert payload["domain"] == "edu"
     assert payload["workspace_id"] == "workspace-allowed"
     assert response.request.headers["X-weagent-user-id"] == "teacher-1"
+    assert response.request.headers["X-weagent-education-role"] == "teacher"
 
 
 def test_sandbox_rag_search_requires_server_issued_scope():

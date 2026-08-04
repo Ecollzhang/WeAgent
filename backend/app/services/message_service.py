@@ -19,6 +19,7 @@ from app.services.message_element_builder import (
     mentioned_file_elements,
     report_event_element,
 )
+from app.services.agent_output_sanitizer import public_agent_output
 
 MODERATOR_AGENT_ID = 'moderator'
 
@@ -58,12 +59,231 @@ def broadcast(conversation_id, msg_dict):
             pass
 
 
-def _message_dict(msg):
+def _sanitize_education_card_elements(data, *, allowed):
+    """Return a response-only projection that never leaks revoked EDU objects."""
+    if allowed or not isinstance(data, dict):
+        return data
+    elements = data.get('elements')
+    if not isinstance(elements, list):
+        return data
+    sanitized = []
+    changed = False
+    for element in elements:
+        if not isinstance(element, dict) or element.get('type') != 'education_card':
+            sanitized.append(element)
+            continue
+        changed = True
+        sanitized.append({
+            'type': 'education_card',
+            'content': '重新加入课程后可查看该产物',
+            'status': 'revoked',
+            'data': {
+                'access_revoked': True,
+                'title': '课程访问权限已失效',
+                'summary': '重新加入课程后可查看该产物',
+            },
+        })
+    if not changed:
+        return data
+    return {**data, 'elements': sanitized}
+
+
+def _education_card_access_allowed(conversation_id, actor_user_id):
+    """Ask Education to revalidate the live course membership."""
+    from datetime import timedelta
+
+    import requests
+    from flask_jwt_extended import create_access_token
+
+    token = create_access_token(
+        identity='weagent-core-runtime',
+        additional_claims={
+            'service': 'core',
+            'actor_user_id': str(actor_user_id),
+        },
+        expires_delta=timedelta(minutes=2),
+    )
+    base_url = str(
+        current_app.config.get(
+            'EDUCATION_RUNTIME_VALIDATION_URL',
+            'http://127.0.0.1:5102',
+        )
+    ).rstrip('/')
+    try:
+        response = requests.post(
+            (
+                f'{base_url}/api/edu/conversations/'
+                f'{conversation_id}/access-check'
+            ),
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=(2, 5),
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return False
+    return response.status_code == 200 and payload.get('allowed') is True
+
+
+def _public_education_workflow(element, conversation):
+    """Project an EDU workflow graph without private prompts or runtime ids."""
+    if (
+        not isinstance(element, dict)
+        or element.get('type') != 'workflow'
+        or not conversation
+        or (conversation.kb_domain or '') != 'edu'
+    ):
+        return element
+    workflow = element.get('data')
+    if not isinstance(workflow, dict):
+        return element
+    participants = {
+        str(item.participant_id): (
+            item.participant_name or 'Agent'
+        )
+        for item in conversation.participants or []
+        if item.participant_type == 'agent'
+    }
+    raw_nodes = workflow.get('nodes') if isinstance(workflow.get('nodes'), list) else []
+    id_map = {
+        str(node.get('id') or node.get('task_id') or index): f'step-{index + 1}'
+        for index, node in enumerate(raw_nodes)
+        if isinstance(node, dict)
+    }
+    nodes = []
+    for index, node in enumerate(raw_nodes):
+        if not isinstance(node, dict):
+            continue
+        source_id = str(node.get('id') or node.get('task_id') or index)
+        agent_name = participants.get(str(node.get('agent_id') or ''))
+        nodes.append({
+            'id': id_map.get(source_id, f'step-{index + 1}'),
+            'title': agent_name or str(node.get('title') or f'Agent {index + 1}'),
+            'depends_on': [
+                id_map[str(value)]
+                for value in node.get('depends_on') or []
+                if str(value) in id_map
+            ],
+            'can_parallel': bool(node.get('can_parallel', True)),
+            'x': node.get('x', 80 + index * 240),
+            'y': node.get('y', 80),
+        })
+    edges = []
+    for edge in workflow.get('edges') or []:
+        if not isinstance(edge, dict):
+            continue
+        source = id_map.get(str(edge.get('from') or ''))
+        target = id_map.get(str(edge.get('to') or ''))
+        if source and target:
+            edges.append({'from': source, 'to': target})
+    groups = []
+    for group in workflow.get('parallel_groups') or []:
+        if not isinstance(group, list):
+            continue
+        projected = [id_map[str(value)] for value in group if str(value) in id_map]
+        if projected:
+            groups.append(projected)
+    public_data = {
+        'id': 'education-workflow',
+        'name': str(workflow.get('name') or 'Education Agent 协作')[:64],
+        'summary': str(workflow.get('summary') or ''),
+        'nodes': nodes,
+        'edges': edges,
+        'parallel_groups': groups,
+        'source': 'education_workflow',
+    }
+    return {
+        **element,
+        'content': public_data['summary'],
+        'data': public_data,
+    }
+
+
+def _message_dict(msg, *, education_card_access=True):
     """Convert Message model to dict with optional artifact enrichment."""
     _ensure_structured_elements(msg)
     data = msg.to_dict()
     if msg.sender_type == 'agent':
         conversation = conversation_repo.get_by_id(msg.conversation_id)
+        data['content'] = public_agent_output(data.get('content'))
+        data['raw_output'] = public_agent_output(data.get('raw_output'))
+        public_elements = []
+        for element in data.get('elements') or []:
+            element_data = (
+                element.get('data')
+                if isinstance(element, dict) and isinstance(element.get('data'), dict)
+                else {}
+            )
+            if (
+                conversation
+                and (conversation.kb_domain or '') == 'edu'
+                and isinstance(element, dict)
+                and element.get('type') == 'code'
+                and (
+                    element_data.get('kind') == 'moderator_plan_json'
+                    or str(element_data.get('filename') or '').lower()
+                    == 'moderator-plan.json'
+                )
+            ):
+                continue
+            if isinstance(element, dict) and element.get('type') == 'workflow':
+                public_elements.append(
+                    _public_education_workflow(element, conversation)
+                )
+                continue
+            if not isinstance(element, dict) or element.get('type') not in {
+                'text', 'result', 'output', 'summary', 'progress', 'error'
+            }:
+                public_elements.append(element)
+                continue
+            content = public_agent_output(element.get('content'))
+            if not content:
+                continue
+            projected = dict(element)
+            projected['content'] = content
+            if isinstance(projected.get('data'), dict):
+                projected['data'] = dict(projected['data'])
+                if 'content' in projected['data']:
+                    projected['data']['content'] = content
+            public_elements.append(projected)
+        data['elements'] = public_elements
+        if (
+            msg.sender_id == MODERATOR_AGENT_ID
+            and conversation
+            and (conversation.kb_domain or '') == 'edu'
+        ):
+            workflow = next(
+                (
+                    item.get('data')
+                    for item in public_elements
+                    if isinstance(item, dict) and item.get('type') == 'workflow'
+                ),
+                None,
+            )
+            if isinstance(workflow, dict):
+                names = []
+                for node in workflow.get('nodes') or []:
+                    name = str(node.get('title') or '').strip()
+                    if name and name not in names:
+                        names.append(name)
+                summary = str(workflow.get('summary') or 'Agent 团队已开始协作').strip()
+                data['content'] = summary + (
+                    f'\n\n协作 Agent：{"、".join(names)}' if names else ''
+                )
+                data['elements'] = [
+                    {
+                        'type': 'text',
+                        'content': data['content'],
+                        'data': {'kind': 'education_workflow_summary'},
+                    },
+                    *[
+                        item
+                        for item in public_elements
+                        if isinstance(item, dict)
+                        and item.get('type') not in {
+                            'text', 'result', 'output', 'summary'
+                        }
+                    ],
+                ]
         if conversation:
             participant = next(
                 (p for p in conversation.participants
@@ -81,7 +301,10 @@ def _message_dict(msg):
             'title': msg.artifact.title,
             'language': msg.artifact.language,
         }
-    return data
+    return _sanitize_education_card_elements(
+        data,
+        allowed=education_card_access,
+    )
 
 
 def _ensure_structured_elements(msg):
@@ -631,6 +854,22 @@ class MessageService:
                         finalizer
                         == {
                             'type':
+                            'education_courseware_version_from_agent_files'
+                        }
+                        and agent_id == '_edu_2'
+                    )
+                    or (
+                        finalizer
+                        == {
+                            'type':
+                            'education_lesson_update_from_agent_reply'
+                        }
+                        and agent_id == '_edu_1'
+                    )
+                    or (
+                        finalizer
+                        == {
+                            'type':
                             'education_submission_review_from_agent_reply'
                         }
                         and agent_id == '_edu_4'
@@ -724,6 +963,7 @@ class MessageService:
                 {
                     'task_id': node['id'],
                     'agent_id': node['agent_id'],
+                    'agent_name': worker_name,
                     'title': f'{worker_name}执行固定工作流节点',
                     'instruction': (
                         f'执行服务端已定义的 {node["agent_role"] or worker_name} 节点。'
@@ -753,6 +993,230 @@ class MessageService:
             'parallel_groups': layers,
             'summary_required': True,
         }
+
+    @staticmethod
+    def _education_natural_language_plan(conversation, user_content, workers):
+        """Route explicit EDU product intents to bounded server workflows.
+
+        The visible user message stays untouched.  Only this trusted server
+        helper adds the schema, file and persistence protocol consumed by the
+        selected Education Agents.
+        """
+        if str(getattr(conversation, 'kb_domain', '') or '') != 'edu':
+            return None
+        text = str(user_content or '').split(
+            'SESSION_AGENT_CONFIG_CONTEXT:', 1
+        )[0].strip()
+        if not text:
+            return None
+        lowered = text.lower()
+        worker_ids = {
+            str(getattr(worker, 'participant_id', '') or '')
+            for worker in (workers or [])
+        }
+        courseware_term = bool(
+            re.search(r'(?<![a-z])pptx?(?![a-z])|课件|幻灯片', lowered)
+            or re.search(r'第[一二三四五六七八九十百零\d]+页', text)
+        )
+        revision_term = bool(
+            re.search(
+                r'修改|改成|改为|调整|优化|重做|替换|删掉|删除|'
+                r'保存(?:为)?新版本|新版本|继续编辑|继续修改',
+                text,
+            )
+        )
+        create_term = bool(
+            re.search(r'生成|制作|创建|产出|做一套|帮我做|新建', text)
+        )
+        lesson_update = bool(
+            '_edu_1' in worker_ids
+            and '课时' in text
+            and revision_term
+            and re.search(
+                r'标题|名称|时长|分钟|分类|领域|主题|体裁|课型|顺序|位置',
+                text,
+            )
+        )
+
+        if courseware_term and revision_term and '_edu_2' in worker_ids:
+            intent = 'courseware_version'
+        elif lesson_update:
+            intent = 'lesson_update'
+        elif courseware_term and create_term and '_edu_2' in worker_ids:
+            intent = 'courseware_create'
+        else:
+            return None
+
+        theme = 'clear_classroom'
+        theme_aliases = {
+            'paper_annotation': ('paper_annotation', '纸张批注', '纸质批注'),
+            'clear_classroom': ('clear_classroom', '清晰课堂'),
+            'storybook': ('storybook', '故事绘本', '故事书'),
+            'dark_focus': ('dark_focus', '深色聚焦', '暗色聚焦'),
+        }
+        for style, aliases in theme_aliases.items():
+            if any(alias in lowered for alias in aliases):
+                theme = style
+                break
+
+        role_names = {
+            '_edu_1': 'course_designer',
+            '_edu_2': 'courseware_maker',
+            '_edu_9': 'teaching_reviewer',
+        }
+        instructions = {}
+        finalizers = {}
+        if intent == 'courseware_create':
+            agent_ids = [
+                agent_id
+                for agent_id in ('_edu_1', '_edu_2', '_edu_9')
+                if agent_id in worker_ids
+            ]
+            instructions['_edu_1'] = (
+                'Read the trusted lesson scope with education_action action '
+                'edu.course.context.get. Use rag_search only when course '
+                'knowledge evidence is relevant and available. Produce a concise '
+                '8-page-ready teaching brief that preserves the lesson-plan '
+                'objectives and identifies evidence, reasoning scaffolds, writing '
+                'transfer and an exit task. Do not create product files or write '
+                'a courseware business object.'
+            )
+            instructions['_edu_2'] = MessageService._courseware_file_instruction(
+                theme=theme,
+                revision=False,
+            )
+            instructions['_edu_9'] = (
+                'Review the adopted courseware result from the dependency '
+                'context. Check objective-activity-assessment alignment, grade '
+                'fit, answer leakage, slide readability and the requested page '
+                'structure. Report a concise verdict; do not create another '
+                'courseware object and do not publish the draft.'
+            )
+            finalizers['_edu_2'] = {
+                'type': 'education_courseware_from_agent_files'
+            }
+            workflow_name = 'Education 自然语言课件生成'
+        elif intent == 'courseware_version':
+            agent_ids = [
+                agent_id
+                for agent_id in ('_edu_2', '_edu_9')
+                if agent_id in worker_ids
+            ]
+            instructions['_edu_2'] = MessageService._courseware_file_instruction(
+                theme=None,
+                revision=True,
+            )
+            instructions['_edu_9'] = (
+                'Review the newly adopted immutable courseware version from the '
+                'dependency context. Confirm that only the requested revision '
+                'was applied, the remaining slides stay coherent, and the old '
+                'version was not overwritten. Do not create or publish another '
+                'version.'
+            )
+            finalizers['_edu_2'] = {
+                'type': 'education_courseware_version_from_agent_files'
+            }
+            workflow_name = 'Education 自然语言课件修订'
+        else:
+            agent_ids = ['_edu_1']
+            instructions['_edu_1'] = (
+                'Translate only the lesson metadata changes explicitly requested '
+                'by the user into one JSON object and return no other text. The '
+                'root must contain exactly "changes" and "summary". changes may '
+                'contain only title, duration_minutes, position, unit_id, '
+                'learning_domain, theme_code, text_genre_code, or '
+                'lesson_type_code. Omit fields the user did not ask to change. '
+                'Do not include lesson_id, course_id, role, authorization or any '
+                'token. Example: {"changes":{"duration_minutes":50},'
+                '"summary":"将当前课时时长调整为 50 分钟"}.'
+            )
+            finalizers['_edu_1'] = {
+                'type': 'education_lesson_update_from_agent_reply'
+            }
+            workflow_name = 'Education 自然语言课时修改'
+
+        nodes = []
+        edges = []
+        for index, agent_id in enumerate(agent_ids, 1):
+            node_id = f'edu-intent-{intent}-{index}'
+            node = {
+                'id': node_id,
+                'type': 'agent_task',
+                'agent_id': agent_id,
+                'agent_role': role_names[agent_id],
+            }
+            if agent_id in finalizers:
+                node['finalizer'] = finalizers[agent_id]
+            nodes.append(node)
+            if index > 1:
+                edges.append({
+                    'from': nodes[index - 2]['id'],
+                    'to': node_id,
+                })
+        plan = MessageService._server_defined_workflow_plan(
+            {
+                'name': workflow_name,
+                'execution_mode': 'server_defined',
+                'nodes': nodes,
+                'edges': edges,
+            },
+            workers,
+        )
+        if not plan:
+            return None
+        for task in plan['tasks']:
+            task['instruction'] = instructions[task['agent_id']]
+            task['title'] = workflow_name
+        plan.update({
+            'source': 'education_natural_language_intent',
+            'intent': intent,
+            'workflow_name': workflow_name,
+            'summary': f'已识别明确业务意图：{workflow_name}',
+            'summary_required': False,
+        })
+        return plan
+
+    @staticmethod
+    def _courseware_file_instruction(*, theme=None, revision=False):
+        action = (
+            'First call education_action with action edu.course.context.get. '
+            'Locate courseware_context.slide_documents[0], treat its source_json '
+            'as the immutable parent, and apply only the user-requested changes. '
+            'Preserve its existing theme unless the user explicitly requests a '
+            'different allowed theme.'
+            if revision
+            else
+            'Use the upstream teaching brief and, when needed, call '
+            'education_action with action edu.course.context.get to read the '
+            'trusted lesson context.'
+        )
+        theme_rule = (
+            f'The root theme must be exactly {{"style":"{theme}"}}.'
+            if theme
+            else
+            'The root theme.style must remain one of clear_classroom, '
+            'paper_annotation, storybook, or dark_focus.'
+        )
+        return (
+            f'{action} Create exactly two complete UTF-8 files in your private '
+            'workspace: slide_document.json and preview.html. Do not create '
+            'index.html, CSS files, JavaScript files, README files or any other '
+            'artifact. Do not call a courseware write action; the trusted server '
+            'finalizer validates and adopts these two files. slide_document.json '
+            'is the complete canonical source object and permits only title, '
+            'theme and slides at the root. Each slide permits only id, title, '
+            'layout, blocks and speaker_notes. Each block permits only type, '
+            'content, emphasis, source_ref, asset_id and alt_text. block.type is '
+            'one of text, bullets, heading, subheading, quote, key-point, '
+            'question, tip, image, table, timeline, comparison, vocabulary, or '
+            'activity. Plain text content is a string; bullets content is an '
+            'array of unnumbered plain strings. Do not add lesson_id or internal '
+            f'identifiers. {theme_rule} Keep each slide under 560 body characters, '
+            '10 list items and 8 blocks. preview.html must be one complete safe '
+            'HTML document that renders every slide clearly and uses no remote '
+            'script. The final visible reply should only summarize the completed '
+            'artifact; file paths are not a product result.'
+        )
 
     @staticmethod
     def _normalize_target_agent_ids(target_agent_ids):
@@ -996,6 +1460,12 @@ class MessageService:
                 self._selected_workflow_meta(workflow),
                 enabled_workers,
             )
+            if not workflow and not fixed_plan:
+                fixed_plan = self._education_natural_language_plan(
+                    conversation,
+                    user_content,
+                    enabled_workers,
+                )
             if (
                 isinstance(workflow, dict)
                 and workflow.get('execution_mode') == 'server_defined'
@@ -1392,17 +1862,22 @@ class MessageService:
         for index, task in enumerate(tasks):
             task_id = str(task.get('task_id') or f'task-{index + 1}')
             stage_index, order_index = stage_by_task.get(task_id, (index, 0))
-            nodes.append({
+            node = {
                 'id': task_id,
                 'task_id': task_id,
-                'agent_id': task.get('agent_id') or '',
-                'title': task.get('title') or task_id,
-                'instruction': task.get('instruction') or '',
+                'title': task.get('agent_name') or task.get('title') or task_id,
                 'depends_on': task.get('depends_on') or [],
                 'can_parallel': bool(task.get('can_parallel', True)),
                 'x': 80 + stage_index * 240,
                 'y': 80 + order_index * 130,
-            })
+            }
+            if plan.get('source') not in {
+                'education_natural_language_intent',
+                'server_defined_workflow',
+            }:
+                node['agent_id'] = task.get('agent_id') or ''
+                node['instruction'] = task.get('instruction') or ''
+            nodes.append(node)
         edges = []
         for task in tasks:
             target = str(task.get('task_id') or '')
@@ -1464,10 +1939,16 @@ class MessageService:
             lines.append(summary)
         selected = plan.get('selected_agents') or []
         if selected:
+            names = {
+                str(task.get('agent_id') or ''): (
+                    task.get('agent_name') or task.get('agent_id') or 'Agent'
+                )
+                for task in plan.get('tasks') or []
+            }
             lines.append('')
             lines.append('本轮我会安排这些 Agent 参与：')
             for agent_id in selected:
-                lines.append(f'- `{agent_id}`')
+                lines.append(f'- {names.get(str(agent_id), "Agent")}')
         tasks = plan.get('tasks') or []
         if tasks:
             lines.append('')
@@ -1476,14 +1957,24 @@ class MessageService:
                 deps = task.get('depends_on') or []
                 dep_text = f'，依赖：{", ".join(deps)}' if deps else ''
                 lines.append(
-                    f'- **{task.get("title") or task.get("task_id")}** -> `{task.get("agent_id")}`{dep_text}'
+                    f'- **{task.get("title") or task.get("task_id")}**：'
+                    f'{task.get("agent_name") or "Agent"}{dep_text}'
                 )
         groups = plan.get('parallel_groups') or []
         if groups:
             lines.append('')
             lines.append('执行顺序：')
             for index, group in enumerate(groups, start=1):
-                lines.append(f'{index}. ' + '、'.join(f'`{item}`' for item in group))
+                task_names = {
+                    str(task.get('task_id') or ''): (
+                        task.get('agent_name') or task.get('title') or 'Agent'
+                    )
+                    for task in tasks
+                }
+                lines.append(
+                    f'{index}. '
+                    + '、'.join(task_names.get(str(item), 'Agent') for item in group)
+                )
         return '\n'.join(lines).strip() or '主持 Agent 已生成分工计划。'
 
     def _build_moderator_plan_prompt(self, user_content, workers, disabled_workers=None):
@@ -1751,26 +2242,42 @@ class MessageService:
             lines.append(summary)
         selected = plan.get('selected_agents') or []
         if selected:
+            names = {
+                str(task.get('agent_id') or ''): (
+                    task.get('agent_name') or task.get('agent_id') or 'Agent'
+                )
+                for task in plan.get('tasks') or []
+            }
             lines.append('')
             lines.append('本轮我会安排这些 Agent 参与：')
             for agent_id in selected:
-                lines.append(f'- `{agent_id}`')
+                lines.append(f'- {names.get(str(agent_id), "Agent")}')
         tasks = plan.get('tasks') or []
         if tasks:
             lines.append('')
             lines.append('分工如下：')
             for task in tasks:
                 deps = task.get('depends_on') or []
-                dep_text = f'，依赖：{", ".join(deps)}' if deps else ''
+                dep_text = '，需等待上一阶段' if deps else ''
                 lines.append(
-                    f'- **{task.get("title") or task.get("task_id")}** -> `{task.get("agent_id")}`{dep_text}'
+                    f'- **{task.get("title") or task.get("task_id")}**：'
+                    f'{task.get("agent_name") or "Agent"}{dep_text}'
                 )
         groups = plan.get('parallel_groups') or []
         if groups:
+            task_names = {
+                str(task.get('task_id') or ''): (
+                    task.get('agent_name') or task.get('title') or 'Agent'
+                )
+                for task in tasks
+            }
             lines.append('')
             lines.append('执行顺序：')
             for index, group in enumerate(groups, start=1):
-                lines.append(f'{index}. ' + '、'.join(f'`{item}`' for item in group))
+                lines.append(
+                    f'{index}. '
+                    + '、'.join(task_names.get(str(item), 'Agent') for item in group)
+                )
         return '\n'.join(lines).strip() or '主持 Agent 已生成分工计划。'
 
     @staticmethod
@@ -2061,7 +2568,20 @@ class MessageService:
                     else response
                 )
                 raise ValueError(str(error or f'{action} failed')[:1000])
-            return envelope.get('result')
+            tool_result = envelope.get('result')
+            # ``education_action`` crosses three explicit trust boundaries:
+            # host transport -> sandbox tool registry -> Education service.
+            # The service response deliberately retains its audited call
+            # envelope, so unwrap that final layer before inspecting the
+            # domain object.  Keep the legacy direct result shape for older
+            # sandbox images and focused test doubles.
+            if (
+                isinstance(tool_result, dict)
+                and tool_result.get('tool_name') == action
+                and 'result' in tool_result
+            ):
+                return tool_result.get('result')
+            return tool_result
 
         if (
             finalizer == {'type': 'education_questions_from_agent_reply'}
@@ -2421,9 +2941,125 @@ class MessageService:
             }
 
         if (
-            finalizer != {'type': 'education_courseware_from_agent_files'}
-            or agent_id != '_edu_2'
+            finalizer == {
+                'type': 'education_lesson_update_from_agent_reply'
+            }
+            and agent_id == '_edu_1'
         ):
+            try:
+                source = parse_exact_json(
+                    {'changes', 'summary'},
+                    max_bytes=50_000,
+                )
+                changes = source['changes']
+                summary = str(source['summary'] or '').strip()
+                allowed_fields = {
+                    'title',
+                    'duration_minutes',
+                    'position',
+                    'unit_id',
+                    'learning_domain',
+                    'theme_code',
+                    'text_genre_code',
+                    'lesson_type_code',
+                }
+                if (
+                    not isinstance(changes, dict)
+                    or not changes
+                    or not set(changes).issubset(allowed_fields)
+                ):
+                    raise ValueError(
+                        'changes must contain at least one supported lesson field'
+                    )
+                if not summary or len(summary) > 500:
+                    raise ValueError('summary must contain 1 to 500 characters')
+                normalized = {}
+                if 'title' in changes:
+                    title = str(changes['title'] or '').strip()
+                    if not 1 <= len(title) <= 200:
+                        raise ValueError('title must contain 1 to 200 characters')
+                    normalized['title'] = title
+                if 'duration_minutes' in changes:
+                    duration = int(changes['duration_minutes'])
+                    if not 1 <= duration <= 600:
+                        raise ValueError(
+                            'duration_minutes must be between 1 and 600'
+                        )
+                    normalized['duration_minutes'] = duration
+                if 'position' in changes:
+                    normalized['position'] = int(changes['position'])
+                if 'unit_id' in changes:
+                    normalized['unit_id'] = (
+                        str(changes['unit_id']).strip()
+                        if changes['unit_id'] is not None
+                        else ''
+                    )
+                enums = {
+                    'learning_domain': {
+                        'reading', 'writing', 'integrated'
+                    },
+                    'lesson_type_code': {
+                        'reading', 'writing', 'reading_writing', 'integrated'
+                    },
+                }
+                for field, allowed in enums.items():
+                    if field in changes:
+                        value = str(changes[field] or '').strip()
+                        if value not in allowed:
+                            raise ValueError(f'{field} is invalid')
+                        normalized[field] = value
+                for field in ('theme_code', 'text_genre_code'):
+                    if field in changes:
+                        normalized[field] = str(changes[field] or '').strip()
+
+                context = invoke_education('edu.course.context.get', {})
+                courseware_context = (
+                    context.get('courseware_context')
+                    if isinstance(context, dict)
+                    else None
+                )
+                lesson = (
+                    courseware_context.get('lesson')
+                    if isinstance(courseware_context, dict)
+                    else None
+                )
+                lesson_id = str(
+                    lesson.get('id') if isinstance(lesson, dict) else ''
+                ).strip()
+                if not lesson_id:
+                    raise ValueError(
+                        'the conversation is not bound to an editable lesson'
+                    )
+                arguments = {'lesson_id': lesson_id, **normalized}
+                source_bytes = json.dumps(
+                    arguments,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                ).encode('utf-8')
+                result = invoke_education(
+                    'edu.lesson.update',
+                    arguments,
+                    'chat-lesson-update-'
+                    + lesson_id
+                    + '-'
+                    + hashlib.sha256(source_bytes).hexdigest()[:16],
+                )
+            except Exception as error:
+                return {
+                    'status': 'error',
+                    'error': f'Lesson update is not adoptable: {error}',
+                }
+            return {'status': 'ok', 'result': result}
+
+        courseware_finalizers = {
+            'education_courseware_from_agent_files',
+            'education_courseware_version_from_agent_files',
+        }
+        finalizer_type = str(
+            finalizer.get('type') if isinstance(finalizer, dict) else ''
+        )
+        if finalizer_type not in courseware_finalizers or agent_id != '_edu_2':
             return {
                 'status': 'error',
                 'error': 'Untrusted server-defined workflow finalizer.',
@@ -2453,48 +3089,68 @@ class MessageService:
                 'error': f'Courseware files are not adoptable: {error}',
             }
 
-        response = manager.execute_tool(
-            session_id,
-            agent_id,
-            'education_action',
-            {
-                'action': 'edu.courseware.create',
-                'arguments': {
-                    'kind': 'slide_document',
-                    'schema_name': 'weagent.education.slide-document',
-                    'source_json': source,
-                    'rendered_html': html,
-                    'change_summary': 'Agent courseware draft',
-                },
-                'idempotency_key': (
-                    'product-courseware-slide-'
-                    + hashlib.sha256(
-                        source_bytes + b'\0' + html_bytes
-                    ).hexdigest()[:16]
-                ),
-            },
-        )
-        envelope = (
-            response.get('result')
-            if isinstance(response, dict) and response.get('status') == 'ok'
-            else None
-        )
-        if not isinstance(envelope, dict) or envelope.get('status') != 'ok':
-            error = (
-                envelope.get('error')
-                if isinstance(envelope, dict)
-                else (response or {}).get('error')
-                if isinstance(response, dict)
-                else response
-            )
+        digest = hashlib.sha256(
+            source_bytes + b'\0' + html_bytes
+        ).hexdigest()[:16]
+        try:
+            if finalizer_type == 'education_courseware_from_agent_files':
+                result = invoke_education(
+                    'edu.courseware.create',
+                    {
+                        'kind': 'slide_document',
+                        'schema_name': 'weagent.education.slide-document',
+                        'source_json': source,
+                        'rendered_html': html,
+                        'change_summary': 'Agent courseware draft',
+                    },
+                    'product-courseware-slide-' + digest,
+                )
+            else:
+                context = invoke_education('edu.course.context.get', {})
+                courseware_context = (
+                    context.get('courseware_context')
+                    if isinstance(context, dict)
+                    else None
+                )
+                slide_documents = (
+                    courseware_context.get('slide_documents')
+                    if isinstance(courseware_context, dict)
+                    else None
+                )
+                current = next(
+                    (
+                        item for item in (slide_documents or [])
+                        if isinstance(item, dict)
+                        and str(item.get('content_id') or '').strip()
+                    ),
+                    None,
+                )
+                content_id = str(
+                    current.get('content_id') if current else ''
+                ).strip()
+                if not content_id:
+                    raise ValueError(
+                        'the lesson has no courseware object to version'
+                    )
+                result = invoke_education(
+                    'edu.courseware.version.create',
+                    {
+                        'content_id': content_id,
+                        'source_json': source,
+                        'rendered_html': html,
+                        'change_summary': 'Agent courseware revision',
+                    },
+                    'chat-courseware-version-'
+                    + content_id
+                    + '-'
+                    + digest,
+                )
+        except Exception as error:
             return {
                 'status': 'error',
-                'error': str(error or 'Education courseware adoption failed')[:1000],
+                'error': f'Education courseware adoption failed: {error}',
             }
-        return {
-            'status': 'ok',
-            'result': envelope.get('result'),
-        }
+        return {'status': 'ok', 'result': result}
 
     def _run_worker_task(self, app, conversation_id, round_id, user_message_id,
                          user_content, task, participant_id, result_bucket,
@@ -2636,6 +3292,22 @@ class MessageService:
                                     'Markdown, tools, progress commands, explanations, '
                                     'paths, or wrapper fields.'
                                 )
+                            elif finalizer == {
+                                'type':
+                                'education_lesson_update_from_agent_reply'
+                            }:
+                                repair_prompt = (
+                                    'The trusted lesson-update finalizer rejected '
+                                    'your JSON. Exact error: '
+                                    f'{finalizer_result.get("error")}\n'
+                                    'Return only one complete JSON object with '
+                                    'exactly changes and summary. changes must '
+                                    'contain only the lesson fields explicitly '
+                                    'requested by the user and must not contain '
+                                    'lesson_id, course_id, role or any token. Do '
+                                    'not use Markdown, tools, progress commands, '
+                                    'explanations, paths, or wrapper fields.'
+                                )
                             else:
                                 repair_prompt = (
                                     '系统已校验你生成的课件文件，但尚不能采纳。'
@@ -2673,8 +3345,45 @@ class MessageService:
                                 'reply': error,
                             }
                             return
+                    extra_elements = []
+                    if finalizer_result:
+                        from app.services.education_card_builder import (
+                            education_card_from_tool_result,
+                        )
+
+                        finalizer_actions = {
+                            "education_courseware_from_agent_files":
+                                "edu.courseware.create",
+                            "education_courseware_version_from_agent_files":
+                                "edu.courseware.version.create",
+                            "education_lesson_update_from_agent_reply":
+                                "edu.lesson.update",
+                            "education_questions_from_agent_reply":
+                                "edu.question_bank.upsert",
+                            "education_paper_from_agent_reply":
+                                "edu.paper.compose",
+                            "education_knowledge_from_agent_reply":
+                                "edu.knowledge.resource.adopt",
+                            "education_student_insight_refresh_from_agent_reply":
+                                "edu.student_insight.refresh",
+                            "education_submission_review_from_agent_reply":
+                                "edu.submission_review.analysis.create",
+                        }
+                        finalizer_type = str(
+                            (finalizer or {}).get("type") or ""
+                        )
+                        card = education_card_from_tool_result(
+                            finalizer_actions.get(finalizer_type),
+                            finalizer_result.get("result") or {},
+                        )
+                        if card:
+                            extra_elements.append(card)
                     self._mark_agent_message_done_if_active(
-                        agent_msg.id, run.id, participant.participant_id, reply
+                        agent_msg.id,
+                        run.id,
+                        participant.participant_id,
+                        reply,
+                        extra_elements=extra_elements,
                     )
                     result_bucket[task['task_id']] = {
                         'status': 'done',
@@ -2937,6 +3646,12 @@ class MessageService:
                 self._selected_workflow_meta(workflow),
                 enabled_workers,
             )
+            if not workflow and not fixed_plan:
+                fixed_plan = self._education_natural_language_plan(
+                    conversation,
+                    user_content,
+                    enabled_workers,
+                )
             if (
                 isinstance(workflow, dict)
                 and workflow.get('execution_mode') == 'server_defined'
@@ -3395,7 +4110,14 @@ class MessageService:
             return '任务已完成。完整输出已折叠到 Raw output。'
         return text
 
-    def _mark_agent_message_done_if_active(self, message_id, run_id, agent_id, reply):
+    def _mark_agent_message_done_if_active(
+        self,
+        message_id,
+        run_id,
+        agent_id,
+        reply,
+        extra_elements=None,
+    ):
         """Fallback finalization when container event callbacks are missed.
 
         Normal streaming is driven by sandbox events. The synchronous container
@@ -3404,9 +4126,60 @@ class MessageService:
         """
         from app.models.agent_run import AgentRun
 
+        # Sandbox callbacks are committed by separate HTTP request contexts while
+        # this worker waits for the container response. End the worker's current
+        # transaction as well as expiring its identity map: under MySQL's default
+        # repeatable-read isolation, expire_all() alone can still see the snapshot
+        # from before the callback committed.
+        db.session.rollback()
+        db.session.expire_all()
         msg = Message.query.get(message_id)
         run = AgentRun.query.get(run_id)
-        if not msg or not run or run.status not in ('pending', 'running'):
+        if not msg or not run:
+            return
+
+        # A callback can persist report cards even when its final completion event
+        # is missed. Rebuild those cards from the committed event journal before
+        # deciding whether the synchronous response still needs to close the run.
+        _ensure_structured_elements(msg)
+
+        # The completion callback can win the race before the trusted finalizer
+        # returns. Its done status must not discard the durable Education card
+        # produced by that finalizer. Merge it into the already-completed message
+        # and emit one fresh status snapshot so the browser sees it without reload.
+        if run.status not in ('pending', 'running'):
+            elements = list(msg.elements or [])
+            changed = False
+            for extra in extra_elements or []:
+                if not isinstance(extra, dict):
+                    continue
+                ref = (extra.get('data') or {}).get('canonical_ref') or {}
+                exists = any(
+                    item.get('type') == extra.get('type')
+                    and (
+                        (item.get('data') or {}).get('canonical_ref') or {}
+                    ) == ref
+                    for item in elements
+                    if isinstance(item, dict)
+                )
+                if not exists:
+                    elements.append(extra)
+                    changed = True
+            if changed:
+                msg.elements = elements
+                flag_modified(msg, 'elements')
+                db.session.commit()
+                socketio.emit('conversation_message_status', {
+                    'conversation_id': msg.conversation_id,
+                    'message_id': msg.id,
+                    'run_id': run.id,
+                    'agent_id': agent_id,
+                    'status': msg.status,
+                    'content': msg.content,
+                    'elements': msg.elements,
+                    'raw_output': msg.raw_output,
+                    'sender_name': self._sender_name_for_message(msg),
+                }, room=msg.conversation_id)
             return
 
         text = (reply or '').strip()
@@ -3431,9 +4204,32 @@ class MessageService:
                         elements.append(element)
             except Exception:
                 pass
+            for extra in extra_elements or []:
+                if not isinstance(extra, dict):
+                    continue
+                ref = (extra.get("data") or {}).get("canonical_ref") or {}
+                exists = any(
+                    item.get("type") == extra.get("type")
+                    and (
+                        (item.get("data") or {}).get("canonical_ref") or {}
+                    ) == ref
+                    for item in elements
+                    if isinstance(item, dict)
+                )
+                if not exists:
+                    elements.append(extra)
             msg.elements = elements
         elif not msg.content:
             msg.content = '任务已完成'
+        elif extra_elements:
+            msg.elements = [
+                *(msg.elements or []),
+                *[
+                    element
+                    for element in extra_elements
+                    if isinstance(element, dict)
+                ],
+            ]
 
         msg.status = 'done'
         run.status = 'done'
@@ -3465,8 +4261,18 @@ class MessageService:
         )
 
         items = []
+        education_card_access = (
+            _education_card_access_allowed(conversation_id, user_id)
+            if (conversation.kb_domain or '') == 'edu'
+            else True
+        )
         for msg in pagination.items:
-            items.append(_message_dict(msg))
+            items.append(
+                _message_dict(
+                    msg,
+                    education_card_access=education_card_access,
+                )
+            )
 
         return {
             'items': items,
@@ -3495,8 +4301,18 @@ class MessageService:
             Message.id.asc(),
         ).all()
         items = []
+        education_card_access = (
+            _education_card_access_allowed(conversation_id, user_id)
+            if (conversation.kb_domain or '') == 'edu'
+            else True
+        )
         for msg in messages:
-            items.append(_message_dict(msg))
+            items.append(
+                _message_dict(
+                    msg,
+                    education_card_access=education_card_access,
+                )
+            )
 
         return {'items': items}, None
 
@@ -3518,7 +4334,19 @@ class MessageService:
         if not self._conversation_for_user(conversation_id, user_id):
             return None, 'Conversation not found'
         messages = message_repo.get_pinned_messages(conversation_id)
-        return [msg.to_dict() for msg in messages], None
+        conversation = conversation_repo.get_by_id(conversation_id)
+        education_card_access = (
+            _education_card_access_allowed(conversation_id, user_id)
+            if conversation and (conversation.kb_domain or '') == 'edu'
+            else True
+        )
+        return [
+            _message_dict(
+                msg,
+                education_card_access=education_card_access,
+            )
+            for msg in messages
+        ], None
 
 
 message_service = MessageService()

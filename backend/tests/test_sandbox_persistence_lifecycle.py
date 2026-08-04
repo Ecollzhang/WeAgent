@@ -35,6 +35,8 @@ class FakeManager:
         self.destroyed = []
         self.restored = []
         self.runtime_auth_updates = []
+        self.runtime_auth_result = {"status": "ok"}
+        self.education_runtime_updates = []
 
     def get_session(self, session_id):
         return self.session
@@ -54,7 +56,20 @@ class FakeManager:
 
     def update_runtime_auth(self, session_id, authorization):
         self.runtime_auth_updates.append((session_id, authorization))
+        return self.runtime_auth_result
+
+    def update_education_runtime_context(self, session_id, **context):
+        self.education_runtime_updates.append((session_id, context))
         return {"status": "ok"}
+
+
+def _education_runtime_context():
+    return {
+        "run_grant": "A" * 48,
+        "membership_role": "teacher",
+        "services": ["edu", "rag"],
+        "agent_service_views": {"agent-1": ["edu", "rag"]},
+    }
 
 
 @pytest.fixture()
@@ -188,7 +203,11 @@ def test_stopped_runtime_rehydrates_snapshot_as_a_new_generation(lifecycle_app):
             db.session.commit()
             return None
 
-        with patch.object(
+        with patch(
+            "app.services.conversation_service."
+            "_request_education_runtime_context",
+            return_value=_education_runtime_context(),
+        ), patch.object(
             conversation_service,
             "_create_agent_sandbox",
             side_effect=fake_create,
@@ -210,7 +229,15 @@ def test_stopped_runtime_rehydrates_snapshot_as_a_new_generation(lifecycle_app):
         assert manager.restored[0][1] == _workspace_zip()
         assert captured == {
             "kb_domain": "edu",
-            "agent_configs": {"agent-1": {"adapter_name": "codex"}},
+            "agent_configs": {
+                "agent-1": {
+                    "adapter_name": "codex",
+                    "allowed_services": ["edu", "rag"],
+                    "education_tool_context": {
+                        "run_grant": "A" * 48,
+                    },
+                }
+            },
             "allow_server_fallback": True,
             "rehydrating": True,
         }
@@ -222,6 +249,9 @@ def test_live_runtime_refreshes_user_authorization_from_current_request(
     manager = FakeManager()
     with lifecycle_app.test_request_context(
         headers={"Authorization": "Bearer fresh-token"},
+    ), patch(
+        "app.services.conversation_service._request_education_runtime_context",
+        return_value=_education_runtime_context(),
     ):
         conversation = Conversation.query.get("conversation-1")
         result, error = conversation_service.ensure_sandbox_runtime(
@@ -232,6 +262,97 @@ def test_live_runtime_refreshes_user_authorization_from_current_request(
 
     assert error is None
     assert result["rehydrated"] is False
-    assert manager.runtime_auth_updates == [
-        ("conversation-1", "Bearer fresh-token"),
+    assert manager.runtime_auth_updates == []
+    assert manager.education_runtime_updates == [
+        (
+            "conversation-1",
+            {
+                "authorization": "Bearer fresh-token",
+                "run_grant": "A" * 48,
+                "service_url": "http://host.docker.internal:5102",
+                "agent_service_views": {"agent-1": ["edu", "rag"]},
+                "services": ["edu", "rag"],
+            },
+        )
     ]
+
+
+def test_live_education_runtime_mints_short_lived_auth_for_background_work(
+    lifecycle_app,
+):
+    manager = FakeManager()
+    with lifecycle_app.app_context(), patch(
+        "app.services.conversation_service._request_education_runtime_context",
+        return_value=_education_runtime_context(),
+    ):
+        conversation = Conversation.query.get("conversation-1")
+        result, error = conversation_service.ensure_sandbox_runtime(
+            conversation,
+            user_id="user-1",
+            manager=manager,
+        )
+
+    assert error is None
+    assert result["rehydrated"] is False
+    assert len(manager.education_runtime_updates) == 1
+    _, context = manager.education_runtime_updates[0]
+    assert context["authorization"].startswith("Bearer ")
+    assert context["authorization"] != "Bearer fresh-token"
+    assert context["run_grant"] == "A" * 48
+
+
+def test_legacy_live_runtime_without_hot_auth_route_rehydrates_to_latest_image(
+    lifecycle_app,
+):
+    manager = FakeManager()
+    manager.runtime_auth_result = {
+        "status": "error",
+        "error": "HTTP 404: Not Found",
+        "optional_route_missing": True,
+    }
+    captured = {}
+
+    with lifecycle_app.app_context():
+        conversation = Conversation.query.get("conversation-1")
+        conversation.kb_domain = "rd"
+        conversation.services = ["rd"]
+        conversation.sandbox_agent_adapters = {"agent-1": "codex"}
+        conversation.sandbox_agent_service_views = {"agent-1": ["rd"]}
+        db.session.commit()
+
+        def fake_create(target, participants, user_id, **kwargs):
+            captured.update(kwargs)
+            manager.session = SimpleNamespace(
+                session_id=target.id,
+                container_id="container-2",
+                host_port=50124,
+                _check_alive=lambda: True,
+            )
+            target.sandbox_session_id = target.id
+            target.sandbox_container_id = "container-2"
+            target.sandbox_host_port = 50124
+            target.sandbox_status = "running"
+            db.session.commit()
+            return None
+
+        with patch.object(
+            conversation_service,
+            "_create_agent_sandbox",
+            side_effect=fake_create,
+        ):
+            result, error = conversation_service.ensure_sandbox_runtime(
+                conversation,
+                user_id="user-1",
+                manager=manager,
+            )
+
+        db.session.refresh(conversation)
+        assert error is None
+        assert result["rehydrated"] is True
+        assert result["runtime_generation"] == 2
+        assert manager.destroyed == ["conversation-1"]
+        assert manager.restored[0][0] == "conversation-1"
+        assert manager.runtime_auth_updates[0][0] == "conversation-1"
+        assert manager.runtime_auth_updates[0][1].startswith("Bearer ")
+        assert captured["kb_domain"] == "rd"
+        assert captured["rehydrating"] is True

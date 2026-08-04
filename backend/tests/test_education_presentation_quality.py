@@ -121,6 +121,22 @@ def test_pptx_export_is_editable_readable_and_theme_specific(style):
     assert not report["findings"]
 
 
+def test_explicit_title_slide_is_not_duplicated_in_pptx_export():
+    document = _document("paper_annotation")
+    document["slides"][0]["layout"] = "paper-title-opening"
+
+    payload = export_pptx(document, "fallback")
+    deck = Presentation(BytesIO(payload))
+
+    assert len(deck.slides) == len(document["slides"])
+    assert document["slides"][0]["title"] in deck.slides[0].shapes.title.text \
+        if deck.slides[0].shapes.title else any(
+            document["slides"][0]["title"] in shape.text
+            for shape in deck.slides[0].shapes
+            if getattr(shape, "has_text_frame", False)
+        )
+
+
 def test_slide_document_quality_rejects_unreadable_density():
     dense = _document()
     dense["slides"][0]["blocks"] = [

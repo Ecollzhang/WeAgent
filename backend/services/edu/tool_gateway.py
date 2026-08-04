@@ -150,6 +150,7 @@ TOOL_CATALOG = {
         "description": "List courses visible to the granted actor.",
         "roles": [TEACHER, STUDENT],
         "mode": "read",
+        "course_optional": True,
         "input_schema": _object_schema(),
     },
     "edu.course.members.list": {
@@ -278,6 +279,36 @@ TOOL_CATALOG = {
             ],
         ),
     },
+    "edu.lesson.update": {
+        "description": "Update editable metadata on a lesson in the granted course.",
+        "roles": [TEACHER],
+        "mode": "write",
+        "input_schema": _object_schema(
+            {
+                "lesson_id": {"type": "string"},
+                "title": {"type": "string"},
+                "unit_id": {"type": "string"},
+                "learning_domain": {
+                    "type": "string",
+                    "enum": ["reading", "writing", "integrated"],
+                },
+                "theme_code": {"type": "string"},
+                "text_genre_code": {"type": "string"},
+                "lesson_type_code": {
+                    "type": "string",
+                    "enum": [
+                        "reading",
+                        "writing",
+                        "reading_writing",
+                        "integrated",
+                    ],
+                },
+                "duration_minutes": {"type": "integer"},
+                "position": {"type": "integer"},
+            },
+            ["lesson_id"],
+        ),
+    },
     "edu.courseware.create": {
         "description": "Adopt structured slide or rich-document output as a versioned draft.",
         "roles": [TEACHER],
@@ -296,6 +327,32 @@ TOOL_CATALOG = {
                 "change_summary": {"type": "string"},
             },
             ["kind", "schema_name", "source_json"],
+        ),
+    },
+    "edu.courseware.get": {
+        "description": "Read one current or historical courseware version.",
+        "roles": [TEACHER],
+        "mode": "read",
+        "input_schema": _object_schema(
+            {
+                "content_id": {"type": "string"},
+                "version_id": {"type": "string"},
+            },
+            ["content_id"],
+        ),
+    },
+    "edu.courseware.version.create": {
+        "description": "Append an immutable version to existing courseware.",
+        "roles": [TEACHER],
+        "mode": "write",
+        "input_schema": _object_schema(
+            {
+                "content_id": {"type": "string"},
+                "source_json": {"type": "object"},
+                "rendered_html": {"type": "string"},
+                "change_summary": {"type": "string"},
+            },
+            ["content_id", "source_json"],
         ),
     },
     "edu.asset.attach": {
@@ -554,11 +611,54 @@ def issue_tool_grant(
     course_id,
     allowed_tools,
     capability_ids=None,
+    agent_ids=None,
+    lesson_id=None,
     agent_run_id=None,
     conversation_id=None,
     ttl_seconds=None,
+    grant_mode=None,
+    confirmed_actions=None,
 ):
-    role = _resolve_role(course_id, actor_user_id)
+    course_bootstrap = (
+        not course_id and str(grant_mode or "") == "course_bootstrap"
+    )
+    if not course_id and not course_bootstrap:
+        raise ToolGatewayError(
+            "a no-course grant requires course_bootstrap mode",
+            400,
+            "course_bootstrap_required",
+        )
+    role = (
+        "course_creator"
+        if course_bootstrap
+        else _resolve_role(course_id, actor_user_id)
+    )
+    scoped_lesson_id = str(lesson_id or "").strip() or None
+    if scoped_lesson_id:
+        if not course_id:
+            raise ToolGatewayError(
+                "lesson scope requires a course scope",
+                400,
+                "course_scope_required",
+            )
+        if not Lesson.query.filter_by(
+            id=scoped_lesson_id,
+            course_id=course_id,
+        ).first():
+            raise ToolGatewayError("lesson not found", 404, "lesson_not_found")
+    scoped_agent_ids = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (agent_ids or [])
+            if str(value).strip()
+        )
+    )
+    if len(scoped_agent_ids) > 20:
+        raise ToolGatewayError(
+            "too many agents requested",
+            400,
+            "too_many_agents",
+        )
     requested = list(dict.fromkeys(str(item) for item in (allowed_tools or [])))
     if not requested:
         raise ToolGatewayError(
@@ -572,9 +672,23 @@ def issue_tool_grant(
             400,
             "too_many_tools",
         )
+    confirmed = list(
+        dict.fromkeys(str(item) for item in (confirmed_actions or []))
+    )
+    if any(item not in requested for item in confirmed):
+        raise ToolGatewayError(
+            "confirmed_actions must be included in allowed_tools",
+            400,
+            "invalid_confirmed_action",
+        )
     for name in requested:
         definition = _tool_record(name)
-        if role not in definition["roles"]:
+        role_allowed = role in definition["roles"] or (
+            course_bootstrap
+            and definition.get("course_optional") is True
+            and TEACHER in definition["roles"]
+        )
+        if not role_allowed:
             raise ToolGatewayError(
                 f"{name} is not available to {role}",
                 403,
@@ -598,9 +712,12 @@ def issue_tool_grant(
         actor_user_id=actor_user_id,
         actor_role=role,
         allowed_tools=requested,
+        confirmed_actions=confirmed,
         capability_ids=[
             str(value)[:100] for value in (capability_ids or [])[:30]
         ],
+        agent_ids=[value[:100] for value in scoped_agent_ids] or None,
+        lesson_id=scoped_lesson_id,
         agent_run_id=str(agent_run_id or "")[:100] or None,
         conversation_id=str(conversation_id or "")[:100] or None,
         expires_at=datetime.utcnow() + timedelta(seconds=ttl),
@@ -817,6 +934,21 @@ def _create_course(grant, arguments):
     )
     db.session.add_all([course, membership])
     db.session.flush()
+    if grant.conversation_id:
+        from .workflow_models import EducationConversationBinding
+
+        binding = EducationConversationBinding.query.filter_by(
+            conversation_id=grant.conversation_id,
+            actor_user_id=grant.actor_user_id,
+            binding_mode="course_bootstrap",
+            status="active",
+        ).first()
+        if binding and not binding.course_id:
+            binding.course_id = course.id
+            binding.membership_role_snapshot = TEACHER
+            binding.agent_service_views = {"_edu_1": ["edu"]}
+            grant.course_id = course.id
+            grant.actor_role = TEACHER
     return _course_dict(course, TEACHER)
 
 
@@ -1042,6 +1174,83 @@ def _create_lesson(grant, arguments):
     return _lesson_dict(lesson)
 
 
+def _update_lesson(grant, arguments):
+    lesson_id = str(arguments.get("lesson_id") or "").strip()
+    lesson = Lesson.query.filter_by(
+        id=lesson_id,
+        course_id=grant.course_id,
+    ).first()
+    if not lesson:
+        raise ToolGatewayError("lesson not found", 404, "lesson_not_found")
+    if "title" in arguments:
+        title = str(arguments.get("title") or "").strip()
+        if not 1 <= len(title) <= 200:
+            raise ToolGatewayError(
+                "title must contain 1 to 200 characters",
+                400,
+                "invalid_lesson_title",
+            )
+        lesson.title = title
+    if "duration_minutes" in arguments:
+        try:
+            duration = int(arguments["duration_minutes"])
+        except (TypeError, ValueError) as exc:
+            raise ToolGatewayError(
+                "duration_minutes must be an integer",
+                400,
+                "invalid_lesson_duration",
+            ) from exc
+        if not 1 <= duration <= 600:
+            raise ToolGatewayError(
+                "duration_minutes must be between 1 and 600",
+                400,
+                "invalid_lesson_duration",
+            )
+        lesson.duration_minutes = duration
+    if "position" in arguments:
+        try:
+            lesson.position = int(arguments["position"])
+        except (TypeError, ValueError) as exc:
+            raise ToolGatewayError(
+                "position must be an integer",
+                400,
+                "invalid_lesson_position",
+            ) from exc
+    if "unit_id" in arguments:
+        unit_id = str(arguments.get("unit_id") or "").strip() or None
+        if unit_id and not CourseUnit.query.filter_by(
+            id=unit_id,
+            course_id=grant.course_id,
+            status="active",
+        ).first():
+            raise ToolGatewayError("unit not found", 404, "unit_not_found")
+        lesson.unit_id = unit_id
+    enums = {
+        "learning_domain": {"reading", "writing", "integrated"},
+        "lesson_type_code": {
+            "reading",
+            "writing",
+            "reading_writing",
+            "integrated",
+        },
+    }
+    for field, allowed in enums.items():
+        if field in arguments:
+            value = str(arguments.get(field) or "").strip()
+            if value not in allowed:
+                raise ToolGatewayError(
+                    f"{field} is invalid",
+                    400,
+                    "invalid_lesson_classification",
+                )
+            setattr(lesson, field, value)
+    for field in ("theme_code", "text_genre_code"):
+        if field in arguments:
+            setattr(lesson, field, str(arguments.get(field) or "").strip())
+    db.session.flush()
+    return _lesson_dict(lesson)
+
+
 def _checksum(value):
     return _payload_hash(value)
 
@@ -1049,7 +1258,7 @@ def _checksum(value):
 def _scoped_lesson_id(grant, arguments):
     """Resolve lesson scope from the run; callers cannot widen a scoped run."""
     requested = str(arguments.get("lesson_id") or "").strip()
-    scoped = ""
+    scoped = str(grant.lesson_id or "").strip()
     if grant.agent_run_id:
         from .workflow_models import EducationAgentRun
 
@@ -1058,7 +1267,14 @@ def _scoped_lesson_id(grant, arguments):
             course_id=grant.course_id,
             requested_by=grant.actor_user_id,
         ).first()
-        scoped = str(run.lesson_id or "").strip() if run else ""
+        run_scoped = str(run.lesson_id or "").strip() if run else ""
+        if scoped and run_scoped and scoped != run_scoped:
+            raise ToolGatewayError(
+                "lesson scope is inconsistent",
+                401,
+                "tool_grant_scope_invalid",
+            )
+        scoped = scoped or run_scoped
     if scoped and requested and requested != scoped:
         raise ToolGatewayError(
             "lesson scope is server-issued and cannot be changed",
@@ -1217,6 +1433,189 @@ def _courseware_create(grant, arguments):
     if kind == "slide_document":
         result["visual_qa"] = visual_quality
     return result
+
+
+def _courseware_get(grant, arguments):
+    content_id = str(arguments.get("content_id") or "").strip()
+    content = EducationContent.query.filter_by(
+        id=content_id,
+        course_id=grant.course_id,
+    ).first()
+    if not content:
+        raise ToolGatewayError(
+            "courseware not found",
+            404,
+            "courseware_not_found",
+        )
+    version_id = (
+        str(arguments.get("version_id") or "").strip()
+        or content.current_version_id
+    )
+    version = EducationContentVersion.query.filter_by(
+        id=version_id,
+        content_id=content.id,
+    ).first()
+    if not version:
+        raise ToolGatewayError(
+            "courseware version not found",
+            404,
+            "courseware_version_not_found",
+        )
+    return {
+        "content": {
+            "id": content.id,
+            "course_id": content.course_id,
+            "lesson_id": content.lesson_id,
+            "kind": content.kind,
+            "status": content.status,
+            "visibility_scope": content.visibility_scope,
+            "current_version_id": content.current_version_id,
+        },
+        "version": {
+            "id": version.id,
+            "version_number": version.version_number,
+            "schema_name": version.schema_name,
+            "schema_version": version.schema_version,
+            "source_json": version.source_json,
+            "rendered_html": version.rendered_html or "",
+            "parent_version_id": version.parent_version_id,
+            "change_summary": version.change_summary,
+            "checksum": version.checksum,
+            "created_at": (
+                version.created_at.isoformat() if version.created_at else None
+            ),
+        },
+    }
+
+
+def _validate_version_payload(content, source, rendered_html):
+    if not isinstance(source, dict):
+        raise ToolGatewayError(
+            "source_json must be an object",
+            400,
+            "invalid_courseware_payload",
+        )
+    if content.kind == "lesson_plan":
+        from .runtime_client import CoreRuntimeError, validate_education_artifact
+
+        try:
+            validate_education_artifact("course_designer", source)
+        except CoreRuntimeError as error:
+            raise ToolGatewayError(
+                str(error), 400, "invalid_lesson_plan"
+            ) from error
+    elif content.kind == "slide_document":
+        from .presentation_quality import inspect_slide_document
+        from .runtime_client import CoreRuntimeError, validate_education_artifact
+
+        try:
+            validate_education_artifact("courseware_maker", source)
+        except CoreRuntimeError as error:
+            raise ToolGatewayError(
+                str(error), 400, "invalid_slide_document"
+            ) from error
+        if (
+            not isinstance(rendered_html, str)
+            or len(rendered_html.strip()) < 80
+            or "<html" not in rendered_html.lower()
+        ):
+            raise ToolGatewayError(
+                "slide_document requires a complete rendered_html preview",
+                400,
+                "invalid_slide_preview",
+            )
+        visual_quality = inspect_slide_document(source)
+        if visual_quality["status"] != "passed":
+            blocking = [
+                {
+                    "slide": slide["number"],
+                    "codes": [
+                        finding["code"]
+                        for finding in slide["findings"]
+                    ],
+                }
+                for slide in visual_quality["slides"]
+                if slide["status"] != "passed"
+            ]
+            raise ToolGatewayError(
+                "slide_document visual QA did not pass; repair the listed pages and "
+                f"call the tool again: {json.dumps(blocking, ensure_ascii=False)}",
+                400,
+                "courseware_visual_quality_failed",
+            )
+
+
+def _courseware_version_create(grant, arguments):
+    content_id = str(arguments.get("content_id") or "").strip()
+    content = EducationContent.query.filter_by(
+        id=content_id,
+        course_id=grant.course_id,
+    ).first()
+    if not content:
+        raise ToolGatewayError(
+            "courseware not found",
+            404,
+            "courseware_not_found",
+        )
+    parent = EducationContentVersion.query.filter_by(
+        id=content.current_version_id,
+        content_id=content.id,
+    ).first()
+    if not parent:
+        raise ToolGatewayError(
+            "current courseware version not found",
+            409,
+            "courseware_version_missing",
+        )
+    source = arguments.get("source_json")
+    rendered_html = (
+        arguments.get("rendered_html")
+        if "rendered_html" in arguments
+        else parent.rendered_html
+    )
+    _validate_version_payload(content, source, rendered_html)
+    latest_number = (
+        db.session.query(db.func.max(EducationContentVersion.version_number))
+        .filter(EducationContentVersion.content_id == content.id)
+        .scalar()
+        or 0
+    )
+    version = EducationContentVersion(
+        content_id=content.id,
+        version_number=int(latest_number) + 1,
+        schema_name=parent.schema_name,
+        schema_version=parent.schema_version,
+        source_json=source,
+        rendered_html=rendered_html,
+        parent_version_id=parent.id,
+        change_summary=str(
+            arguments.get("change_summary") or "Agent revision"
+        )[:500],
+        created_by_user_id=grant.actor_user_id,
+        source_agent_run_id=grant.agent_run_id,
+        checksum=_checksum(source),
+    )
+    db.session.add(version)
+    db.session.flush()
+    content.current_version_id = version.id
+    return {
+        "content": {
+            "id": content.id,
+            "course_id": content.course_id,
+            "lesson_id": content.lesson_id,
+            "kind": content.kind,
+            "status": content.status,
+            "current_version_id": version.id,
+        },
+        "version": {
+            "id": version.id,
+            "version_number": version.version_number,
+            "schema_name": version.schema_name,
+            "schema_version": version.schema_version,
+            "parent_version_id": version.parent_version_id,
+            "checksum": version.checksum,
+        },
+    }
 
 
 def _attach_asset(grant, arguments):
@@ -1585,6 +1984,7 @@ def _submission_review_analysis(grant, arguments):
     return {
         "id": analysis.id,
         "version_id": analysis.id,
+        "course_id": grant.course_id,
         "assignment_id": assignment.id,
         "submission_id": submission.id,
         "submission_version_id": version.id,
@@ -1631,7 +2031,10 @@ DISPATCH = {
     "edu.course.create": _create_course,
     "edu.course.members.import": _import_members,
     "edu.lesson.create": _create_lesson,
+    "edu.lesson.update": _update_lesson,
+    "edu.courseware.get": _courseware_get,
     "edu.courseware.create": _courseware_create,
+    "edu.courseware.version.create": _courseware_version_create,
     "edu.asset.attach": _attach_asset,
     "edu.question_bank.upsert": _question_upsert,
     "edu.paper.compose": _paper_compose,
@@ -1707,11 +2110,37 @@ def invoke_tool(
             403,
             "tool_not_granted",
         )
-    if grant.actor_role not in definition["roles"]:
+    if (
+        tool_name == "edu.course.members.import"
+        and tool_name not in (grant.confirmed_actions or [])
+    ):
+        raise ToolGatewayError(
+            "导入学生名单前必须由教师在教学空间确认本次名单",
+            409,
+            "high_impact_confirmation_required",
+        )
+    role_allowed = grant.actor_role in definition["roles"] or (
+        grant.actor_role == "course_creator"
+        and definition.get("course_optional") is True
+        and TEACHER in definition["roles"]
+    )
+    if not role_allowed:
         raise ToolGatewayError(
             "tool is not available to the granted role",
             403,
             "tool_role_forbidden",
+        )
+    scoped_agent_ids = {
+        str(value).strip()
+        for value in (grant.agent_ids or [])
+        if str(value).strip()
+    }
+    executing_agent_id = str(agent_id or "").strip()
+    if scoped_agent_ids and executing_agent_id not in scoped_agent_ids:
+        raise ToolGatewayError(
+            "agent is not included in this run grant",
+            403,
+            "agent_not_in_grant",
         )
     if not isinstance(arguments, dict):
         raise ToolGatewayError(

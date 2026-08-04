@@ -116,3 +116,9 @@ def test_core_proxy_does_not_forward_disabled_education_requests(monkeypatch):
     )
 
     assert response.status_code == 404
+
+
+def test_domain_proxy_timeout_allows_real_sandbox_bootstrap():
+    import app.controllers.domain_proxy_controller as proxy_controller
+
+    assert proxy_controller.PROXY_TIMEOUT >= 120

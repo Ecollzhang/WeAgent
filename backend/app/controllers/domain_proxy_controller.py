@@ -1,6 +1,7 @@
 """Domain Proxy — API 网关，将 /api/domain/{domain}/* 转发到对应的领域服务."""
 from flask import Blueprint, request, Response
 from flask_jwt_extended import jwt_required
+import os
 import requests
 
 domain_proxy_bp = Blueprint('domain_proxy', __name__)
@@ -13,8 +14,17 @@ DOMAIN_SERVICE_PORTS = {
     'rag': 5104,
 }
 
-# 代理超时（秒）
-PROXY_TIMEOUT = 30
+# A real Education chat bootstrap may need to start and health-check a fresh
+# Docker sandbox before it can return. Keep this operator-configurable while
+# avoiding the old 30-second gateway cutoff.
+def _proxy_timeout_seconds():
+    try:
+        return max(30, int(os.getenv("DOMAIN_PROXY_TIMEOUT_SECONDS", "180")))
+    except (TypeError, ValueError):
+        return 180
+
+
+PROXY_TIMEOUT = _proxy_timeout_seconds()
 
 
 def _domain_is_enabled(domain):

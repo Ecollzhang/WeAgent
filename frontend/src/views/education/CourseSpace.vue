@@ -840,10 +840,24 @@ export default {
         return
       }
       try {
+        await this.$confirm(
+          `即将由 Agent 导入 ${members.length} 名学生。系统只会关联现有 WeAgent 账号，并会记录审计日志。是否确认执行？`,
+          '确认导入学生名单',
+          {
+            confirmButtonText: '确认并启动 Agent',
+            cancelButtonText: '返回检查',
+            type: 'warning',
+          },
+        )
+      } catch (_error) {
+        return
+      }
+      try {
         await this.$store.dispatch('education/startProductAgentRun', {
           course_id: this.courseId,
           product_code: 'roster_import',
           options: { members },
+          confirmed_actions: ['edu.course.members.import'],
         })
         this.rosterDialog = false
         this.$message.success('名单导入 Agent 已启动')

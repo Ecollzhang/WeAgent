@@ -12,12 +12,13 @@ assert.ok(
   'public conversation service selection must use the common grayscale contract'
 )
 assert.ok(
-  dashboard.includes('v-if="chatServicesVisible"'),
-  'a disabled public service selector must not remain visible'
+  dashboard.includes('v-if="!isEducationWorkspace && chatServicesVisible"'),
+  'the public service selector must stay gray-controlled and hidden in EDU'
 )
 assert.ok(
-  dashboard.includes('type="checkbox" value="edu" v-model="newConversation.services"'),
-  'the already-integrated Education service must be selectable in public chat'
+  dashboard.includes('bootstrapEducationConversation') &&
+    !dashboard.includes('type="checkbox" value="edu" v-model="newConversation.services"'),
+  'Education service scope must be resolved by the server bootstrap, not a checkbox'
 )
 assert.ok(
   !dashboard.includes('EDU · 待上线'),

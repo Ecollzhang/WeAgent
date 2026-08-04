@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta
 
 from flask import current_app, has_request_context, request
+from flask_jwt_extended import create_access_token
 import requests
 
 from app.models.conversation import Conversation
@@ -42,6 +43,22 @@ def _current_authorization_header():
     if not has_request_context():
         return ""
     return str(request.headers.get("Authorization", "") or "")
+
+
+def _education_runtime_authorization(actor_user_id):
+    """Return request auth or a short-lived core token for background EDU work."""
+    authorization = _current_authorization_header()
+    if authorization:
+        return authorization
+    actor_user_id = str(actor_user_id or "").strip()
+    if not actor_user_id:
+        return ""
+    token = create_access_token(
+        identity=actor_user_id,
+        additional_claims={"service": "core-sandbox-runtime"},
+        expires_delta=timedelta(minutes=15),
+    )
+    return f"Bearer {token}"
 
 
 def _fetch_service_spec_cached(name, ttl=300):
@@ -84,6 +101,24 @@ def _build_services_summary(services):
     """根据选中的服务列表，构建能力摘要文本注入 Agent prompt。"""
     if not services:
         return ""
+    if 'edu' in services:
+        labels = {
+            'edu': 'Education 课程业务',
+            'rag': '课程范围知识检索',
+        }
+        available = [
+            labels[name]
+            for name in ('edu', 'rag')
+            if name in services
+        ]
+        return (
+            "## 当前 Agent 的受控服务视角\n"
+            f"- 可用能力：{'、'.join(available)}\n"
+            "- 只使用已投影到当前 Agent 的工具；list_services 只返回"
+            "当前 Agent 自己的服务，不得借用同组其他 Agent 的能力。\n"
+            "- Education 写操作必须使用 education_action；不得使用 curl、"
+            "任意 URL 或直接 API 写入。"
+        )
     lines = ["## 可用微服务（用curl + $USER_AUTH_TOKEN直接调用）"]
     idx = 0
     for name in services:
@@ -248,13 +283,98 @@ def _validate_education_runtime_grant(token, actor_user_id):
     return response.status_code == 200 and payload.get('valid') is True
 
 
-def _trusted_rag_scope(conversation, user_id, kb_domain=''):
+def _request_education_runtime_context(conversation_id, actor_user_id):
+    """Exchange a core service identity for a fresh course-scoped run grant."""
+    base_url = str(
+        current_app.config.get(
+            'EDUCATION_RUNTIME_VALIDATION_URL',
+            'http://127.0.0.1:5102',
+        )
+    ).rstrip('/')
+    service_token = create_access_token(
+        identity='weagent-core-runtime',
+        additional_claims={
+            'service': 'core',
+            'actor_user_id': str(actor_user_id),
+        },
+        expires_delta=timedelta(minutes=2),
+    )
+    try:
+        response = requests.post(
+            (
+                f'{base_url}/api/edu/conversations/'
+                f'{conversation_id}/runtime-grant'
+            ),
+            headers={'Authorization': f'Bearer {service_token}'},
+            timeout=(2, 8),
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(
+            'Education runtime authorization service is unavailable'
+        ) from exc
+    if response.status_code != 201 or not isinstance(payload, dict):
+        message = (
+            payload.get('error')
+            if isinstance(payload, dict)
+            else None
+        )
+        raise RuntimeError(
+            message or 'Education runtime authorization was rejected'
+        )
+    run_grant = str(payload.get('run_grant') or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9._~-]{20,256}', run_grant):
+        raise RuntimeError('Education runtime returned an invalid grant')
+    views = payload.get('agent_service_views')
+    services = payload.get('services')
+    if (
+        not isinstance(views, dict)
+        or not views
+        or not isinstance(services, list)
+        or any(
+            not isinstance(agent_id, str)
+            or not isinstance(agent_services, list)
+            or any(
+                service not in {'edu', 'rag', 'rd', 'office'}
+                for service in agent_services
+            )
+            for agent_id, agent_services in views.items()
+        )
+    ):
+        raise RuntimeError('Education runtime returned an invalid service scope')
+    return {
+        **payload,
+        'run_grant': run_grant,
+        'agent_service_views': views,
+        'services': list(dict.fromkeys(services)),
+    }
+
+
+def _trusted_rag_scope(
+    conversation,
+    user_id,
+    kb_domain='',
+    *,
+    education_context=None,
+):
     """Build a server-issued RAG scope; model/tool arguments cannot widen it."""
     allowed_domains = {'rd', 'edu', 'office'}
     scope = {
         'RAG_SCOPE_USER_ID': str(user_id),
         'RAG_SCOPE_DOMAIN': kb_domain if kb_domain in allowed_domains else 'rd',
     }
+    if kb_domain == 'edu' and isinstance(education_context, dict):
+        course_id = str(education_context.get('course_id') or '').strip()
+        membership_role = str(
+            education_context.get('membership_role') or ''
+        ).strip()
+        if course_id and membership_role in {'teacher', 'student'}:
+            scope.update({
+                'RAG_SCOPE_DOMAIN': 'edu',
+                'RAG_SCOPE_WORKSPACE_ID': course_id,
+                'RAG_SCOPE_EDUCATION_ROLE': membership_role,
+            })
+            return scope
     if conversation.workspace_id:
         from app.models.workspace import Workspace
 
@@ -380,6 +500,7 @@ class ConversationService:
         data.pop('sandbox_snapshot_sha256', None)
         data.pop('sandbox_server_fallback', None)
         data.pop('sandbox_agent_adapters', None)
+        data.pop('sandbox_agent_service_views', None)
         data['sandbox_runtime'] = {
             'status': conversation.sandbox_status,
             'generation': conversation.sandbox_generation or 1,
@@ -502,6 +623,30 @@ class ConversationService:
             for adapter in [str(config.get('adapter_name') or '').strip()]
             if adapter in allowed_adapters
         }
+        service_union = {
+            str(name)
+            for name in (services or [])
+            if str(name) in {'rd', 'rag', 'edu', 'office'}
+        }
+        conversation.sandbox_agent_service_views = {
+            str(agent_id): [
+                name
+                for name in ('edu', 'rag', 'rd', 'office')
+                if name in service_union
+                and name in {
+                    str(item)
+                    for item in (
+                        config.get('allowed_services')
+                        if isinstance(config, dict)
+                        and isinstance(config.get('allowed_services'), list)
+                        else []
+                    )
+                }
+            ]
+            for agent_id, config in (agent_configs or {}).items()
+            if isinstance(config, dict)
+            and isinstance(config.get('allowed_services'), list)
+        }
         db.session.commit()
 
         # Add owner as participant with display info
@@ -619,12 +764,31 @@ class ConversationService:
         if error:
             return error
         env_vars = dict(env_vars or {})
-        rag_scope = _trusted_rag_scope(conversation, user_id, kb_domain)
+        education_scope = None
+        if isinstance(agent_configs, dict):
+            for config in agent_configs.values():
+                context = (
+                    config.get('education_tool_context')
+                    if isinstance(config, dict)
+                    else None
+                )
+                if isinstance(context, dict) and context.get('course_id'):
+                    education_scope = context
+                    break
+        rag_scope = _trusted_rag_scope(
+            conversation,
+            user_id,
+            kb_domain,
+            education_context=education_scope,
+        )
         env_vars.update(rag_scope)
         env_vars.update(education_runtime_env)
 
         # Pass user's auth token so sandbox tools can call services on behalf of the user
-        auth_header = _current_authorization_header()
+        # A newly created or rehydrated runtime always needs a usable service
+        # credential. During a request this preserves the caller token;
+        # background recovery receives a short-lived core-issued token.
+        auth_header = _education_runtime_authorization(user_id)
         if auth_header:
             env_vars["USER_AUTH_TOKEN"] = auth_header
 
@@ -635,6 +799,9 @@ class ConversationService:
         # ── [NEW] 服务 & 项目环境变量 ──────────────────────
         services_list = conversation.services or []
         env_vars["CONVERSATION_SERVICES"] = _json.dumps(services_list)
+        env_vars["AGENT_SERVICE_VIEWS"] = _json.dumps(
+            conversation.sandbox_agent_service_views or {}
+        )
         env_vars["RD_PROJECT_ID"] = conversation.project_id or ""
 
         # ── [NEW] 用户信息 ─────────────────────────────────
@@ -694,6 +861,17 @@ class ConversationService:
             workspace_name = _safe_workspace_name(agent.name)
             work_dir = f'/workspace/agents/{workspace_name}'
             system_prompt_parts = [agent.system_prompt or '']
+            agent_services = (
+                (conversation.sandbox_agent_service_views or {}).get(
+                    str(agent.id)
+                )
+                or services_list
+            )
+            agent_services_summary = (
+                _build_services_summary(agent_services)
+                if agent_services
+                else ""
+            )
             if participant.participant_id == MODERATOR_AGENT_ID:
                 worker_infos = []
                 for p in participants:
@@ -717,8 +895,8 @@ class ConversationService:
                 system_prompt_parts.append(f'\n\n{project_context}')
             if kb_context:
                 system_prompt_parts.append(f'\n\n{kb_context}')
-            if services_summary:
-                system_prompt_parts.append(f'\n\n{services_summary}')
+            if agent_services_summary:
+                system_prompt_parts.append(f'\n\n{agent_services_summary}')
             system_prompt_parts.append(f"""
 
 文件产物要求:
@@ -852,32 +1030,123 @@ class ConversationService:
         if manager is None:
             from app.sandbox import get_manager
             manager = get_manager()
+        education_context = None
+        if (conversation.kb_domain or '') == 'edu':
+            try:
+                education_context = _request_education_runtime_context(
+                    conversation.id,
+                    user_id,
+                )
+            except RuntimeError as exc:
+                return None, str(exc)
+            conversation.sandbox_agent_service_views = (
+                education_context['agent_service_views']
+            )
+            conversation.services = education_context['services']
         session = (
             manager.get_session(conversation.sandbox_session_id)
             if conversation.sandbox_session_id
             else None
         )
         if session and getattr(session, '_check_alive', lambda: True)():
-            authorization = _current_authorization_header()
-            refresh_auth = getattr(manager, 'update_runtime_auth', None)
-            if authorization and callable(refresh_auth):
+            authorization = _education_runtime_authorization(user_id)
+            legacy_runtime_requires_rehydrate = False
+            if education_context:
+                refresh_context = getattr(
+                    manager,
+                    'update_education_runtime_context',
+                    None,
+                )
+                if not authorization or not callable(refresh_context):
+                    return None, (
+                        'Education runtime cannot refresh its authenticated '
+                        'course scope'
+                    )
                 try:
-                    refresh_auth(
+                    refresh_kwargs = {
+                        'authorization': authorization,
+                        'run_grant': education_context['run_grant'],
+                        'service_url': current_app.config.get(
+                            'EDUCATION_SERVICE_URL',
+                            'http://host.docker.internal:5102',
+                        ).rstrip('/'),
+                        'agent_service_views': education_context[
+                            'agent_service_views'
+                        ],
+                        'services': education_context['services'],
+                    }
+                    if education_context.get('course_id'):
+                        refresh_kwargs.update({
+                            'course_id': education_context['course_id'],
+                            'membership_role': education_context.get(
+                                'membership_role'
+                            ),
+                            'actor_user_id': user_id,
+                        })
+                    refresh_result = refresh_context(
+                        conversation.sandbox_session_id,
+                        **refresh_kwargs,
+                    )
+                    if (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('optional_route_missing')
+                    ):
+                        legacy_runtime_requires_rehydrate = True
+                    elif (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('status') == 'error'
+                    ):
+                        return None, (
+                            'Failed to refresh the Education sandbox scope: '
+                            f"{refresh_result.get('error') or 'unknown error'}"
+                        )
+                except Exception as exc:
+                    return None, (
+                        'Failed to refresh the Education sandbox scope: '
+                        f'{exc}'
+                    )
+            refresh_auth = getattr(manager, 'update_runtime_auth', None)
+            if (
+                not education_context
+                and authorization
+                and callable(refresh_auth)
+            ):
+                try:
+                    refresh_result = refresh_auth(
                         conversation.sandbox_session_id,
                         authorization,
                     )
+                    if (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('optional_route_missing')
+                    ):
+                        legacy_runtime_requires_rehydrate = True
+                    elif (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('status') == 'error'
+                    ):
+                        return None, (
+                            '刷新沙箱领域服务授权失败：'
+                            f"{refresh_result.get('error') or 'unknown error'}"
+                        )
                 except Exception as exc:
                     return None, f'刷新沙箱领域服务授权失败：{exc}'
-            conversation.sandbox_status = 'running'
-            conversation.last_active_at = beijing_now()
-            conversation.sandbox_expires_at = (
-                beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
-            )
-            db.session.commit()
-            return {
-                'rehydrated': False,
-                'runtime_generation': conversation.sandbox_generation or 1,
-            }, None
+            if legacy_runtime_requires_rehydrate:
+                try:
+                    self.snapshot_sandbox(conversation, manager=manager)
+                except Exception as exc:
+                    return None, f'升级历史沙箱前保存工作区失败：{exc}'
+            else:
+                conversation.sandbox_status = 'running'
+                conversation.last_active_at = beijing_now()
+                conversation.sandbox_expires_at = (
+                    beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
+                )
+                db.session.commit()
+                return {
+                    'rehydrated': False,
+                    'runtime_generation': conversation.sandbox_generation or 1,
+                }, None
 
         if conversation.sandbox_session_id:
             manager.destroy_session(conversation.sandbox_session_id)
@@ -887,11 +1156,38 @@ class ConversationService:
             if item.participant_type == 'agent'
         ]
         saved_adapters = {
-            str(agent_id): {'adapter_name': adapter}
+            str(agent_id): {
+                'adapter_name': adapter,
+                'allowed_services': (
+                    conversation.sandbox_agent_service_views or {}
+                ).get(str(agent_id), []),
+            }
             for agent_id, adapter in (
                 conversation.sandbox_agent_adapters or {}
             ).items()
         }
+        if education_context:
+            for agent_id, services in education_context[
+                'agent_service_views'
+            ].items():
+                config = saved_adapters.setdefault(
+                    str(agent_id),
+                    {
+                        'adapter_name': 'codex',
+                        'allowed_services': services,
+                    },
+                )
+                config['allowed_services'] = services
+                config['education_tool_context'] = {
+                    'run_grant': education_context['run_grant'],
+                }
+                if education_context.get('course_id'):
+                    config['education_tool_context'].update({
+                        'course_id': education_context['course_id'],
+                        'membership_role': education_context.get(
+                            'membership_role'
+                        ),
+                    })
         error = self._create_agent_sandbox(
             conversation,
             participants,

@@ -71,7 +71,7 @@
         </span>
         <span v-if="conversation.services?.includes('rag')" class="ctx-chip rag" title="知识库服务已启用">
           <span class="ctx-dot rag"></span> RAG
-          <span v-if="conversation.kb_domain" class="ctx-sub">· {{ kbDomainLabel(conversation.kb_domain) }}</span>
+          <span v-if="conversation.kb_domain" class="ctx-sub">· {{ kbDomainLabel }}</span>
         </span>
       </div>
     </div>

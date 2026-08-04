@@ -31,6 +31,10 @@ from .knowledge_service import (
     question_to_dict,
     stimulus_to_dict,
 )
+from .rag_ingestion import (
+    ingest_knowledge_resource,
+    refresh_knowledge_resource_status,
+)
 from .web_resource_service import WebResourceAdoptionError, adopt_web_knowledge_resource
 
 
@@ -331,6 +335,8 @@ def create_resource_route(course_id):
             request.get_json(silent=True) or {},
         )
         db.session.commit()
+        ingest_knowledge_resource(resource)
+        db.session.commit()
     except KnowledgeServiceError as error:
         return _service_error(error)
     return jsonify(knowledge_resource_to_dict(resource)), 201
@@ -350,6 +356,8 @@ def adopt_web_resource(course_id):
             data=request.get_json(silent=True) or {},
             fetcher=current_app.config.get("EDUCATION_CONTENT_FETCHER"),
         )
+        db.session.commit()
+        ingest_knowledge_resource(resource)
         db.session.commit()
     except (AssetServiceError, KnowledgeServiceError) as error:
         return _service_error(error)
@@ -375,6 +383,11 @@ def list_resources(course_id):
     if membership.role != "teacher":
         query = query.filter_by(visibility_scope="course_published")
     rows = query.order_by(KnowledgeResource.created_at.desc()).all()
+    refreshed = False
+    for row in rows:
+        refreshed = refresh_knowledge_resource_status(row) or refreshed
+    if refreshed:
+        db.session.commit()
     return jsonify({"items": [knowledge_resource_to_dict(row) for row in rows]})
 
 

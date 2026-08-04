@@ -267,7 +267,7 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn("startup_timeout_sec = 10", config)
         self.assertIn("tool_timeout_sec = 120", config)
 
-    def test_deepseek_uses_audited_text_tool_loop_instead_of_native_mcp_bridge(self):
+    def test_deepseek_uses_audited_text_tool_loop_without_native_mcp(self):
         runtime = AgentRuntime(
             "agent-1", "Courseware", "system", "courseware", provider_name="codex"
         )
@@ -504,6 +504,37 @@ class CodexRunnerStage4Test(unittest.TestCase):
         ensure_relay.assert_called_once_with("https://api.deepseek.com/v1")
         self.assertEqual("http://127.0.0.1:4446/v1", env["CODEX_BASE_URL"])
 
+    def test_relay_bind_is_an_ip_and_port_is_configured_separately(self):
+        with patch.dict("os.environ", {"CODEX_USE_RELAY": "0"}, clear=True):
+            runtime = AgentRuntime(
+                "agent-1", "Coder", "system", "coder", provider_name="codex"
+            )
+        runner = runtime.provider_runner
+        runner._relay_base_url = ""
+        runner._relay_upstream = ""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "coder")
+            with patch.dict(
+                "os.environ",
+                {"DEEPSEEK_API_KEY": "sk-test", "CODEX_USE_RELAY": "1"},
+                clear=True,
+            ), patch.object(runner, "_first_free_port", return_value=4446), patch(
+                "app.sandbox.container.providers.codex.subprocess.Popen"
+            ) as popen, patch(
+                "app.sandbox.container.providers.codex.log_agent"
+            ):
+                popen.return_value = SimpleNamespace(pid=321)
+                runner._ensure_relay("https://api.deepseek.com/v1")
+
+        relay_env = popen.call_args.kwargs["env"]
+        self.assertEqual("127.0.0.1", relay_env["CODEX_RELAY_BIND"])
+        self.assertEqual("4446", relay_env["CODEX_RELAY_PORT"])
+        self.assertEqual(
+            '["tools","tool_choice","parallel_tool_calls"]',
+            relay_env["CODEX_RELAY_DROP_PARAMS"],
+        )
+
     def test_codex_uses_provider_specific_timeout(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
 
@@ -521,6 +552,38 @@ class CodexRunnerStage4Test(unittest.TestCase):
         output = runtime.provider_runner.clean_output(raw)
 
         self.assertEqual("hello\nworld\nplain text", output)
+
+    def test_clean_output_hides_reasoning_todos_and_mcp_probe_failures(self):
+        runtime = AgentRuntime(
+            "agent-1", "Coder", "system", "coder", provider_name="codex"
+        )
+        raw = "\n".join([
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "reasoning", "text": "private chain"},
+            }),
+            json.dumps({
+                "type": "item.updated",
+                "item": {"type": "todo_list", "items": [{"text": "probe"}]},
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "error": {"message": "server was not ready"},
+                },
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "error", "message": "metadata fallback"},
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "final answer"},
+            }),
+        ])
+
+        self.assertEqual("final answer", runtime.provider_runner.clean_output(raw))
 
     def test_codex_filters_pretty_json_control_events_and_reconnect_errors(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")

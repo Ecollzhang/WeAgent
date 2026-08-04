@@ -1,7 +1,8 @@
 from types import SimpleNamespace
 import json
 
-from app.services.message_service import MessageService
+from app.services.message_service import MessageService, _public_education_workflow
+from app.services.agent_output_sanitizer import public_agent_output
 
 
 def _worker(agent_id, name):
@@ -169,6 +170,183 @@ def test_server_defined_workflow_accepts_bounded_student_insight_finalizer():
     }
 
 
+def test_education_natural_language_courseware_intent_builds_trusted_plan():
+    conversation = SimpleNamespace(kb_domain="edu")
+    workers = [
+        _worker("_edu_1", "Course designer"),
+        _worker("_edu_2", "Courseware maker"),
+        _worker("_edu_9", "Teaching reviewer"),
+    ]
+
+    plan = MessageService._education_natural_language_plan(
+        conversation,
+        "根据当前教案帮我生成一套 8 页左右、paper_annotation 风格的 PPT。",
+        workers,
+    )
+
+    assert plan["source"] == "education_natural_language_intent"
+    assert plan["intent"] == "courseware_create"
+    assert [task["agent_id"] for task in plan["tasks"]] == [
+        "_edu_1",
+        "_edu_2",
+        "_edu_9",
+    ]
+    maker = plan["tasks"][1]
+    assert maker["finalizer"] == {
+        "type": "education_courseware_from_agent_files"
+    }
+    assert "slide_document.json" in maker["instruction"]
+    assert "preview.html" in maker["instruction"]
+    assert "paper_annotation" in maker["instruction"]
+
+
+def test_education_natural_language_revision_takes_precedence_over_create():
+    conversation = SimpleNamespace(kb_domain="edu")
+    workers = [
+        _worker("_edu_2", "Courseware maker"),
+        _worker("_edu_9", "Teaching reviewer"),
+    ]
+
+    plan = MessageService._education_natural_language_plan(
+        conversation,
+        "把第三页改成证据—推理—结论结构，并保存新版本。",
+        workers,
+    )
+
+    assert plan["intent"] == "courseware_version"
+    assert plan["tasks"][0]["finalizer"] == {
+        "type": "education_courseware_version_from_agent_files"
+    }
+    assert "edu.course.context.get" in plan["tasks"][0]["instruction"]
+
+
+def test_education_natural_language_lesson_update_uses_bounded_finalizer():
+    conversation = SimpleNamespace(kb_domain="edu")
+    workers = [_worker("_edu_1", "Course designer")]
+
+    plan = MessageService._education_natural_language_plan(
+        conversation,
+        "把当前课时时长改成 50 分钟。",
+        workers,
+    )
+
+    assert plan["intent"] == "lesson_update"
+    assert plan["tasks"][0]["finalizer"] == {
+        "type": "education_lesson_update_from_agent_reply"
+    }
+    assert "changes" in plan["tasks"][0]["instruction"]
+
+
+def test_education_workflow_projection_hides_private_instruction_and_ids():
+    plan = MessageService._education_natural_language_plan(
+        SimpleNamespace(kb_domain="edu"),
+        "把当前课时时长改成 50 分钟。",
+        [_worker("_edu_1", "课程设计师")],
+    )
+
+    workflow = MessageService._workflow_from_plan(plan)
+    summary = MessageService._format_plan_summary(plan)
+
+    assert workflow["nodes"][0]["title"] == "课程设计师"
+    assert "instruction" not in workflow["nodes"][0]
+    assert "agent_id" not in workflow["nodes"][0]
+    assert "_edu_1" not in summary
+    assert "edu-intent-lesson_update-1" not in summary
+    assert "课程设计师" in summary
+
+
+def test_public_agent_output_removes_provider_and_private_tool_trace():
+    raw = (
+        'Reading additional input from stdin...我将先探测当前服务。\n'
+        '<tool_call>{"name":"list_services","args":{}}</tool_call>\n'
+        'This will show me the available endpoints.\n'
+        '{"changes":{"duration_minutes":50},"summary":"已调整",'
+        '"workspace":"be6e11ee-4d3d-45bc-be70-76a83f1c25cf"}'
+    )
+
+    projected = public_agent_output(raw)
+
+    assert projected == (
+        '{"changes":{"duration_minutes":50},"summary":"已调整",'
+        '"workspace":"[内部标识已隐藏]"}'
+    )
+    assert "tool_call" not in projected
+
+
+def test_public_agent_output_hides_project_ids_and_private_workflow_task_keys():
+    raw = (
+        "课程 ID：1821bf81-485d-4c1a-94e3-b90936bceb8d\n"
+        "前置任务未成功完成：edu-intent-courseware_create-2"
+    )
+
+    projected = public_agent_output(raw)
+
+    assert "1821bf81-485d-4c1a-94e3-b90936bceb8d" not in projected
+    assert "edu-intent-courseware_create-2" not in projected
+    assert "[内部标识已隐藏]" in projected
+    assert "前置步骤" in projected
+
+
+def test_existing_education_workflow_is_projected_without_private_fields():
+    conversation = SimpleNamespace(
+        kb_domain="edu",
+        participants=[
+            SimpleNamespace(
+                participant_type="agent",
+                participant_id="_edu_1",
+                participant_name="课程设计师",
+            )
+        ],
+    )
+    element = {
+        "type": "workflow",
+        "content": "internal",
+        "data": {
+            "id": "private-id",
+            "name": "课时修改",
+            "summary": "正在修改课时",
+            "source": "moderator_plan",
+            "raw_plan": {"token": "must-not-leak"},
+            "nodes": [
+                {
+                    "id": "edu-intent-lesson_update-1",
+                    "agent_id": "_edu_1",
+                    "instruction": "private system instruction",
+                    "title": "internal title",
+                    "depends_on": [],
+                }
+            ],
+            "edges": [],
+            "parallel_groups": [["edu-intent-lesson_update-1"]],
+        },
+    }
+
+    projected = _public_education_workflow(element, conversation)
+    serialized = json.dumps(projected, ensure_ascii=False)
+
+    assert projected["data"]["nodes"][0]["title"] == "课程设计师"
+    assert projected["data"]["nodes"][0]["id"] == "step-1"
+    assert "instruction" not in serialized
+    assert "_edu_1" not in serialized
+    assert "private-id" not in serialized
+    assert "must-not-leak" not in serialized
+
+
+def test_education_natural_language_router_does_not_capture_general_chat():
+    workers = [_worker("_edu_2", "Courseware maker")]
+
+    assert MessageService._education_natural_language_plan(
+        SimpleNamespace(kb_domain="rd"),
+        "生成一套 PPT",
+        workers,
+    ) is None
+    assert MessageService._education_natural_language_plan(
+        SimpleNamespace(kb_domain="edu"),
+        "请解释 CER 推理支架是什么。",
+        workers,
+    ) is None
+
+
 def test_courseware_finalizer_adopts_the_designated_agents_validated_files():
     class FakeManager:
         def __init__(self):
@@ -219,6 +397,136 @@ def test_courseware_finalizer_adopts_the_designated_agents_validated_files():
     assert args["arguments"]["source_json"]["theme"]["style"] == "paper_annotation"
     assert args["idempotency_key"].startswith("product-courseware-slide-")
     assert len(args["idempotency_key"]) == len("product-courseware-slide-") + 16
+
+
+def test_courseware_version_finalizer_updates_latest_lesson_object():
+    class FakeManager:
+        def __init__(self):
+            self.executed = []
+
+        def get_agent_raw_file(self, session_id, agent_id, path):
+            if path == "slide_document.json":
+                return (
+                    b'{"title":"Evidence and Reasoning","theme":{"style":"paper_annotation"},'
+                    b'"slides":[]}',
+                    "application/json",
+                )
+            if path == "preview.html":
+                return (
+                    b"<!doctype html><html><body><main>updated complete classroom "
+                    b"preview with evidence reasoning and conclusion</main></body></html>",
+                    "text/html",
+                )
+            raise AssertionError(path)
+
+        def execute_tool(self, session_id, agent_id, tool_name, args):
+            self.executed.append((session_id, agent_id, tool_name, args))
+            if args["action"] == "edu.course.context.get":
+                result = {
+                    "courseware_context": {
+                        "slide_documents": [
+                            {
+                                "content_id": "content-1",
+                                "version_id": "version-1",
+                                "version_number": 1,
+                            }
+                        ]
+                    }
+                }
+            else:
+                result = {
+                    "content": {"id": "content-1", "kind": "slide_document"},
+                    "version": {"id": "version-2", "version_number": 2},
+                }
+            return {
+                "status": "ok",
+                "result": {
+                    "status": "ok",
+                    "result": {
+                        "call_id": "call-1",
+                        "tool_name": args["action"],
+                        "replayed": False,
+                        "result": result,
+                    },
+                },
+            }
+
+    manager = FakeManager()
+    result = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_2",
+        {"type": "education_courseware_version_from_agent_files"},
+    )
+
+    assert result["status"] == "ok"
+    assert [entry[3]["action"] for entry in manager.executed] == [
+        "edu.course.context.get",
+        "edu.courseware.version.create",
+    ]
+    version_call = manager.executed[1][3]
+    assert version_call["arguments"]["content_id"] == "content-1"
+    assert version_call["idempotency_key"].startswith(
+        "chat-courseware-version-content-1-"
+    )
+
+
+def test_lesson_update_finalizer_resolves_scoped_lesson_and_updates_only_changes():
+    class FakeManager:
+        def __init__(self):
+            self.executed = []
+
+        def execute_tool(self, session_id, agent_id, tool_name, args):
+            self.executed.append((session_id, agent_id, tool_name, args))
+            if args["action"] == "edu.course.context.get":
+                result = {
+                    "courseware_context": {
+                        "lesson": {
+                            "id": "lesson-1",
+                            "title": "Old title",
+                            "duration_minutes": 45,
+                        }
+                    }
+                }
+            else:
+                result = {
+                    "id": "lesson-1",
+                    "course_id": "course-1",
+                    "title": "Old title",
+                    "duration_minutes": 50,
+                }
+            return {
+                "status": "ok",
+                "result": {"status": "ok", "result": result},
+            }
+
+    manager = FakeManager()
+    result = MessageService._execute_trusted_task_finalizer(
+        manager,
+        "session-1",
+        "_edu_1",
+        {"type": "education_lesson_update_from_agent_reply"},
+        reply=json.dumps(
+            {
+                "changes": {"duration_minutes": 50},
+                "summary": "Extend guided practice by five minutes.",
+            }
+        ),
+    )
+
+    assert result["status"] == "ok"
+    assert [entry[3]["action"] for entry in manager.executed] == [
+        "edu.course.context.get",
+        "edu.lesson.update",
+    ]
+    update_call = manager.executed[1][3]
+    assert update_call["arguments"] == {
+        "lesson_id": "lesson-1",
+        "duration_minutes": 50,
+    }
+    assert update_call["idempotency_key"].startswith(
+        "chat-lesson-update-lesson-1-"
+    )
 
 
 def test_submission_review_finalizer_adopts_strict_agent_json():

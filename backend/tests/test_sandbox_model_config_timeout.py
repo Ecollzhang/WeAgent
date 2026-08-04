@@ -60,6 +60,24 @@ def test_runtime_config_update_uses_short_timeout(monkeypatch):
     ]
 
 
+def test_runtime_config_update_marks_legacy_image_without_refresh_route(
+    monkeypatch,
+):
+    def fake_request(self, method, path, body=None, timeout=None):
+        return {
+            "status": "error",
+            "error": "HTTP 404: <title>404 Not Found</title>",
+        }
+
+    monkeypatch.setattr(OrchestratorClient, "_request", fake_request)
+
+    result = OrchestratorClient().update_runtime_config({
+        "USER_AUTH_TOKEN": "Bearer fresh-token",
+    })
+
+    assert result["optional_route_missing"] is True
+
+
 def test_health_check_uses_short_timeout(monkeypatch):
     calls = []
 

@@ -271,6 +271,81 @@ class CoreRuntimeClient:
             raise CoreRuntimeError(f"core runtime is unavailable: {exc}") from exc
         return self._payload(response)
 
+    @staticmethod
+    def _agent_configs(agent_ids, *, agent_service_views=None,
+                       education_run_grant=None, adapter_name="codex",
+                       course_id=None, membership_role=None):
+        views = agent_service_views if isinstance(agent_service_views, dict) else {}
+        configs = {}
+        for agent_id in [*agent_ids, "moderator"]:
+            config = {"adapter_name": adapter_name}
+            if agent_id in views:
+                config["allowed_services"] = list(views[agent_id])
+            elif agent_id == "moderator" and views:
+                config["allowed_services"] = ["edu"]
+            if education_run_grant:
+                config["education_tool_context"] = {
+                    "run_grant": education_run_grant
+                }
+                if course_id:
+                    config["education_tool_context"]["course_id"] = course_id
+                if membership_role:
+                    config["education_tool_context"][
+                        "membership_role"
+                    ] = membership_role
+            configs[agent_id] = config
+        return configs
+
+    def create_conversation(
+        self,
+        *,
+        authorization,
+        title,
+        agent_ids,
+        workspace_role,
+        services,
+        agent_service_views,
+        visible_context=None,
+        education_run_grant=None,
+    ):
+        return self._request(
+            "POST",
+            "/api/conversations",
+            authorization,
+            json={
+                "title": title,
+                "type": "group" if len(agent_ids) > 1 else "single",
+                "participant_ids": [
+                    f"agent_{agent_id}" for agent_id in agent_ids
+                ],
+                "kb_domain": "edu",
+                "services": list(services or ["edu"]),
+                "project_id": None,
+                "workspace_context": {
+                    "domain": "edu",
+                    "role": workspace_role,
+                    "role_source": "course_membership",
+                },
+                "agent_configs": self._agent_configs(
+                    agent_ids,
+                    agent_service_views=agent_service_views,
+                    education_run_grant=education_run_grant,
+                    adapter_name=self.agent_adapter,
+                    course_id=(
+                        (visible_context or {}).get("course") or {}
+                    ).get("id"),
+                    membership_role=workspace_role,
+                ),
+            },
+        )
+
+    def delete_conversation(self, *, authorization, conversation_id):
+        return self._request(
+            "DELETE",
+            f"/api/conversations/{conversation_id}",
+            authorization,
+        )
+
     def start_workflow(
         self,
         *,
@@ -282,15 +357,23 @@ class CoreRuntimeClient:
         agent_ids,
         workflow,
         education_run_grant=None,
+        services=None,
+        agent_service_views=None,
     ):
-        agent_configs = {}
-        for agent_id in [*agent_ids, "moderator"]:
-            config = {"adapter_name": self.agent_adapter}
-            if education_run_grant:
-                config["education_tool_context"] = {
-                    "run_grant": education_run_grant
-                }
-            agent_configs[agent_id] = config
+        education_context = (
+            workflow.get("education_context")
+            if isinstance(workflow, dict)
+            and isinstance(workflow.get("education_context"), dict)
+            else {}
+        )
+        agent_configs = self._agent_configs(
+            agent_ids,
+            agent_service_views=agent_service_views,
+            education_run_grant=education_run_grant,
+            adapter_name=self.agent_adapter,
+            course_id=education_context.get("course_id"),
+            membership_role=workspace_role,
+        )
         conversation = self._request(
             "POST",
             "/api/conversations",
@@ -300,6 +383,8 @@ class CoreRuntimeClient:
                 "type": "group",
                 "participant_ids": [f"agent_{agent_id}" for agent_id in agent_ids],
                 "kb_domain": "edu",
+                "services": list(services or ["edu"]),
+                "project_id": None,
                 "workspace_context": {
                     "domain": "edu",
                     "role": (

@@ -64,6 +64,7 @@ def create_edu_app(config_object=Config):
         from .knowledge_routes import education_knowledge_api
         from .learning_routes import education_learning_api
         from .tool_routes import education_tool_api
+        from .conversation_routes import education_conversation_api
     except ImportError:
         from services.edu.routes import education_api
         from services.edu.workflow_routes import education_workflow_api
@@ -72,6 +73,7 @@ def create_edu_app(config_object=Config):
         from services.edu.knowledge_routes import education_knowledge_api
         from services.edu.learning_routes import education_learning_api
         from services.edu.tool_routes import education_tool_api
+        from services.edu.conversation_routes import education_conversation_api
     app.register_blueprint(education_api, url_prefix="/api/edu")
     app.register_blueprint(education_workflow_api, url_prefix="/api/edu")
     app.register_blueprint(education_content_api, url_prefix="/api/edu")
@@ -79,6 +81,7 @@ def create_edu_app(config_object=Config):
     app.register_blueprint(education_knowledge_api, url_prefix="/api/edu")
     app.register_blueprint(education_learning_api, url_prefix="/api/edu")
     app.register_blueprint(education_tool_api, url_prefix="/api/edu")
+    app.register_blueprint(education_conversation_api, url_prefix="/api/edu")
 
     @app.cli.command("migrate-education")
     def migrate_education_command():

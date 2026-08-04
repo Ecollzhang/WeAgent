@@ -43,7 +43,7 @@
         :loading="convLoading"
         :userAvatar="userAvatar"
         @select="handleSelectConversation"
-        @create-conversation="showCreateDialog = true"
+        @create-conversation="openCreateConversation"
       />
     </div>
 
@@ -55,6 +55,7 @@
         :loading="educationContextLoading"
       />
       <ChatWindow
+        :key="currentConversation?.id || 'empty-chat'"
         :conversation="currentConversation"
         :messages="currentMessages"
         :userId="userId"
@@ -304,7 +305,7 @@
 
     <el-dialog title="新建会话" :visible.sync="showCreateDialog" width="680px" custom-class="create-conv-dialog" top="6vh">
       <div class="create-conv-body">
-        <div class="conv-field" v-if="chatServicesVisible">
+        <div class="conv-field">
           <label class="field-label">会话标题</label>
           <el-input
             v-model="newConversation.title"
@@ -313,6 +314,77 @@
           >
             <i slot="prefix" class="el-icon-edit-outline"></i>
           </el-input>
+        </div>
+
+        <div v-if="isEducationWorkspace" class="education-conversation-scope">
+          <div class="scope-heading">
+            <span class="scope-icon"><i class="el-icon-reading"></i></span>
+            <div>
+              <strong>关联教学课程</strong>
+              <small>课程身份和 Agent 权限由系统自动确认</small>
+            </div>
+          </div>
+          <div class="scope-grid">
+            <div class="conv-field">
+              <label class="field-label">课程 <span class="field-required">必选</span></label>
+              <el-select
+                v-model="newConversation.courseId"
+                placeholder="选择一门课程"
+                style="width: 100%"
+                :loading="educationCoursesLoading"
+                @change="loadEducationOptions"
+              >
+                <el-option
+                  v-for="course in educationCourses"
+                  :key="course.id"
+                  :label="course.title"
+                  :value="course.id"
+                />
+              </el-select>
+            </div>
+            <div class="conv-field">
+              <label class="field-label">当前身份</label>
+              <div class="membership-role" :class="educationOptions.membership_role || 'pending'">
+                <i :class="educationOptions.membership_role === 'teacher' ? 'el-icon-s-custom' : 'el-icon-user'"></i>
+                {{ educationRoleLabel }}
+                <small>来自课程成员关系，不可手动切换</small>
+              </div>
+            </div>
+          </div>
+          <div class="scope-grid">
+            <div class="conv-field">
+              <label class="field-label">课时 <span class="field-hint">（可选）</span></label>
+              <el-select
+                v-model="newConversation.lessonId"
+                placeholder="整门课程，或选择具体课时"
+                clearable
+                style="width: 100%"
+                :disabled="!newConversation.courseId"
+              >
+                <el-option
+                  v-for="lesson in educationOptions.lessons || []"
+                  :key="lesson.id"
+                  :label="lesson.title"
+                  :value="lesson.id"
+                />
+              </el-select>
+            </div>
+            <div class="conv-field">
+              <label class="field-label">资料范围</label>
+              <el-select v-model="newConversation.materialPolicy" style="width: 100%">
+                <el-option
+                  v-for="policy in educationOptions.material_policies || []"
+                  :key="policy.value"
+                  :label="policy.label"
+                  :value="policy.value"
+                />
+              </el-select>
+            </div>
+          </div>
+          <div v-if="educationCapabilitySummary.length" class="capability-summary">
+            <span>本次 Agent 能力</span>
+            <el-tag v-for="item in educationCapabilitySummary" :key="item" size="mini">{{ item }}</el-tag>
+          </div>
         </div>
 
         <div class="conv-field">
@@ -349,7 +421,7 @@
         </div>
 
         <!-- 领域服务选择 -->
-        <div class="conv-field">
+        <div v-if="!isEducationWorkspace && chatServicesVisible" class="conv-field">
           <label class="field-label">选择领域服务 <span class="field-hint">（多选，Agent将能调用对应服务的API）</span></label>
           <div class="service-checkboxes">
             <label class="service-checkbox" :class="{ checked: newConversation.services.includes('rd') }">
@@ -366,14 +438,6 @@
               <span class="svc-info">
                 <strong>知识库</strong>
                 <em>RAG</em>
-              </span>
-            </label>
-            <label class="service-checkbox" :class="{ checked: newConversation.services.includes('edu') }">
-              <input type="checkbox" value="edu" v-model="newConversation.services" />
-              <span class="svc-icon edu"><i class="el-icon-reading"></i></span>
-              <span class="svc-info">
-                <strong>智慧教育</strong>
-                <em>EDU</em>
               </span>
             </label>
             <label class="service-checkbox disabled">
@@ -484,7 +548,12 @@ import FileMigrationDialog from '../components/FileMigrationDialog/index.vue'
 import EducationChatContext from '../components/education/EducationChatContext.vue'
 import { checkVisible } from '../store/modules/grayscale'
 import { getCategories, getAgents } from '../api/agent'
-import { getEducationConversationContext } from '../api/education'
+import {
+  bootstrapEducationConversation,
+  getCourses,
+  getEducationConversationContext,
+  getEducationConversationOptions,
+} from '../api/education'
 import { sendMessage as apiSendMessage } from '../api/message'
 import {
   getConversation,
@@ -538,9 +607,20 @@ export default {
         type: 'single',
         selectedAgents: [],
         services: [],        // ['rd', 'rag']
+        courseId: '',
+        lessonId: '',
+        materialPolicy: 'course_only',
         projectId: '',       // RD项目ID（可选）
         kbDomain: '',        // RAG知识库域
         kbDocumentIds: [],   // RAG限定文档
+      },
+      educationCourses: [],
+      educationCoursesLoading: false,
+      educationOptions: {
+        membership_role: '',
+        lessons: [],
+        agents: [],
+        material_policies: [],
       },
       projectList: [],
       projectsLoading: false,
@@ -623,11 +703,36 @@ export default {
     activeDomain() {
       return this.$store.getters['workspace/activeDomain']
     },
+    isEducationWorkspace() {
+      return this.activeDomain === 'edu'
+    },
+    educationRoleLabel() {
+      const labels = { teacher: '教师', student: '学生' }
+      return labels[this.educationOptions.membership_role] || '选择课程后自动确认'
+    },
+    educationCapabilitySummary() {
+      const selected = new Set(this.newConversation.selectedAgents || [])
+      const labels = []
+      for (const agent of this.educationOptions.agents || []) {
+        if (!selected.has(agent.id)) continue
+        for (const label of agent.capability_summary || []) {
+          if (label && !labels.includes(label)) labels.push(label)
+        }
+      }
+      return labels
+    },
     hasWorkspace() {
       return this.$store.getters['workspace/workspacesByDomain'](this.activeDomain).length > 0
     },
     chatServicesVisible() {
       return checkVisible(this.$store.state.grayscale, this.activeDomain, 'ui.chat.services')
+    },
+    educationManualCreateVisible() {
+      return checkVisible(
+        this.$store.state.grayscale,
+        'edu',
+        'feature.education.chat.manual_create'
+      )
     },
     showProjectSelector() {
       return this.newConversation.services.includes('rd')
@@ -665,8 +770,14 @@ export default {
     await this.$store.dispatch('workspace/fetchWorkspaces')
     const workspaces = this.$store.state.workspace.workspaces
     if (workspaces.length > 0) {
+      const requestedDomain = String(this.$route.query.domain || '')
+      const requestedWorkspace = requestedDomain
+        ? workspaces.find(item => item.domain === requestedDomain)
+        : null
       const active = this.$store.getters['workspace/activeWorkspace']
-      if (!active || !active.id) {
+      if (requestedWorkspace) {
+        this.$store.dispatch('workspace/selectWorkspace', requestedWorkspace)
+      } else if (!active || !active.id) {
         this.$store.dispatch('workspace/selectWorkspace', workspaces[0])
       }
       const domain = this.$store.getters['workspace/activeDomain']
@@ -691,9 +802,15 @@ export default {
   watch: {
     showCreateDialog(open) {
       if (open) {
-        this.$nextTick(async () => { await this.buildAgentTree() })
+        this.$nextTick(async () => {
+          if (this.isEducationWorkspace) {
+            await this.loadEducationCourses()
+          } else {
+            await this.buildAgentTree()
+          }
+        })
       } else {
-        this.newConversation = { title: '', type: 'single', selectedAgents: [], services: [], projectId: '', kbDomain: '', kbDocumentIds: [] }
+        this.resetNewConversation()
       }
     },
     'newConversation.services'(val) {
@@ -737,6 +854,13 @@ export default {
     },
   },
   methods: {
+    openCreateConversation() {
+      if (this.isEducationWorkspace && !this.educationManualCreateVisible) {
+        this.$message.info('智慧教育新建会话当前处于灰度关闭状态')
+        return
+      }
+      this.showCreateDialog = true
+    },
     async selectConversationFromRoute() {
       const conversationId = this.$route.query.conversation_id
       if (!conversationId) return
@@ -752,6 +876,25 @@ export default {
         }
       }
       if (!conversation) return
+      if (
+        conversation.workspace_id &&
+        conversation.workspace_id !== this.activeWorkspaceId
+      ) {
+        const targetWorkspace = this.$store.state.workspace.workspaces.find(
+          item => item.id === conversation.workspace_id
+        )
+        if (targetWorkspace) {
+          await this.$store.dispatch('workspace/selectWorkspace', targetWorkspace)
+          await this.$store.dispatch(
+            'grayscale/loadDomainConfig',
+            targetWorkspace.domain
+          )
+          await this.$store.dispatch(
+            'conversation/fetchConversations',
+            targetWorkspace.id
+          )
+        }
+      }
       if (this.currentConversation?.id === conversationId) {
         this.loadEducationContext(conversationId)
         return
@@ -1577,11 +1720,98 @@ export default {
     },
 
     // ====== 新建会话 ======
+    resetNewConversation() {
+      this.newConversation = {
+        title: '',
+        type: 'single',
+        selectedAgents: [],
+        services: [],
+        projectId: '',
+        kbDomain: '',
+        kbDocumentIds: [],
+        courseId: '',
+        lessonId: '',
+        materialPolicy: 'course_only',
+      }
+      this.educationOptions = {
+        membership_role: '',
+        lessons: [],
+        agents: [],
+        material_policies: [],
+      }
+      this.agentTreeData = []
+    },
+    async loadEducationCourses() {
+      this.educationCoursesLoading = true
+      try {
+        const response = await getCourses()
+        this.educationCourses = response?.items || []
+        const requestedCourseId = String(
+          this.$route.query.courseId || this.$route.query.course_id || ''
+        )
+        const preferred = this.educationCourses.find(
+          course => course.id === requestedCourseId
+        )
+        if (preferred) {
+          this.newConversation.courseId = preferred.id
+          await this.loadEducationOptions(preferred.id)
+        } else if (this.educationCourses.length === 1) {
+          this.newConversation.courseId = this.educationCourses[0].id
+          await this.loadEducationOptions(this.educationCourses[0].id)
+        }
+      } catch (error) {
+        this.educationCourses = []
+        this.$message.error('智慧教育服务暂不可用，请稍后重试')
+      } finally {
+        this.educationCoursesLoading = false
+      }
+    },
+    async loadEducationOptions(courseId) {
+      this.newConversation.lessonId = ''
+      this.newConversation.selectedAgents = []
+      this.agentTreeData = []
+      if (!courseId) {
+        this.educationOptions = {
+          membership_role: '',
+          lessons: [],
+          agents: [],
+          material_policies: [],
+        }
+        return
+      }
+      this.treeLoading = true
+      try {
+        const response = await getEducationConversationOptions(courseId)
+        this.educationOptions = response || {
+          membership_role: '',
+          lessons: [],
+          agents: [],
+          material_policies: [],
+        }
+        if (
+          !(this.educationOptions.material_policies || [])
+            .some(item => item.value === this.newConversation.materialPolicy)
+        ) {
+          this.newConversation.materialPolicy =
+            this.educationOptions.material_policies?.[0]?.value || 'course_only'
+        }
+        await this.buildAgentTree()
+      } catch (error) {
+        this.$message.error('无法读取该课程的会话权限')
+      } finally {
+        this.treeLoading = false
+      }
+    },
     async buildAgentTree() {
       this.treeLoading = true
       const treeData = []
 
       try {
+        if (this.isEducationWorkspace) {
+          this.agentTreeData = this.buildEducationAgentTree()
+          this.treeLoading = false
+          return
+        }
         // Fetch categories + agents for current domain only
         const domain = this.activeDomain
         const [catRes, agentRes] = await Promise.all([
@@ -1589,10 +1819,9 @@ export default {
           getAgents(null, domain),
         ])
         const cats = catRes.code === 200 ? catRes.data : []
-        const agents = agentRes.code === 200
+        let agents = agentRes.code === 200
           ? agentRes.data.filter(agent => agent.id !== 'moderator')
           : []
-
         for (const cat of cats) {
           const children = []
           for (const agent of agents) {
@@ -1641,12 +1870,46 @@ export default {
       this.agentTreeData = treeData
       this.treeLoading = false
     },
+    buildEducationAgentTree() {
+      const groups = new Map()
+      for (const agent of this.educationOptions.agents || []) {
+        const categoryId = agent.category_id || '_education'
+        if (!groups.has(categoryId)) {
+          groups.set(categoryId, {
+            id: categoryId,
+            label: agent.category_name || 'Education Agent',
+            icon: agent.category_icon || 'el-icon-folder-opened',
+            children: [],
+          })
+        }
+        groups.get(categoryId).children.push({
+          id: agent.id,
+          label: agent.name || agent.id,
+          isLeaf: true,
+          agentColor: agent.avatar_color || '#267d71',
+          agentAvatar: agent.avatar_url || '',
+          adapterLabel: {
+            claude: 'Claude',
+            codex: 'Codex',
+            opencode: 'OpenCode',
+            mock: 'Mock',
+          }[agent.adapter_name] || agent.adapter_name || '',
+        })
+      }
+      return Array.from(groups.values())
+    },
     findAgentWithMeta(id) {
-      const agent = this.allAvailableAgents.find(a => a.id === id)
+      const agent = this.allAvailableAgents.find(a => a.id === id) ||
+        (this.educationOptions.agents || []).find(a => a.id === id)
       if (!agent) return null
       // Merge any locally-stored overrides (backward compat)
       const meta = getAgentMeta(id)
-      return { ...agent, ...meta }
+      return {
+        ...agent,
+        avatar: agent.avatar_url || agent.avatar || '',
+        color: agent.avatar_color || agent.color || '#267d71',
+        ...meta,
+      }
     },
     async quickCreateWorkspace(domain) {
       const names = { rd: '我的研发空间', edu: '我的教育空间', office: '我的办公空间' }
@@ -1697,12 +1960,47 @@ export default {
     },
 
     async handleCreateConversation() {
+      if (this.isEducationWorkspace && !this.newConversation.courseId) {
+        this.$message.warning('请选择课程')
+        return
+      }
+      if (this.newConversation.selectedAgents.length === 0) {
+        this.$message.warning('请至少选择一个 Agent')
+        return
+      }
       if (!this.newConversation.title) {
         this.$message.warning('请输入标题')
         return
       }
       this.creating = true
       try {
+        if (this.isEducationWorkspace) {
+          const result = await bootstrapEducationConversation({
+            course_id: this.newConversation.courseId,
+            lesson_id: this.newConversation.lessonId || undefined,
+            agent_ids: this.newConversation.selectedAgents,
+            material_policy: this.newConversation.materialPolicy,
+            title: this.newConversation.title,
+            source_route: {
+              path: this.$route.path,
+              query: { ...this.$route.query },
+            },
+          })
+          const conversation = result?.conversation
+          if (!conversation?.id) {
+            throw new Error('Education bootstrap did not return a conversation')
+          }
+          this.$store.commit('conversation/ADD_CONVERSATION', conversation)
+          this.$message.success('Education 会话创建成功')
+          this.showCreateDialog = false
+          this.resetNewConversation()
+          this.handleSelectConversation(conversation)
+          await this.$store.dispatch(
+            'conversation/fetchConversations',
+            conversation.workspace_id || this.activeWorkspaceId
+          )
+          return
+        }
         const participantIds = this.newConversation.selectedAgents
           .filter(id => id)
           .map(id => `agent_${id}`)
@@ -1719,7 +2017,7 @@ export default {
         if (response.code === 201) {
           this.$message.success('会话创建成功')
           this.showCreateDialog = false
-          this.newConversation = { title: '', type: 'single', selectedAgents: [], services: [], projectId: '', kbDomain: '', kbDocumentIds: [] }
+          this.resetNewConversation()
           this.handleSelectConversation(response.data)
         } else {
           this.$message.error(response.message || '创建会话失败')
@@ -1955,6 +2253,97 @@ export default {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.education-conversation-scope {
+  margin: 4px 0 18px;
+  padding: 16px;
+  border: 1px solid #d9ebe7;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 92% 8%, rgba(51, 142, 126, .10), transparent 34%),
+    #f7fbfa;
+}
+
+.scope-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 14px;
+}
+
+.scope-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scope-heading strong {
+  color: #173f38;
+  font-size: 15px;
+}
+
+.scope-heading small {
+  color: #78938e;
+  font-size: 12px;
+}
+
+.scope-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 11px;
+  background: #267d71;
+  color: #fff;
+}
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.membership-role {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  border: 1px solid #d8e5e2;
+  border-radius: 7px;
+  background: #fff;
+  color: #2b6259;
+  font-weight: 600;
+}
+
+.membership-role small {
+  margin-left: auto;
+  color: #8da09c;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.membership-role.pending {
+  color: #83928f;
+  font-weight: 400;
+}
+
+.field-required {
+  margin-left: 4px;
+  color: #c45d48;
+  font-size: 11px;
+}
+
+.capability-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: #6e8782;
+  font-size: 12px;
 }
 
 .service-checkbox {

@@ -4,9 +4,14 @@ import tempfile
 import uuid
 import sys
 import threading
+from functools import wraps
 
-from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask import Blueprint, request, jsonify, current_app, g
+from flask_jwt_extended import (
+    get_jwt_identity,
+    jwt_required,
+    verify_jwt_in_request,
+)
 from sqlalchemy.orm.attributes import flag_modified
 
 from models.database import db
@@ -17,6 +22,8 @@ from utils.scraper import fetch_url, scrape_url
 from services.chunker import chunk_text
 from services.embedding_service import embedding_service
 from services.vector_service import vector_service
+from access_scope import resolve_search_scope
+from config import Config
 
 document_bp = Blueprint('rag_documents', __name__)
 
@@ -29,7 +36,60 @@ def _ensure_upload_dir():
 
 
 def _get_user_id():
-    return get_jwt_identity()
+    scope = getattr(g, "rag_document_scope", None)
+    return scope.user_id if scope else get_jwt_identity()
+
+
+def _check_internal_key():
+    key = str(getattr(Config, "INTERNAL_API_KEY", "") or "")
+    return bool(key) and request.headers.get("X-Internal-API-Key", "") == key
+
+
+def document_auth_scoped(handler):
+    """Authenticate user document calls or a server-issued internal scope."""
+
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        internal = _check_internal_key()
+        identity = None
+        if not internal:
+            verify_jwt_in_request()
+            identity = get_jwt_identity()
+        payload = (
+            dict(request.form)
+            if request.form
+            else request.get_json(silent=True) or {}
+        )
+        try:
+            scope = resolve_search_scope(
+                internal=internal,
+                headers=request.headers,
+                payload=payload,
+                jwt_identity=identity,
+            )
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        if not internal and scope.domain == "edu":
+            return _error(
+                "Education documents must be ingested through the Education service",
+                403,
+            )
+        g.rag_document_scope = scope
+        return handler(*args, **kwargs)
+
+    return wrapped
+
+
+def _scoped_document(doc_id):
+    scope = getattr(g, "rag_document_scope", None)
+    query = Document.query.filter_by(id=doc_id)
+    if scope:
+        query = query.filter_by(user_id=scope.user_id, domain=scope.domain)
+        if scope.internal and scope.workspace_id:
+            query = query.filter_by(workspace_id=scope.workspace_id)
+    else:
+        query = query.filter_by(user_id=get_jwt_identity())
+    return query.first()
 
 
 def _error(msg, code=400):
@@ -43,7 +103,7 @@ def _ok(data, msg='ok', code=200):
 # ── 上传文件 ────────────────────────────────────────────
 
 @document_bp.route('/upload', methods=['POST'])
-@jwt_required()
+@document_auth_scoped
 def upload_document():
     """上传文档文件."""
     user_id = _get_user_id()
@@ -59,8 +119,9 @@ def upload_document():
     if len(file_bytes) > MAX_FILE_SIZE:
         return _error(f'File too large, max {MAX_FILE_SIZE // (1024*1024)}MB')
 
-    domain = request.form.get('domain', 'rd')
-    workspace_id = request.form.get('workspace_id') or None
+    scope = g.rag_document_scope
+    domain = scope.domain
+    workspace_id = scope.workspace_id
 
     _ensure_upload_dir()
     saved_name = f"{uuid.uuid4().hex}_{file.filename}"
@@ -92,7 +153,26 @@ def upload_document():
         db.session.commit()
         return _error(f'Failed to parse document: {e}')
 
-    doc.extra_meta = {**meta, 'page_count': page_count, 'text_length': len(text), '_text': text}
+    trusted_meta = {}
+    if scope.internal and domain == "edu":
+        visibility = request.headers.get("X-WeAgent-Visibility", "")
+        if visibility not in {"course_teacher", "course_published"}:
+            doc.status = "error"
+            db.session.commit()
+            return _error("Invalid Education document visibility", 403)
+        trusted_meta = {
+            "visibility_scope": visibility,
+            "education_resource_id": request.headers.get(
+                "X-WeAgent-Resource-ID", ""
+            )[:100],
+        }
+    doc.extra_meta = {
+        **meta,
+        **trusted_meta,
+        'page_count': page_count,
+        'text_length': len(text),
+        '_text': text,
+    }
     db.session.commit()
 
     return _ok({
@@ -282,6 +362,9 @@ def _process_document_bg(app, doc_id, text, doc_name, doc_domain, workspace_id):
                     'domain': doc_domain,
                     'workspace_id': workspace_id or '',
                     'user_id': doc.user_id,
+                    'visibility_scope': (
+                        (doc.extra_meta or {}).get('visibility_scope') or ''
+                    ),
                 })
             vector_service.add(vector_ids, vector_embs, vector_docs, vector_metas)
 
@@ -313,10 +396,10 @@ def _process_document_bg(app, doc_id, text, doc_name, doc_domain, workspace_id):
 # ── 确认存储（分块 + 向量化）─────────────────────────────
 
 @document_bp.route('/<doc_id>/confirm', methods=['POST'])
-@jwt_required()
+@document_auth_scoped
 def confirm_document(doc_id):
     """确认存储文档 — 启动后台处理，立即返回."""
-    doc = Document.query.get(doc_id)
+    doc = _scoped_document(doc_id)
     if not doc:
         return _error('Document not found', 404)
     if doc.status == 'ready':
@@ -528,10 +611,10 @@ def list_documents():
 # ── 详情 ────────────────────────────────────────────────
 
 @document_bp.route('/<doc_id>', methods=['GET'])
-@jwt_required()
+@document_auth_scoped
 def get_document(doc_id):
     """文档详情（含分块列表）."""
-    doc = Document.query.get(doc_id)
+    doc = _scoped_document(doc_id)
     if not doc:
         return _error('Document not found', 404)
     return _ok(doc.to_dict(include_chunks=True))

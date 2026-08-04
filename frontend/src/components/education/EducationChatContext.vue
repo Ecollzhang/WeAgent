@@ -32,21 +32,37 @@ export default {
       const course = this.context.course || {}
       const lesson = this.context.lesson || {}
       const run = this.context.run || {}
+      if (!course.title && this.context.binding?.binding_mode === 'course_bootstrap') {
+        return '创建新课程 · 课程设计 Agent'
+      }
       return [course.title, lesson.title, run.workflow_name].filter(Boolean).join(' · ')
     },
     progressText() {
       const progress = (this.context && this.context.progress) || {}
       const run = (this.context && this.context.run) || {}
       const done = progress.completed_count || 0
-      const total = progress.agent_count || 0
+      const total = progress.agent_count
+        || Object.keys((this.context && this.context.agent_service_views) || {}).length
       const labels = {
         pending: '等待开始', running: '协作进行中', completed: '已完成并写入业务产物',
         failed: '执行结束，可复核记录', cancelled: '已取消',
       }
-      return `${labels[run.status] || '已记录'} · ${done}/${total} Agent`
+      const role = this.context?.course?.membership_role
+        || this.context?.membership_role
+        || this.context?.binding?.membership_role_snapshot
+      const roleLabel = {
+        teacher: '教师',
+        student: '学生',
+        course_creator: '课程创建',
+      }[role] || '课程成员'
+      if (!run.status) {
+        return `${roleLabel} · ${total || 1} 个受控 Agent · 上下文已持久化`
+      }
+      return `${roleLabel} · ${labels[run.status] || '已记录'} · ${done}/${total} Agent`
     },
     businessRoute() {
-      return this.context && this.context.run && this.context.run.business_route
+      if (!this.context) return null
+      return this.context.run?.business_route || this.context.binding?.source_route || null
     },
   },
 }

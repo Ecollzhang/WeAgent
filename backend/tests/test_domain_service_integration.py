@@ -141,6 +141,56 @@ def test_rd_shortcut_conversation_preserves_project_and_service_context():
         db.drop_all()
 
 
+def test_core_conversation_persists_server_agent_service_views():
+    app = create_app("testing")
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        db.session.add(
+            User(
+                id="edu-owner",
+                username="edu-owner",
+                email="edu-owner@example.com",
+                password_hash="hash",
+            )
+        )
+        db.session.commit()
+
+    response = app.test_client().post(
+        "/api/conversations",
+        headers=_headers(app, "edu-owner"),
+        json={
+            "title": "Education service views",
+            "type": "single",
+            "participant_ids": [],
+            "kb_domain": "edu",
+            "workspace_context": {"domain": "edu", "role": "teacher"},
+            "services": ["edu", "rag"],
+            "agent_configs": {
+                "_edu_8": {
+                    "adapter_name": "codex",
+                    "allowed_services": ["edu", "rag"],
+                },
+                "_edu_9": {
+                    "adapter_name": "codex",
+                    "allowed_services": ["edu"],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    conversation_id = response.get_json()["data"]["id"]
+    with app.app_context():
+        stored = db.session.get(Conversation, conversation_id)
+        assert stored.sandbox_agent_service_views == {
+            "_edu_8": ["edu", "rag"],
+            "_edu_9": ["edu"],
+        }
+        db.session.remove()
+        db.drop_all()
+
+
 def test_domain_migration_uses_existing_conversation_columns_safely():
     migration = (
         BACKEND_ROOT / "sql" / "migration_v2.sql"

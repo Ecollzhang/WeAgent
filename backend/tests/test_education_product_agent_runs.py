@@ -95,6 +95,8 @@ class FakeProductRuntime:
         agent_ids,
         workflow,
         education_run_grant=None,
+        services=None,
+        agent_service_views=None,
     ):
         index = len(self.started) + 1
         self.started.append(
@@ -107,6 +109,8 @@ class FakeProductRuntime:
                 "agent_ids": agent_ids,
                 "workflow": workflow,
                 "education_run_grant": education_run_grant,
+                "services": services,
+                "agent_service_views": agent_service_views,
             }
         )
         return {
@@ -482,6 +486,7 @@ def test_teacher_starts_agent_roster_import_with_structured_member_rows(
             "course_id": course["id"],
             "product_code": "roster_import",
             "options": {"members": members},
+            "confirmed_actions": ["edu.course.members.import"],
         },
     )
     forbidden = client.post(
@@ -491,6 +496,7 @@ def test_teacher_starts_agent_roster_import_with_structured_member_rows(
             "course_id": course["id"],
             "product_code": "roster_import",
             "options": {"members": members},
+            "confirmed_actions": ["edu.course.members.import"],
         },
     )
     invalid = client.post(

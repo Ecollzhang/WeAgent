@@ -17,6 +17,7 @@ const files = [
   'src/components/education/ProductAgentRunPanel.vue',
   'src/components/education/EmbeddedAgentRecord.vue',
   'src/components/education/EducationChatContext.vue',
+  'src/components/education/EducationCard.vue',
   'src/components/education/ScoreDistributionChart.vue',
   'src/views/education/EducationHome.vue',
   'src/views/education/CourseSpace.vue',
@@ -29,6 +30,7 @@ const files = [
   'src/views/education/WeaknessCenter.vue',
   'src/views/education/MindMapCenter.vue',
   'src/views/education/HelpCenter.vue',
+  'src/views/Dashboard.vue',
 ]
 
 for (const relPath of files) {

@@ -27,6 +27,7 @@ from .mcp_runtime import McpRuntime
 from .tools import ToolRegistry, register_builtin_tools
 from . import session as session_store
 from .events import push_event
+from .education_cards import education_card_from_tool_result
 from .logging_utils import log_agent, log_event, shorten
 from .providers import ProviderRunnerFactory
 from .service_manager import ServiceManager
@@ -252,28 +253,36 @@ class Orchestrator:
                 }
 
             # Parse code blocks and collect files from the final response.
+            # Read-tool results and controlled file artifacts are independent:
+            # fetching context must not suppress the large-artifact finalizer.
             start_parse = time.time()
+            artifact_results = []
             if self._should_collect_agent_files(agent_id):
                 log_agent(agent_id, "artifact_collection_start", role=role)
-                if not tool_results:
-                    tool_results = self._parse_and_write_code_blocks(agent_id, reply)
+                artifact_results = self._parse_and_write_code_blocks(agent_id, reply)
 
                 # If no files found by pattern matching, check filesystem for
                 # files written by Claude's native Write tool (now that --print
                 # is removed, Claude can execute tools directly)
-                if not tool_results:
-                    tool_results = self._detect_written_files(agent_id, reply, baseline=fs_baseline)
+                if not artifact_results:
+                    artifact_results = self._detect_written_files(
+                        agent_id,
+                        reply,
+                        baseline=fs_baseline,
+                    )
 
                 # If still nothing, try a second pass (ask Claude to output files)
-                if not tool_results and self._reply_mentions_files(reply):
+                if not artifact_results and self._reply_mentions_files(reply):
                     log_agent(agent_id, "artifact_second_pass_start", role=role)
-                    tool_results = self._second_pass_extract_files(agent_id, message, reply)
+                    artifact_results = self._second_pass_extract_files(agent_id, message, reply)
+                if artifact_results:
+                    tool_results = [*(tool_results or []), *artifact_results]
                 log_agent(
                     agent_id,
                     "artifact_collection_done",
                     role=role,
-                    file_count=len(tool_results or []),
-                    files=[t.get("file", "") for t in (tool_results or [])],
+                    file_count=len(artifact_results),
+                    files=[t.get("file", "") for t in artifact_results],
                 )
 
             parse_elapsed = time.time() - start_parse
@@ -295,15 +304,15 @@ class Orchestrator:
                 "agent_id": agent_id,
                 "role": role,
                 "message": f"{role} 任务完成",
-                "file_count": len(tool_results) if tool_results else 0,
-                "files": [t.get("file", "") for t in (tool_results or [])],
+                "file_count": len(artifact_results),
+                "files": [t.get("file", "") for t in artifact_results],
                 "parse_time": round(parse_elapsed, 1),
             })
             log_agent(
                 agent_id,
                 "task_completed",
                 role=role,
-                file_count=len(tool_results) if tool_results else 0,
+                file_count=len(artifact_results),
                 parse_time=round(parse_elapsed, 2),
             )
             return result
@@ -874,6 +883,12 @@ class Orchestrator:
                 if not tool_name:
                     results.append({"error": "Missing 'name' in tool_call"})
                     continue
+                if not isinstance(args, dict):
+                    results.append({
+                        "tool": tool_name,
+                        "error": "Tool arguments must be a JSON object",
+                    })
+                    continue
                 result = self.tools.call_from_agent(
                     agent_id,
                     tool_name,
@@ -893,6 +908,12 @@ class Orchestrator:
                         card_result = None
                 if tool_name == "rag_search" and isinstance(card_result, dict):
                     self._push_rag_result_card(agent_id, args.get("query", ""), card_result)
+                elif tool_name == "education_action" and isinstance(card_result, dict):
+                    self._push_education_result_card(
+                        agent_id,
+                        str(args.get("action") or ""),
+                        card_result,
+                    )
                 elif (
                     tool_name == "call_service_api"
                     and args.get("service_name") == "rag"
@@ -908,6 +929,20 @@ class Orchestrator:
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})
         return results
+
+    @staticmethod
+    def _push_education_result_card(agent_id: str, action: str, envelope: dict):
+        """Project a verified Education tool response into one unified card.
+
+        Models cannot submit ``education_card`` through ``weagent-report``.
+        This adapter runs only after the scoped Education service has accepted
+        the action and returned a canonical business object.  Keep this
+        projection self-contained: the Docker runtime intentionally does not
+        ship the host Flask ``app`` package.
+        """
+        trusted_card = education_card_from_tool_result(action, envelope)
+        if trusted_card:
+            push_event(agent_id, "agent_report_element", trusted_card)
 
     @staticmethod
     def _push_rag_result_card(agent_id: str, query: str, result: dict):
@@ -946,8 +981,84 @@ class Orchestrator:
             },
         })
 
+    def _literal_tool_contract_hint(self, agent_id: str) -> str:
+        """Return exact call shapes for literal-tool providers.
+
+        These providers cannot read the projected ``TOOL.md`` files through a
+        native filesystem tool, so names without schemas invite costly guesses.
+        """
+        tool_index = self._agent_tool_index(agent_id)
+        if tool_index:
+            names = {
+                str(name)
+                for item in tool_index
+                for name in (item.get("tool_names") or [])
+            }
+        else:
+            names = {
+                str(item.get("name") or "")
+                for item in self.tools.list_tools()
+            }
+        contracts = []
+        if "education_action" in names:
+            contracts.append(
+                '- education_action read example: '
+                '<tool_call>{"name":"education_action","args":'
+                '{"action":"edu.course.context.get"}}</tool_call>. '
+                'For writes, args may additionally contain "arguments":{} '
+                'and a stable unique "idempotency_key". Trusted course, '
+                'lesson, user, role and authorization scope is server-injected.'
+            )
+        if "rag_search" in names:
+            contracts.append(
+                '- rag_search exact shape: '
+                '<tool_call>{"name":"rag_search","args":'
+                '{"query":"...","top_k":5}}</tool_call>. '
+                'Omit domain and workspace_id because course scope is injected.'
+            )
+        if "list_services" in names:
+            contracts.append(
+                '- list_services exact shape: '
+                '<tool_call>{"name":"list_services","args":{}}</tool_call>.'
+            )
+        if "call_service_api" in names:
+            contracts.append(
+                '- call_service_api exact keys: service_name, method, path, '
+                'body, query_params. Example: '
+                '<tool_call>{"name":"call_service_api","args":'
+                '{"service_name":"edu","method":"GET",'
+                '"path":"/api/edu/spec","query_params":{}}}</tool_call>.'
+            )
+        if not contracts:
+            return ""
+        return (
+            "Exact audited tool contracts (only for authorized tools listed "
+            "above):\n"
+            + "\n".join(contracts)
+            + "\nNever invent payload, params, service, workspaceId, userId, "
+            "courseId, authorization, or token argument keys.\n"
+        )
+
     def _tool_instructions(self, agent_id: str) -> str:
         """Generate tool usage instructions for the system prompt."""
+        agent = self.agents.get(agent_id)
+        requires_literal_tools = bool(
+            agent and getattr(
+                getattr(agent, "provider_runner", None),
+                "requires_literal_tool_calls",
+                False,
+            )
+        )
+        literal_tool_hint = ""
+        if requires_literal_tools:
+            literal_tool_hint = (
+                "For the WeAgent tools listed below, do not issue provider-native "
+                "function calls and do not probe MCP servers or resources. Emit "
+                "one literal <tool_call> JSON block in your final answer using "
+                "the exact English tool name and an object-valued args field. "
+                "The audited server loop will execute it and return the result.\n"
+            )
+            literal_tool_hint += self._literal_tool_contract_hint(agent_id)
         tool_index = self._agent_tool_index(agent_id)
         if tool_index:
             tool_lines = []
@@ -964,12 +1075,12 @@ class Orchestrator:
                 for n in (item.get("tool_names") or []):
                     seen_tools.add(n)
             # 始终包含微服务调用工具（list_services / call_service_api）
-            if "list_services" not in seen_tools and "list_services" in self.tools._tools:
+            if not self.capability_projection and "list_services" not in seen_tools and "list_services" in self.tools._tools:
                 tool_lines.append(
                     "  - 列出微服务: 列出所有可用的后端微服务及其访问地址\n"
                     "    (status: implemented; tools: list_services)"
                 )
-            if "call_service_api" not in seen_tools and "call_service_api" in self.tools._tools:
+            if not self.capability_projection and "call_service_api" not in seen_tools and "call_service_api" in self.tools._tools:
                 tool_lines.append(
                     "  - 调用服务API: 通用微服务API调用工具，可调用任何已注册服务的接口\n"
                     "    参数: service_name(必填,服务名如rag/rd), method(默认GET), path(必填,如/api/rag/search),\n"
@@ -982,10 +1093,19 @@ class Orchestrator:
                 "只调用上面列出的 Tool。需要更多说明时，先读取对应 doc 路径中的 TOOL.md。\n"
                 "微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
             )
+            if not {
+                "list_services",
+                "call_service_api",
+            }.intersection(seen_tools):
+                tool_hint = (
+                    "Only call the tools listed above. Unlisted service "
+                    "discovery or service-call tools are not authorized.\n"
+                )
         else:
             tools = self.tools.list_tools()
             if not tools:
                 return ""
+            seen_tools = {str(item.get("name") or "") for item in tools}
             tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
             tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
         work_dir = self._agent_work_dir(agent_id)
@@ -998,6 +1118,7 @@ class Orchestrator:
             "可用工具：\n"
             f"{tool_list}\n"
             f"{tool_hint}\n"
+            f"{literal_tool_hint}"
             "如需调用系统注册工具，输出如下格式，系统会在回复后执行：\n"
             "<tool_call>{\"name\":\"工具名\",\"args\":{\"参数名\":\"参数值\"}}</tool_call>\n\n"
             "如需输出文件内容，使用如下格式，系统会自动写入：\n"
@@ -2016,16 +2137,105 @@ class Orchestrator:
 
     def update_runtime_config(self, config: dict) -> dict:
         """Refresh narrowly allowlisted runtime values for a live session."""
-        authorization = str(config.get("USER_AUTH_TOKEN") or "").strip()
-        if (
-            not authorization.startswith("Bearer ")
-            or len(authorization) > 8192
-            or "\r" in authorization
-            or "\n" in authorization
-        ):
-            return {"error": "valid USER_AUTH_TOKEN required"}
-        os.environ["USER_AUTH_TOKEN"] = authorization
-        return {"status": "ok", "updated": ["USER_AUTH_TOKEN"]}
+        import json
+        import re
+
+        updated = []
+        if "USER_AUTH_TOKEN" in config:
+            authorization = str(config.get("USER_AUTH_TOKEN") or "").strip()
+            if (
+                not authorization.startswith("Bearer ")
+                or len(authorization) > 8192
+                or "\r" in authorization
+                or "\n" in authorization
+            ):
+                return {"error": "valid USER_AUTH_TOKEN required"}
+            os.environ["USER_AUTH_TOKEN"] = authorization
+            updated.append("USER_AUTH_TOKEN")
+
+        education_keys = {
+            "EDUCATION_RUN_GRANT",
+            "EDUCATION_SERVICE_URL",
+            "AGENT_SERVICE_VIEWS",
+            "CONVERSATION_SERVICES",
+        }
+        education_rag_keys = {
+            "RAG_SCOPE_USER_ID",
+            "RAG_SCOPE_DOMAIN",
+            "RAG_SCOPE_WORKSPACE_ID",
+            "RAG_SCOPE_EDUCATION_ROLE",
+        }
+        if education_keys.intersection(config) or education_rag_keys.intersection(config):
+            if not education_keys.issubset(config):
+                return {"error": "complete Education runtime scope required"}
+            if (
+                education_rag_keys.intersection(config)
+                and not education_rag_keys.issubset(config)
+            ):
+                return {"error": "complete Education RAG scope required"}
+            grant = str(config.get("EDUCATION_RUN_GRANT") or "").strip()
+            service_url = str(
+                config.get("EDUCATION_SERVICE_URL") or ""
+            ).strip().rstrip("/")
+            if not re.fullmatch(r"[A-Za-z0-9._~-]{20,256}", grant):
+                return {"error": "valid EDUCATION_RUN_GRANT required"}
+            if (
+                not service_url.startswith(("http://", "https://"))
+                or len(service_url) > 500
+                or "\r" in service_url
+                or "\n" in service_url
+            ):
+                return {"error": "valid EDUCATION_SERVICE_URL required"}
+            try:
+                views = json.loads(str(config["AGENT_SERVICE_VIEWS"]))
+                services = json.loads(str(config["CONVERSATION_SERVICES"]))
+            except (TypeError, ValueError):
+                return {"error": "valid Education service scope required"}
+            if (
+                not isinstance(views, dict)
+                or not isinstance(services, list)
+                or any(
+                    not isinstance(agent_id, str)
+                    or not isinstance(agent_services, list)
+                    or any(
+                        item not in {"edu", "rag", "rd", "office"}
+                        for item in agent_services
+                    )
+                    for agent_id, agent_services in views.items()
+                )
+                or any(
+                    item not in {"edu", "rag", "rd", "office"}
+                    for item in services
+                )
+                or (
+                    "rag" in services
+                    and (
+                        not education_rag_keys.issubset(config)
+                        or str(config.get("RAG_SCOPE_DOMAIN") or "") != "edu"
+                        or not str(
+                            config.get("RAG_SCOPE_USER_ID") or ""
+                        ).strip()
+                        or not str(
+                            config.get("RAG_SCOPE_WORKSPACE_ID") or ""
+                        ).strip()
+                        or str(
+                            config.get("RAG_SCOPE_EDUCATION_ROLE") or ""
+                        )
+                        not in {"teacher", "student"}
+                    )
+                )
+            ):
+                return {"error": "valid Education service scope required"}
+            for key in education_keys | (
+                education_rag_keys
+                if education_rag_keys.issubset(config)
+                else set()
+            ):
+                os.environ[key] = str(config[key])
+                updated.append(key)
+        if not updated:
+            return {"error": "no supported runtime values provided"}
+        return {"status": "ok", "updated": sorted(updated)}
 
     # ---- Internal ----
 

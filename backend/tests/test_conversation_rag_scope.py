@@ -52,3 +52,26 @@ def test_rag_scope_without_workspace_accepts_only_known_domain():
         "RAG_SCOPE_USER_ID": "user-1",
         "RAG_SCOPE_DOMAIN": "rd",
     }
+
+
+def test_education_rag_scope_uses_bound_course_not_core_workspace():
+    conversation = type(
+        "ConversationStub",
+        (),
+        {"workspace_id": "generic-education-workspace"},
+    )()
+
+    assert _trusted_rag_scope(
+        conversation,
+        "teacher-1",
+        "edu",
+        education_context={
+            "course_id": "course-allowed",
+            "membership_role": "teacher",
+        },
+    ) == {
+        "RAG_SCOPE_USER_ID": "teacher-1",
+        "RAG_SCOPE_DOMAIN": "edu",
+        "RAG_SCOPE_WORKSPACE_ID": "course-allowed",
+        "RAG_SCOPE_EDUCATION_ROLE": "teacher",
+    }

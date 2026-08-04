@@ -17,6 +17,7 @@ import socket
 import sqlite3
 import struct
 import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,11 +34,7 @@ from ..capabilities import (
 
 
 # 无需能力绑定即可使用的工具（由运行时环境自动提供）
-_ALWAYS_ALLOWED_TOOLS = {
-    "rag_search": True,
-    "call_service_api": True,
-    "list_services": True,
-}
+_ALWAYS_ALLOWED_TOOLS = {}
 
 
 class ToolRegistry:
@@ -120,9 +117,15 @@ class ToolRegistry:
                     f"Tool {tool_name} is not bound to agent {agent_id}"
                 )
             execute_args = dict(args or {})
+            execute_args.pop("_weagent_agent_id", None)
             if tool_capability and tool_capability.get("provider_config"):
                 execute_args["_weagent_provider_config"] = tool_capability.get("provider_config")
-            if tool_name == "education_action":
+            if tool_name in {
+                "education_action",
+                "list_services",
+                "call_service_api",
+                "rag_search",
+            }:
                 execute_args["_weagent_agent_id"] = agent_id
             result = self.execute(tool_name, **execute_args)
             _record("completed", result=result)
@@ -176,9 +179,40 @@ def _read_file(path: str) -> str:
 
 def _write_file(path: str, content: str) -> str:
     full = _resolve_workspace_path(path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "w", encoding="utf-8") as f:
-        f.write(content)
+    directory = os.path.dirname(full)
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=directory,
+        prefix=f".{os.path.basename(full)}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        # Snapshot restore and Docker copy can preserve a root-owned artifact.
+        # Replacing it through the agent-owned directory is safe, atomic, and
+        # keeps bounded repair runs able to update the same allowlisted file.
+        try:
+            os.replace(temporary, full)
+        except PermissionError:
+            # Windows represents restored read-only files as an attribute that
+            # also blocks replace. Linux root-owned files normally take the
+            # atomic path above because the containing directory is writable.
+            try:
+                os.chmod(full, 0o600)
+            except OSError:
+                pass
+            os.replace(temporary, full)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
     return f"Written: {path}"
 
 
@@ -551,7 +585,10 @@ _EDUCATION_ACTIONS = {
     "edu.course.create",
     "edu.course.members.import",
     "edu.lesson.create",
+    "edu.lesson.update",
+    "edu.courseware.get",
     "edu.courseware.create",
+    "edu.courseware.version.create",
     "edu.asset.attach",
     "edu.question_bank.upsert",
     "edu.paper.compose",
@@ -742,22 +779,60 @@ def _configured_database_query(query: str, max_rows: int = 50,
     return result
 
 
-def _list_services() -> dict:
-    """List all available microservices from the service registry.
+def _agent_allowed_service_names(agent_id: str) -> list[str]:
+    """Resolve the server-issued service view for one executing Agent."""
+    raw = os.environ.get("AGENT_SERVICE_VIEWS")
+    if raw is None:
+        # Backward compatibility for old RD sessions created before Agent
+        # service snapshots existed. New sessions always inject the variable.
+        try:
+            registry = json.loads(os.environ.get("SERVICE_REGISTRY", "{}"))
+        except json.JSONDecodeError:
+            registry = {}
+        return [
+            name
+            for name in ("edu", "rag", "rd", "office")
+            if name in registry
+        ]
+    try:
+        views = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        views = {}
+    allowed = views.get(str(agent_id or ""), [])
+    if not isinstance(allowed, list):
+        return []
+    normalized = {str(item) for item in allowed}
+    return [
+        name
+        for name in ("edu", "rag", "rd", "office")
+        if name in normalized
+    ]
 
-    Returns a dict with a 'services' key mapping service_name -> base_url.
-    """
+
+def _list_services(_weagent_agent_id: str = "") -> dict:
+    """List only services authorized for the executing Agent."""
     registry_raw = os.environ.get("SERVICE_REGISTRY", "{}")
     try:
         services = json.loads(registry_raw) if registry_raw else {}
     except json.JSONDecodeError:
         services = {}
-    return {"services": services}
+    return {
+        "services": {
+            name: {
+                "name": name,
+                "status": "available",
+                "spec_path": f"/api/{name}/spec",
+            }
+            for name in _agent_allowed_service_names(_weagent_agent_id)
+            if name in services
+        }
+    }
 
 
 def _call_service_api(service_name: str, method: str = "GET",
                       path: str = "/", body: dict = None,
-                      query_params: dict = None) -> dict:
+                      query_params: dict = None,
+                      _weagent_agent_id: str = "") -> dict:
     """Call a microservice API endpoint generically.
 
     Args:
@@ -770,6 +845,33 @@ def _call_service_api(service_name: str, method: str = "GET",
     Returns:
         The parsed JSON response from the service.
     """
+    service_name = str(service_name or "").strip().lower()
+    method = str(method or "GET").strip().upper()
+    if service_name not in _agent_allowed_service_names(_weagent_agent_id):
+        return {
+            "status": "error",
+            "error_code": "service_not_allowed",
+            "error": f"Service '{service_name}' is not available to the current Agent",
+        }
+    normalized_path = "/" + str(path or "/").lstrip("/")
+    if service_name == "edu" and method != "GET":
+        return {
+            "status": "error",
+            "error_code": "protected_action_required",
+            "error": "Education write operations require education_action",
+        }
+    if method not in {"GET", "HEAD"} and not (
+        service_name == "rag"
+        and method == "POST"
+        and normalized_path.rstrip("/")
+        in {"/api/rag/search", "/api/rag/search/hybrid"}
+    ):
+        return {
+            "status": "error",
+            "error_code": "service_method_not_allowed",
+            "error": "The requested service method is not allowlisted",
+        }
+
     registry_raw = os.environ.get("SERVICE_REGISTRY", "{}")
     try:
         services = json.loads(registry_raw) if registry_raw else {}
@@ -788,20 +890,23 @@ def _call_service_api(service_name: str, method: str = "GET",
             "error": f"Unknown service '{service_name}'. Available: {list(services.keys())}",
         }
 
-    url = f"{base_url.rstrip('/')}{path}"
+    url = f"{base_url.rstrip('/')}{normalized_path}"
     if query_params:
         url += "?" + urllib.parse.urlencode(query_params)
 
     request_body = dict(body or {})
     is_scoped_rag_search = (
         service_name == "rag"
-        and path.rstrip("/") in {"/api/rag/search", "/api/rag/search/hybrid"}
+        and normalized_path.rstrip("/") in {"/api/rag/search", "/api/rag/search/hybrid"}
     )
     if is_scoped_rag_search:
         scope_user_id = os.environ.get("RAG_SCOPE_USER_ID", "").strip()
         scope_domain = os.environ.get("RAG_SCOPE_DOMAIN", "").strip()
         scope_workspace_id = os.environ.get(
             "RAG_SCOPE_WORKSPACE_ID", ""
+        ).strip()
+        scope_education_role = os.environ.get(
+            "RAG_SCOPE_EDUCATION_ROLE", ""
         ).strip()
         api_key = os.environ.get("RAG_INTERNAL_API_KEY", "").strip()
         if not scope_user_id or not scope_domain or not api_key:
@@ -825,6 +930,8 @@ def _call_service_api(service_name: str, method: str = "GET",
         headers["X-WeAgent-Domain"] = scope_domain
         if scope_workspace_id:
             headers["X-WeAgent-Workspace-ID"] = scope_workspace_id
+        if scope_domain == "edu" and scope_education_role:
+            headers["X-WeAgent-Education-Role"] = scope_education_role
     elif user_auth:
         # Primary auth: user's JWT token (all services share the same JWT secret)
         headers["Authorization"] = user_auth
@@ -863,7 +970,8 @@ def _call_service_api(service_name: str, method: str = "GET",
 # ---- Backward-compatible rag_search (delegates to call_service_api) ----
 def _rag_search(query: str, top_k: int = 5, domain: str = "",
                 workspace_id: str = "", score_threshold: float = 0.0,
-                document_ids: list = None) -> dict:
+                document_ids: list = None,
+                _weagent_agent_id: str = "") -> dict:
     """Search the RAG knowledge base (delegates to call_service_api for rag service).
 
     Kept for backward compatibility — agents can also use call_service_api directly.
@@ -876,6 +984,8 @@ def _rag_search(query: str, top_k: int = 5, domain: str = "",
     scope_workspace_id = os.environ.get("RAG_SCOPE_WORKSPACE_ID", "").strip()
     if not scope_user_id or not scope_domain:
         raise RuntimeError("RAG search requires a server-issued user and domain scope")
+    if "rag" not in _agent_allowed_service_names(_weagent_agent_id):
+        raise PermissionError("RAG is not available to the current Agent")
 
     # Normalize document_ids — try param first, then config file, then env var
     doc_ids = None
@@ -902,14 +1012,22 @@ def _rag_search(query: str, top_k: int = 5, domain: str = "",
             except Exception:
                 pass
 
-    result = _call_service_api("rag", "POST", "/api/rag/search", body={
-        "query": str(query or ""),
-        "top_k": max(1, min(int(top_k or 5), 20)),
-        "domain": scope_domain,
-        "workspace_id": scope_workspace_id or None,
-        "score_threshold": max(0.0, min(float(score_threshold or 0.0), 1.0)),
-        "document_ids": doc_ids,
-    })
+    result = _call_service_api(
+        "rag",
+        "POST",
+        "/api/rag/search",
+        body={
+            "query": str(query or ""),
+            "top_k": max(1, min(int(top_k or 5), 20)),
+            "domain": scope_domain,
+            "workspace_id": scope_workspace_id or None,
+            "score_threshold": max(
+                0.0, min(float(score_threshold or 0.0), 1.0)
+            ),
+            "document_ids": doc_ids,
+        },
+        _weagent_agent_id=_weagent_agent_id,
+    )
 
     if result.get("status") == "error":
         raise RuntimeError(f"知识库检索失败: {result.get('error', 'unknown')}")

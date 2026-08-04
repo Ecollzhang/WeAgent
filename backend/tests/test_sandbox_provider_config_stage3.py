@@ -101,9 +101,40 @@ class ProviderConfigStage3Test(unittest.TestCase):
                 "RAG_SCOPE_DOMAIN": "forbidden-override",
             })
 
-            self.assertEqual({"status": "ok", "updated": ["USER_AUTH_TOKEN"]}, result)
+            self.assertEqual(
+                {"error": "complete Education runtime scope required"},
+                result,
+            )
             self.assertEqual("Bearer fresh-token", os.environ["USER_AUTH_TOKEN"])
             self.assertNotIn("RAG_SCOPE_DOMAIN", os.environ)
+
+    def test_update_runtime_config_atomically_refreshes_education_scope(self):
+        with patch("app.sandbox.container.orchestrator.os.makedirs"), \
+             patch("app.sandbox.container.orchestrator.trust_projects"), \
+             patch("app.sandbox.container.orchestrator.register_builtin_tools"), \
+             patch("app.sandbox.container.orchestrator.log_event"), \
+             patch.dict(os.environ, {}, clear=True):
+            orchestrator = Orchestrator()
+            result = orchestrator.update_runtime_config({
+                "USER_AUTH_TOKEN": "Bearer fresh-token",
+                "EDUCATION_RUN_GRANT": "A" * 48,
+                "EDUCATION_SERVICE_URL": "http://host.docker.internal:5102",
+                "AGENT_SERVICE_VIEWS": '{"_edu_1":["edu","rag"]}',
+                "CONVERSATION_SERVICES": '["edu","rag"]',
+                "RAG_SCOPE_USER_ID": "teacher-1",
+                "RAG_SCOPE_DOMAIN": "edu",
+                "RAG_SCOPE_WORKSPACE_ID": "course-1",
+                "RAG_SCOPE_EDUCATION_ROLE": "teacher",
+            })
+
+            self.assertEqual("ok", result["status"])
+            self.assertEqual("A" * 48, os.environ["EDUCATION_RUN_GRANT"])
+            self.assertEqual(
+                '{"_edu_1":["edu","rag"]}',
+                os.environ["AGENT_SERVICE_VIEWS"],
+            )
+            self.assertEqual("course-1", os.environ["RAG_SCOPE_WORKSPACE_ID"])
+            self.assertEqual("teacher", os.environ["RAG_SCOPE_EDUCATION_ROLE"])
 
     def test_unexpected_provider_status_is_runtime_error(self):
         self.assertTrue(Orchestrator._is_agent_runtime_error(

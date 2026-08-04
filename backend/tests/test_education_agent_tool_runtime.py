@@ -14,6 +14,7 @@ from app.services.builtin_tool_definitions import get_builtin_tool_definition
 from app.services.capability_projection_service import build_capability_projection
 from app.services.capability_service import capability_service
 from app.services.conversation_service import (
+    _request_education_runtime_context,
     _trusted_education_runtime_env,
     _validate_education_runtime_grant,
 )
@@ -36,7 +37,10 @@ def test_education_action_is_a_real_bounded_builtin_tool_definition():
             "edu.course.create",
             "edu.course.members.import",
             "edu.lesson.create",
+            "edu.lesson.update",
+            "edu.courseware.get",
             "edu.courseware.create",
+            "edu.courseware.version.create",
             "edu.asset.attach",
             "edu.question_bank.upsert",
             "edu.paper.compose",
@@ -129,6 +133,51 @@ def test_forged_education_runtime_grant_does_not_enable_server_credentials(
     )
     with core_app.app_context():
         assert _validate_education_runtime_grant("A" * 48, "teacher") is False
+
+
+def test_core_requests_fresh_education_runtime_context_with_service_identity(
+    monkeypatch,
+    core_app,
+):
+    calls = []
+
+    class Response:
+        status_code = 201
+
+        @staticmethod
+        def json():
+            return {
+                "run_grant": "A" * 48,
+                "membership_role": "teacher",
+                "lesson_id": "lesson-1",
+                "services": ["edu", "rag"],
+                "agent_service_views": {
+                    "_edu_1": ["edu", "rag"],
+                    "_edu_2": ["edu"],
+                },
+            }
+
+    def request_runtime(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.requests.post",
+        request_runtime,
+    )
+    with core_app.app_context():
+        context = _request_education_runtime_context(
+            "conversation-1",
+            "teacher",
+        )
+
+    assert context["run_grant"] == "A" * 48
+    assert context["agent_service_views"]["_edu_2"] == ["edu"]
+    assert calls[0][0].endswith(
+        "/api/edu/conversations/conversation-1/runtime-grant"
+    )
+    assert calls[0][1]["headers"]["Authorization"].startswith("Bearer ")
+    assert calls[0][1]["timeout"] == (2, 8)
 
 
 def test_sandbox_education_action_uses_only_server_projected_scope(monkeypatch):
@@ -291,6 +340,44 @@ def test_education_system_agents_receive_capability_bound_business_tool(core_app
     assert projection["agents"]["_edu_1"]["tool_index"][0]["tool_names"] == [
         "education_action"
     ]
+
+
+def test_common_service_tools_are_bound_with_education_agent_views(core_app):
+    capabilities = {
+        capability.source_ref: capability
+        for capability in Capability.query.filter(
+            Capability.source_ref.in_(
+                ["list_services", "call_service_api", "rag_search"]
+            )
+        ).all()
+    }
+    assert set(capabilities) == {
+        "list_services",
+        "call_service_api",
+        "rag_search",
+    }
+    assert all(item.domain == "common" for item in capabilities.values())
+
+    for source_ref in ("list_services", "call_service_api"):
+        bindings = AgentCapabilityBinding.query.filter_by(
+            capability_id=capabilities[source_ref].id,
+            enabled=True,
+        ).all()
+        assert {binding.agent_id for binding in bindings} >= {
+            f"_edu_{index}" for index in range(1, 10)
+        }
+
+    rag_bindings = AgentCapabilityBinding.query.filter_by(
+        capability_id=capabilities["rag_search"].id,
+        enabled=True,
+    ).all()
+    assert {binding.agent_id for binding in rag_bindings} >= {
+        "_edu_1",
+        "_edu_2",
+        "_edu_3",
+        "_edu_7",
+        "_edu_8",
+    }
 
 
 def test_bound_education_action_records_core_capability_audit(monkeypatch, core_app):

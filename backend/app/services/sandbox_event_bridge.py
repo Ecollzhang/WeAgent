@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from datetime import timedelta
 
 from flask import current_app
@@ -11,6 +12,7 @@ from app import db, socketio
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.services.agent_run_service import agent_run_service
+from app.services.agent_output_sanitizer import public_agent_output
 from app.services.message_element_builder import (
     file_event_element,
     mentioned_file_elements,
@@ -371,7 +373,7 @@ class SandboxEventBridge:
                 "status": status,
                 "content": message.content,
                 "elements": message.elements,
-                "raw_output": message.raw_output,
+                "raw_output": public_agent_output(message.raw_output),
                 "sender_name": self._agent_name(Conversation.query.get(conversation_id), agent_id),
                 "events": (message.meta or {}).get("events", []),
                 "provider": self._message_provider(message),
@@ -442,7 +444,7 @@ class SandboxEventBridge:
             "agent_id": agent_id,
             "sender_name": self._agent_name(Conversation.query.get(conversation_id), agent_id),
             "element": element,
-            "raw_output": message.raw_output,
+            "raw_output": public_agent_output(message.raw_output),
             "content": message.content,
             "status": message.status,
             "events": (message.meta or {}).get("events", []),
@@ -966,7 +968,27 @@ class SandboxEventBridge:
 
     @staticmethod
     def _summary_text(raw_output):
-        text = (raw_output or "").strip()
+        text = str(raw_output or "")
+        text = re.sub(
+            r"^##[ \t]+/?workspace/[^\r\n]+\r?\n"
+            r"```[^\r\n]*\r?\n.*?^```[ \t]*(?:\r?\n|$)",
+            "",
+            text,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        text = re.sub(
+            r"Reading additional input from stdin\.\.\.\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"<tool_call>.*?</tool_call>",
+            "",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
         if not text:
             return "Processing..."
         max_len = 12000

@@ -20,7 +20,15 @@ class EducationToolGrant(db.Model):
     actor_user_id = db.Column(db.String(100), nullable=False, index=True)
     actor_role = db.Column(db.String(20), nullable=False)
     allowed_tools = db.Column(db.JSON, nullable=False, default=list)
+    confirmed_actions = db.Column(db.JSON, nullable=False, default=list)
     capability_ids = db.Column(db.JSON, nullable=False, default=list)
+    agent_ids = db.Column(db.JSON, nullable=True)
+    lesson_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_lessons.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     agent_run_id = db.Column(db.String(100), nullable=True, index=True)
     conversation_id = db.Column(db.String(100), nullable=True, index=True)
     status = db.Column(db.String(20), nullable=False, default="active", index=True)
@@ -36,7 +44,10 @@ class EducationToolGrant(db.Model):
             "actor_user_id": self.actor_user_id,
             "actor_role": self.actor_role,
             "allowed_tools": self.allowed_tools or [],
+            "confirmed_actions": self.confirmed_actions or [],
             "capability_ids": self.capability_ids or [],
+            "agent_ids": self.agent_ids or [],
+            "lesson_id": self.lesson_id,
             "agent_run_id": self.agent_run_id,
             "conversation_id": self.conversation_id,
             "status": self.status,

@@ -115,6 +115,11 @@ class ProviderRunner:
         """Whether the provider exposes an executable shell to the model."""
         return True
 
+    @property
+    def requires_literal_tool_calls(self) -> bool:
+        """Whether projected WeAgent tools must use the audited text loop."""
+        return True
+
     def unavailable_message(self) -> str:
         return f"Provider {self.provider_name} is not available."
 

@@ -78,9 +78,12 @@ def create_tool_grant():
             course_id=str(data.get("course_id") or "").strip() or None,
             allowed_tools=data.get("allowed_tools") or [],
             capability_ids=data.get("capability_ids") or [],
+            agent_ids=data.get("agent_ids") or [],
+            lesson_id=data.get("lesson_id"),
             agent_run_id=data.get("agent_run_id"),
             conversation_id=data.get("conversation_id"),
             ttl_seconds=data.get("ttl_seconds"),
+            confirmed_actions=data.get("confirmed_actions") or [],
         )
         db.session.commit()
     except (ToolGatewayError, TypeError, ValueError) as error:

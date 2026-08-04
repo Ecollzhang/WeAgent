@@ -103,6 +103,11 @@
               <div class="error-content" v-html="renderText(elementContent(el))"></div>
             </div>
 
+            <EducationCard
+              v-else-if="el.type === 'education_card'"
+              :element="el"
+            />
+
             <!-- Requirement Card -->
             <div v-else-if="el.type === 'requirement_card'" class="domain-card requirement-card" @click="navigateToDomain(el)">
               <div class="dc-row dc-main-row">
@@ -525,11 +530,12 @@ import { formatTime } from '../../utils/format'
 import { getFileTree, getServiceLogs, readSessionRawFile, restartService, stopService, writeFile } from '@/api/sandbox'
 import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
+import EducationCard from '@/components/education/EducationCard.vue'
 import { checkVisible } from '../../store/modules/grayscale'
 
 export default {
   name: 'MessageBubble',
-  components: { ArtifactWorkbench, DiffViewCard },
+  components: { ArtifactWorkbench, DiffViewCard, EducationCard },
   props: {
     message: Object,
     isOwn: Boolean,
@@ -588,6 +594,7 @@ export default {
       if (checkVisible(s, domain, 'ui.chat.card.bug')) visible.add('bug_card')
       if (checkVisible(s, domain, 'ui.chat.card.iteration')) visible.add('iteration_card')
       if (checkVisible(s, domain, 'ui.chat.card.project')) visible.add('project_card')
+      if (checkVisible(s, domain, 'ui.chat.card.education')) visible.add('education_card')
       return visible
     },
     cardGroupedElements() {
@@ -659,7 +666,7 @@ export default {
       return merged
     },
     contentElements() {
-      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card']
+      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card', 'education_card']
       const allowedCards = this.visibleDomainCards
       const isDomainCard = type => domainCardTypes.includes(type)
 

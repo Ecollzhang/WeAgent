@@ -222,6 +222,8 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
                 education_run_grant=None,
                 visible_prompt=None,
                 workspace_role=None,
+                services=None,
+                agent_service_views=None,
             ):
             self.started = {
                 "authorization": authorization,
@@ -232,6 +234,8 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
                     "education_run_grant": education_run_grant,
                     "visible_prompt": visible_prompt,
                     "workspace_role": workspace_role,
+                    "services": services,
+                    "agent_service_views": agent_service_views,
                 }
             return {
                 "conversation_id": "core-conversation-1",

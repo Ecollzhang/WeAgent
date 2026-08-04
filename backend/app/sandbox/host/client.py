@@ -285,12 +285,24 @@ class OrchestratorClient:
 
     def update_runtime_config(self, config: dict) -> dict:
         """Hot-update allowlisted request-scoped runtime configuration."""
-        return self._request(
+        result = self._request(
             "POST",
             "/api/config/runtime",
             config,
             timeout=_timeout_from_env("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", 5),
         )
+        error = str(result.get("error") or "") if isinstance(result, dict) else ""
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "error"
+            and "HTTP 404" in error
+            and "Not Found" in error
+        ):
+            # Images built before runtime-scoped auth refresh do not expose
+            # this optional route. The host uses this marker to snapshot and
+            # rehydrate the conversation on the current image.
+            result["optional_route_missing"] = True
+        return result
 
     # ---- Progress ----
 

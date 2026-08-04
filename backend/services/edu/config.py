@@ -44,3 +44,23 @@ class Config:
     EDUCATION_ENABLE_PUBLIC_SEARCH = os.getenv(
         'EDUCATION_ENABLE_PUBLIC_SEARCH', 'true'
     ).lower() in ('1', 'true', 'yes', 'on')
+    EDUCATION_CHAT_ENABLED = os.getenv(
+        'EDUCATION_CHAT_ENABLED', 'true'
+    ).lower() in ('1', 'true', 'yes', 'on')
+    EDUCATION_CHAT_MANUAL_CREATE = os.getenv(
+        'EDUCATION_CHAT_MANUAL_CREATE', 'true'
+    ).lower() in ('1', 'true', 'yes', 'on')
+    EDUCATION_CHAT_TOOLS_ENABLED = os.getenv(
+        'EDUCATION_CHAT_TOOLS_ENABLED', 'true'
+    ).lower() in ('1', 'true', 'yes', 'on')
+    EDUCATION_RAG_ENABLED = os.getenv(
+        'EDUCATION_RAG_ENABLED', 'true'
+    ).lower() in ('1', 'true', 'yes', 'on')
+    EDUCATION_RAG_INGESTION_ENABLED = os.getenv(
+        'EDUCATION_RAG_INGESTION_ENABLED', 'true'
+    ).lower() in ('1', 'true', 'yes', 'on')
+    RAG_SERVICE_URL = os.getenv('RAG_SERVICE_URL', 'http://127.0.0.1:5104')
+    RAG_INTERNAL_API_KEY = os.getenv(
+        'RAG_INTERNAL_API_KEY',
+        os.getenv('INTERNAL_API_KEY', 'weagent-rag-internal-key'),
+    )

@@ -25,6 +25,8 @@ from .runtime_client import CoreRuntimeError
 from .tool_gateway import ToolGatewayError, issue_tool_grant
 from .tool_models import EducationToolCall, EducationToolGrant
 from .workflow_models import EducationAgentRun, EducationWorkflow
+from .workflow_models import EducationConversationBinding
+from .agent_policy import resolve_agent_service_views, union_services
 
 
 education_workflow_api = Blueprint("education_workflow_api", __name__)
@@ -54,7 +56,10 @@ TEACHER_WORKFLOW_TOOLS = [
     "edu.question_bank.search",
     "edu.knowledge.search",
     "edu.web.research",
+    "edu.lesson.update",
+    "edu.courseware.get",
     "edu.courseware.create",
+    "edu.courseware.version.create",
     "edu.asset.attach",
     "edu.question_bank.upsert",
     "edu.paper.compose",
@@ -532,6 +537,18 @@ def _start_core_run(
         if not run:
             return
         try:
+            agent_service_views = resolve_agent_service_views(
+                agent_ids,
+                role=workspace_role,
+                material_policy="authorized_knowledge",
+                rag_enabled=bool(
+                    app.config.get("EDUCATION_RAG_ENABLED", True)
+                ),
+            )
+            runtime_workflow = {
+                **workflow,
+                "education_context": {"course_id": run.course_id},
+            }
             started = app.extensions["education_runtime_client"].start_workflow(
                 authorization=authorization,
                 title=title,
@@ -539,8 +556,10 @@ def _start_core_run(
                 visible_prompt=visible_prompt,
                 workspace_role=workspace_role,
                 agent_ids=agent_ids,
-                workflow=workflow,
+                workflow=runtime_workflow,
                 education_run_grant=education_run_grant,
+                services=union_services(agent_service_views),
+                agent_service_views=agent_service_views,
             )
             run.status = "running"
             run.conversation_id = started["conversation_id"]
@@ -557,6 +576,23 @@ def _start_core_run(
             ).first()
             if grant:
                 grant.conversation_id = run.conversation_id
+            binding = EducationConversationBinding.query.filter_by(
+                conversation_id=run.conversation_id
+            ).first()
+            if not binding:
+                binding = EducationConversationBinding(
+                    conversation_id=run.conversation_id,
+                    actor_user_id=run.requested_by,
+                    course_id=run.course_id,
+                    lesson_id=run.lesson_id,
+                    membership_role_snapshot=workspace_role,
+                    binding_mode="product",
+                    material_policy="authorized_knowledge",
+                    agent_service_views=agent_service_views,
+                    source_route=run.to_dict().get("business_route"),
+                    status="active",
+                )
+                db.session.add(binding)
         except CoreRuntimeError as exc:
             run.status = "failed"
             run.error_summary = str(exc)
@@ -790,6 +826,8 @@ def start_workflow_run():
             course_id=course_id,
             allowed_tools=TEACHER_WORKFLOW_TOOLS,
             capability_ids=["builtin:education_actions"],
+            agent_ids=agent_ids,
+            lesson_id=lesson_id,
             agent_run_id=run.id,
         )
     except ToolGatewayError as error:
@@ -917,6 +955,23 @@ def start_product_agent_run():
         options = _product_options(payload, product_code)
     except (TypeError, ValueError) as error:
         return jsonify({"error": str(error)}), 400
+    confirmed_actions = payload.get("confirmed_actions") or []
+    if not isinstance(confirmed_actions, list):
+        return jsonify({"error": "confirmed_actions must be an array"}), 400
+    confirmed_actions = [
+        str(item) for item in confirmed_actions
+        if str(item) == "edu.course.members.import"
+    ]
+    if (
+        product_code == "roster_import"
+        and "edu.course.members.import" not in confirmed_actions
+    ):
+        return jsonify(
+            {
+                "error": "请确认本次学生名单后再启动 Agent",
+                "error_code": "high_impact_confirmation_required",
+            }
+        ), 409
     if product_code == "submission_review":
         submission_id = str(options.get("submission_id") or "").strip()
         submission = Submission.query.filter_by(id=submission_id).first()
@@ -973,6 +1028,7 @@ def start_product_agent_run():
         input_payload={
             "product_code": product_code,
             "options": options,
+            "confirmed_actions": confirmed_actions,
             "display_title": (
                 str(options.get("title") or "").strip()
                 or (lesson.title if lesson else membership.course.title)
@@ -988,7 +1044,10 @@ def start_product_agent_run():
             course_id=course_id,
             allowed_tools=contract["tools"],
             capability_ids=["builtin:education_actions"],
+            agent_ids=agent_ids,
+            lesson_id=lesson_id or None,
             agent_run_id=run.id,
+            confirmed_actions=confirmed_actions,
         )
     except ToolGatewayError as error:
         db.session.rollback()

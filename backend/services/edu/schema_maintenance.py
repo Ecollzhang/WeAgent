@@ -1,5 +1,6 @@
 """Idempotent compatibility upgrades for existing Education databases."""
 
+from flask import current_app
 from sqlalchemy import inspect, text
 
 from .extensions import db
@@ -225,6 +226,44 @@ def migrate_existing_education_schema():
                     )
                 )
             changes.append("edu_agent_runs.tool_grant_id_index")
+
+    if "edu_tool_grants" in tables:
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns("edu_tool_grants")
+        }
+        with db.engine.begin() as connection:
+            if "agent_ids" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_tool_grants "
+                        "ADD COLUMN agent_ids JSON DEFAULT NULL"
+                    )
+                )
+                changes.append("edu_tool_grants.agent_ids")
+            if "lesson_id" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_tool_grants "
+                        "ADD COLUMN lesson_id VARCHAR(36) DEFAULT NULL"
+                    )
+                )
+                changes.append("edu_tool_grants.lesson_id")
+            if "confirmed_actions" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE edu_tool_grants "
+                        "ADD COLUMN confirmed_actions JSON NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "UPDATE edu_tool_grants "
+                        "SET confirmed_actions = JSON_ARRAY() "
+                        "WHERE confirmed_actions IS NULL"
+                    )
+                )
+                changes.append("edu_tool_grants.confirmed_actions")
 
     if "edu_assignments" in tables:
         columns = {
@@ -459,4 +498,87 @@ def migrate_existing_education_schema():
                         "MODIFY COLUMN annotations JSON NOT NULL"
                     )
                 )
+    if {
+        "edu_agent_runs",
+        "edu_conversation_bindings",
+        "edu_course_memberships",
+    }.issubset(tables):
+        from .agent_policy import (
+            EducationAgentPolicyError,
+            resolve_agent_service_views,
+        )
+        from .models import CourseMembership
+        from .workflow_models import (
+            EducationAgentRun,
+            EducationConversationBinding,
+        )
+
+        existing_ids = {
+            value
+            for (value,) in EducationConversationBinding.query.with_entities(
+                EducationConversationBinding.conversation_id
+            ).all()
+        }
+        backfilled = 0
+        runs = EducationAgentRun.query.filter(
+            EducationAgentRun.conversation_id.isnot(None)
+        ).order_by(EducationAgentRun.created_at.asc()).all()
+        for run in runs:
+            conversation_id = str(run.conversation_id or "").strip()
+            if not conversation_id or conversation_id in existing_ids:
+                continue
+            membership = CourseMembership.query.filter_by(
+                course_id=run.course_id,
+                user_id=run.requested_by,
+                status="active",
+            ).first()
+            if not membership:
+                continue
+            agent_ids = list(
+                dict.fromkeys(
+                    str(node.get("agent_id") or "").strip()
+                    for node in (run.nodes or [])
+                    if isinstance(node, dict)
+                    and node.get("type") == "agent_task"
+                    and str(node.get("agent_id") or "").strip()
+                )
+            )
+            if not agent_ids:
+                continue
+            try:
+                views = resolve_agent_service_views(
+                    agent_ids,
+                    role=membership.role,
+                    material_policy="authorized_knowledge",
+                    rag_enabled=bool(
+                        current_app.config.get(
+                            "EDUCATION_RAG_ENABLED",
+                            True,
+                        )
+                    ),
+                )
+            except EducationAgentPolicyError:
+                continue
+            route = run.to_dict().get("business_route")
+            db.session.add(
+                EducationConversationBinding(
+                    conversation_id=conversation_id,
+                    actor_user_id=run.requested_by,
+                    course_id=run.course_id,
+                    lesson_id=run.lesson_id,
+                    membership_role_snapshot=membership.role,
+                    binding_mode="product",
+                    material_policy="authorized_knowledge",
+                    agent_service_views=views,
+                    source_route=route if isinstance(route, dict) else None,
+                    status="active",
+                )
+            )
+            existing_ids.add(conversation_id)
+            backfilled += 1
+        if backfilled:
+            db.session.commit()
+            changes.append(
+                f"edu_conversation_bindings.backfilled:{backfilled}"
+            )
     return changes

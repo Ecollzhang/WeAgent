@@ -123,6 +123,8 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_server_fallback BOOLEAN NOT NULL DEFAULT 0'))
             if 'sandbox_agent_adapters' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_agent_adapters JSON DEFAULT NULL'))
+            if 'sandbox_agent_service_views' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_agent_service_views JSON DEFAULT NULL'))
             if 'kb_document_ids' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_document_ids JSON DEFAULT NULL'))
             if 'services' not in cols:
@@ -251,8 +253,13 @@ def _migrate_grayscale_configs():
             'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
             'ui.sidebar.reports', 'ui.sidebar.schedules',
             'feature.education.enabled',
+            'feature.education.chat.enabled',
+            'feature.education.chat.manual_create',
+            'feature.education.chat.tools',
+            'feature.education.rag.enabled',
             # RD 领域卡片
             'ui.chat.card.requirement', 'ui.chat.card.bug', 'ui.chat.card.iteration', 'ui.chat.card.project',
+            'ui.chat.card.education',
             # 聊天标签页
             'ui.chat.tabs.agent_config', 'ui.chat.tabs.artifacts', 'ui.chat.tabs.logs',
             'ui.chat.tabs.workflow', 'ui.chat.tabs.knowledge_base',
@@ -323,6 +330,7 @@ def _migrate_grayscale_configs():
             ('ui.chat.card.iteration', '聊天-迭代卡片'),
             ('ui.chat.card.project', '聊天-项目卡片'),
         ]
+        rd_domains_json = _json2.dumps(['rd'])
         for key, name in card_keys:
             exists = conn.execute(_text(
                 "SELECT id FROM grayscale_config WHERE config_key = :key AND domain = 'common'"
@@ -331,11 +339,62 @@ def _migrate_grayscale_configs():
                 conn.execute(_text(
                     "INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) "
                     "VALUES (:key, :name, 'ui', 'common', 1, 1, :domains)"
-                ), {'key': key, 'name': name, 'domains': all_domains_json})
+                ), {'key': key, 'name': name, 'domains': rd_domains_json})
+            conn.execute(_text(
+                "UPDATE grayscale_config SET domains = :domains "
+                "WHERE config_key = :key AND domain = 'common'"
+            ), {'key': key, 'domains': rd_domains_json})
             # Remove any per-domain duplicates
             conn.execute(_text(
                 "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
             ), {'key': key})
+
+        education_chat_flags = [
+            ('feature.education.chat.enabled', 'Education chat'),
+            ('feature.education.chat.manual_create', 'Education manual conversation'),
+            ('feature.education.chat.tools', 'Education chat tools'),
+            ('feature.education.rag.enabled', 'Education course knowledge search'),
+        ]
+        for key, name in education_chat_flags:
+            exists = conn.execute(_text(
+                "SELECT id FROM grayscale_config "
+                "WHERE config_key = :key AND domain = 'edu'"
+            ), {'key': key}).first()
+            if not exists:
+                conn.execute(_text(
+                    "INSERT INTO grayscale_config "
+                    "(config_key, config_name, config_type, domain, enabled, visible, domains) "
+                    "VALUES (:key, :name, 'feature', 'edu', 1, 1, NULL)"
+                ), {'key': key, 'name': name})
+            conn.execute(_text(
+                "DELETE FROM grayscale_config "
+                "WHERE config_key = :key AND domain != 'edu'"
+            ), {'key': key})
+
+        education_card_key = 'ui.chat.card.education'
+        education_domains_json = _json2.dumps(['edu'])
+        exists = conn.execute(_text(
+            "SELECT id FROM grayscale_config "
+            "WHERE config_key = :key AND domain = 'common'"
+        ), {'key': education_card_key}).first()
+        if not exists:
+            conn.execute(_text(
+                "INSERT INTO grayscale_config "
+                "(config_key, config_name, config_type, domain, enabled, visible, domains) "
+                "VALUES (:key, :name, 'ui', 'common', 1, 1, :domains)"
+            ), {
+                'key': education_card_key,
+                'name': 'Chat - Education card',
+                'domains': education_domains_json,
+            })
+        conn.execute(_text(
+            "UPDATE grayscale_config SET domains = :domains "
+            "WHERE config_key = :key AND domain = 'common'"
+        ), {'key': education_card_key, 'domains': education_domains_json})
+        conn.execute(_text(
+            "DELETE FROM grayscale_config "
+            "WHERE config_key = :key AND domain != 'common'"
+        ), {'key': education_card_key})
 
         # 6. Ensure chat tab configs exist in common
         chat_tab_keys = [

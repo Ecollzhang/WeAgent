@@ -265,6 +265,7 @@ class DockerContainerManager:
             "AGENT_EXEC_TIMEOUT_SECONDS",
             "RAG_INTERNAL_API_KEY", "RAG_SERVICE_URL",
             "RAG_SCOPE_USER_ID", "RAG_SCOPE_DOMAIN", "RAG_SCOPE_WORKSPACE_ID",
+            "RAG_SCOPE_EDUCATION_ROLE",
             "EDUCATION_RUN_GRANT", "EDUCATION_SERVICE_URL",
             "KB_DOCUMENT_IDS",
             "CONVERSATION_SERVICES", "RD_PROJECT_ID",
@@ -463,11 +464,59 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
+        try:
+            runtime_agents = session.client.list_agents()
+            runtime_ids = {
+                str(item.get("agent_id") or item.get("id") or "")
+                for item in (
+                    runtime_agents.get("agents", [])
+                    if isinstance(runtime_agents, dict)
+                    else []
+                )
+                if isinstance(item, dict)
+            }
+            saved_config = next(
+                (
+                    config
+                    for config in (session.agents_config or [])
+                    if str(config.get("agent_id")) == str(agent_id)
+                ),
+                None,
+            )
+            if saved_config and str(agent_id) not in runtime_ids:
+                self._create_agent_in_container(session.host_port, saved_config)
+        except Exception:
+            # Older healthy runtimes may not provide agent introspection.
+            # Preserve their existing send behavior and rely on the precise
+            # partial-initialization fallback below if needed.
+            pass
         print(
             f"[SandboxManager] send_message session_id={session_id} "
             f"agent_id={agent_id} message_len={len(message or '')}"
         )
         result = session.client.send_to_agent(agent_id, message)
+        error = str(result.get("error") or "") if isinstance(result, dict) else ""
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "error"
+            and "not found and no saved config" in error
+        ):
+            # A host interruption can leave a newly started container between
+            # Docker creation and Agent initialization.  The immutable Agent
+            # configuration is retained in the trusted container labels and
+            # recovered into ``agents_config``. Repair only this exact partial
+            # initialization state, then retry the original message once.
+            saved_config = next(
+                (
+                    config
+                    for config in (session.agents_config or [])
+                    if str(config.get("agent_id")) == str(agent_id)
+                ),
+                None,
+            )
+            if saved_config:
+                self._create_agent_in_container(session.host_port, saved_config)
+                result = session.client.send_to_agent(agent_id, message)
         self._sync_skill_drafts_from_result(session_id, result)
         return result
 
@@ -673,6 +722,41 @@ class DockerContainerManager:
         return session.client.update_runtime_config({
             "USER_AUTH_TOKEN": authorization,
         })
+
+    def update_education_runtime_context(
+        self,
+        session_id: str,
+        *,
+        authorization: str,
+        run_grant: str,
+        service_url: str,
+        agent_service_views: dict,
+        services: list,
+        course_id: str | None = None,
+        membership_role: str | None = None,
+        actor_user_id: str | None = None,
+    ) -> dict:
+        """Atomically refresh the live container's user and EDU scopes."""
+        import json
+
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        config = {
+                "USER_AUTH_TOKEN": authorization,
+                "EDUCATION_RUN_GRANT": run_grant,
+                "EDUCATION_SERVICE_URL": service_url,
+                "AGENT_SERVICE_VIEWS": json.dumps(agent_service_views),
+                "CONVERSATION_SERVICES": json.dumps(services),
+        }
+        if course_id:
+            config.update({
+                "RAG_SCOPE_USER_ID": str(actor_user_id or ""),
+                "RAG_SCOPE_DOMAIN": "edu",
+                "RAG_SCOPE_WORKSPACE_ID": str(course_id),
+                "RAG_SCOPE_EDUCATION_ROLE": str(membership_role or ""),
+            })
+        return session.client.update_runtime_config(config)
 
     def update_model_config_for_user_sessions(self, user_id: str, env_vars: dict) -> dict:
         """Hot-update model configuration for all running containers owned by a user."""

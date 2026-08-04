@@ -115,7 +115,7 @@ export default {
       if (!item || !item.conversation_id) return
       this.$router.push({
         path: '/dashboard',
-        query: { conversation_id: item.conversation_id },
+        query: { conversation_id: item.conversation_id, domain: 'edu' },
       })
     },
     openBusinessPage() {

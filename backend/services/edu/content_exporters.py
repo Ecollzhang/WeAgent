@@ -341,6 +341,17 @@ def export_pptx(source, fallback_title):
     )
     blank_layout = presentation.slide_layouts[6]
 
+    # Canonical SlideDocument payloads may already contain an explicit opening
+    # slide.  Reuse it as the presentation cover so the exported PPTX keeps the
+    # same page count and ordering as the HTML/visual preview.  Documents that
+    # only contain ordinary content slides retain the generated cover used by
+    # the generic exporter.
+    first_layout = str((slides[0] if slides else {}).get("layout") or "").lower()
+    first_is_cover = any(
+        marker in first_layout for marker in ("cover", "title", "opening")
+    )
+    cover_record = slides[0] if first_is_cover else None
+
     cover = presentation.slides.add_slide(blank_layout)
     cover.background.fill.solid()
     cover.background.fill.fore_color.rgb = rgb(theme["background"])
@@ -362,7 +373,7 @@ def export_pptx(source, fallback_title):
     )
     add_text(
         cover,
-        title,
+        (cover_record or {}).get("title") or title,
         1.2,
         1.43,
         10.85,
@@ -395,7 +406,9 @@ def export_pptx(source, fallback_title):
         align=PP_ALIGN.RIGHT,
     )
 
-    for index, record in enumerate(slides, 1):
+    content_records = slides[1:] if first_is_cover else slides
+    start_number = 2 if first_is_cover else 1
+    for index, record in enumerate(content_records, start_number):
         slide = presentation.slides.add_slide(blank_layout)
         slide.background.fill.solid()
         slide.background.fill.fore_color.rgb = rgb(theme["background"])

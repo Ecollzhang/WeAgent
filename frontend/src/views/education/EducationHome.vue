@@ -15,6 +15,12 @@
         icon="el-icon-plus"
         @click="createDialog = true"
       >创建课程</el-button>
+      <el-button
+        data-testid="create-course-with-agent"
+        icon="el-icon-chat-dot-round"
+        :loading="agentCourseLoading"
+        @click="createCourseWithAgent"
+      >用 Agent 创建课程</el-button>
     </template>
 
     <div class="course-summary">
@@ -121,6 +127,7 @@
 <script>
 import EducationShell from '../../components/education/EducationShell.vue'
 import CourseCard from '../../components/education/CourseCard.vue'
+import { bootstrapEducationConversation } from '../../api/education'
 
 export default {
   name: 'EducationHome',
@@ -130,6 +137,7 @@ export default {
       createDialog: false,
       joinDialog: false,
       joining: false,
+      agentCourseLoading: false,
       invitationToken: '',
       courseForm: {
         title: '',
@@ -170,6 +178,30 @@ export default {
     },
     openCourse(course) {
       this.$router.push(`/education/courses/${course.id}`)
+    },
+    async createCourseWithAgent() {
+      if (this.agentCourseLoading) return
+      this.agentCourseLoading = true
+      try {
+        const response = await bootstrapEducationConversation({
+          binding_mode: 'course_bootstrap',
+          agent_ids: ['_edu_1'],
+          title: '用 Agent 创建新课程',
+          source_route: { path: '/education' },
+        })
+        const conversation = response && (response.conversation || response.data?.conversation)
+        if (!conversation || !conversation.id) {
+          throw new Error('Education bootstrap did not return a conversation')
+        }
+        this.$router.push({
+          path: '/dashboard',
+          query: { conversation_id: conversation.id, domain: 'edu' },
+        })
+      } catch (error) {
+        this.$message.error('课程创建 Agent 暂时无法启动')
+      } finally {
+        this.agentCourseLoading = false
+      }
     },
     handleCreateCourse() {
       this.$refs.courseForm.validate(async valid => {

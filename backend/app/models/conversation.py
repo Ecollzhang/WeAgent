@@ -21,6 +21,12 @@ class Conversation(BaseModel):
     kb_domain = db.Column(db.String(20), nullable=False, default='')
     sandbox_server_fallback = db.Column(db.Boolean, nullable=False, default=False)
     sandbox_agent_adapters = db.Column(db.JSON, nullable=False, default=dict)
+    sandbox_agent_service_views = db.Column(
+        db.JSON,
+        nullable=False,
+        default=dict,
+        comment="Server-issued per-Agent microservice snapshots",
+    )
     kb_document_ids = db.Column(db.JSON, nullable=True, comment='Selected KB document IDs for filtering')
     services = db.Column(db.JSON, nullable=True, comment='启用的领域服务列表, e.g. ["rd","rag"]')
     project_id = db.Column(db.String(36), nullable=True, comment='关联的RD项目ID，NULL=全局视角')

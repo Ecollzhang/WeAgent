@@ -251,3 +251,58 @@ class EducationAgentRun(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class EducationConversationBinding(db.Model):
+    """Durable Education context for one core conversation.
+
+    The role snapshot is audit/UI data only. Every executable request must
+    re-resolve the live CourseMembership.
+    """
+
+    __tablename__ = "edu_conversation_bindings"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    conversation_id = db.Column(
+        db.String(36), nullable=False, unique=True, index=True
+    )
+    actor_user_id = db.Column(db.String(100), nullable=False, index=True)
+    course_id = db.Column(
+        db.String(36),
+        db.ForeignKey("edu_courses.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    lesson_id = db.Column(db.String(36), nullable=True, index=True)
+    membership_role_snapshot = db.Column(db.String(20), nullable=True)
+    binding_mode = db.Column(db.String(30), nullable=False, default="manual")
+    material_policy = db.Column(
+        db.String(30), nullable=False, default="course_only"
+    )
+    agent_service_views = db.Column(db.JSON, nullable=False, default=dict)
+    source_route = db.Column(db.JSON, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="active", index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "conversation_id": self.conversation_id,
+            "actor_user_id": self.actor_user_id,
+            "course_id": self.course_id,
+            "lesson_id": self.lesson_id,
+            "membership_role_snapshot": self.membership_role_snapshot,
+            "binding_mode": self.binding_mode,
+            "material_policy": self.material_policy,
+            "agent_service_views": self.agent_service_views or {},
+            "source_route": self.source_route,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

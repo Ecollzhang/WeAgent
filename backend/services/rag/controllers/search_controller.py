@@ -4,7 +4,7 @@ from functools import wraps
 from flask import Blueprint, request, jsonify, g
 from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 
-from access_scope import resolve_search_scope
+from access_scope import document_allowed, resolve_search_scope
 from config import Config
 from models.document import Document
 from models.chunk import Chunk
@@ -55,11 +55,7 @@ def auth_scoped(f):
 
 
 def _document_allowed(doc, scope):
-    if not doc or doc.domain != scope.domain:
-        return False
-    if scope.internal and scope.workspace_id:
-        return doc.workspace_id == scope.workspace_id
-    return doc.user_id == scope.user_id
+    return document_allowed(doc, scope)
 
 
 @search_bp.route('/search', methods=['POST'])
@@ -92,6 +88,8 @@ def semantic_search():
         filter_meta['domain'] = domain
     if workspace_id:
         filter_meta['workspace_id'] = workspace_id
+    if scope.domain == "edu" and scope.education_role == "student":
+        filter_meta["visibility_scope"] = "course_published"
     if not filter_meta:
         filter_meta = None
 
@@ -171,6 +169,8 @@ def hybrid_search():
         filter_meta['domain'] = domain
     if workspace_id:
         filter_meta['workspace_id'] = workspace_id
+    if scope.domain == "edu" and scope.education_role == "student":
+        filter_meta["visibility_scope"] = "course_published"
     if not filter_meta:
         filter_meta = None
 

@@ -105,6 +105,10 @@ class CodexRunner(ProviderRunner):
         """DeepSeek's compatible Responses API cannot execute Codex shell tools."""
         return self._provider_name(self._codex_base_url()) != "deepseek"
 
+    @property
+    def requires_literal_tool_calls(self) -> bool:
+        return self._provider_name(self._codex_base_url()) == "deepseek"
+
     def environment(self) -> dict:
         runtime = self.runtime
         self._init_relay_state()
@@ -324,12 +328,8 @@ class CodexRunner(ProviderRunner):
                 f"base_url = {self._toml_string(base_url)}",
             ])
         servers = self._bound_mcp_servers()
-        # DeepSeek's OpenAI-compatible Responses endpoint does not reliably
-        # expose dynamically registered MCP tools to Codex.  Leaving the
-        # bridge enabled gives the model resource helpers without the actual
-        # callable tool, which makes it probe read_mcp_resource until timeout.
-        # WeAgent's audited literal tool loop is the supported transport for
-        # this provider; native OpenAI/Codex runs keep the MCP bridge.
+        # DeepSeek runs through the audited literal tool loop below. Codex's
+        # MCP transport remains available for native Responses providers.
         if self._has_bound_tools() and provider_name != "deepseek":
             used_names = {server["config_name"] for server in servers}
             config_name = "weagent_tools"
@@ -620,8 +620,18 @@ class CodexRunner(ProviderRunner):
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
             ),
-            "CODEX_RELAY_BIND": f"127.0.0.1:{port}",
+            "CODEX_RELAY_BIND": "127.0.0.1",
             "CODEX_RELAY_ADDR": f"127.0.0.1:{port}",
+            # DeepSeek may emit arbitrary function calls for names mentioned
+            # in the prompt. Codex then rejects those calls before WeAgent's
+            # audited XML tool loop can execute them. Strip upstream function
+            # schemas so tools remain plain text and flow through the bounded
+            # server-side executor.
+            "CODEX_RELAY_DROP_PARAMS": json.dumps([
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
+            ], separators=(",", ":")),
             "NO_COLOR": "1",
         })
         log_file = open(log_path, "a", encoding="utf-8")
@@ -725,6 +735,7 @@ class CodexRunner(ProviderRunner):
             "tool_use",
             "function_call",
             "function_call_output",
+            "reasoning",
         }:
             return ""
         message = event.get("message")
@@ -744,6 +755,17 @@ class CodexRunner(ProviderRunner):
         ]
         item = event.get("item")
         if isinstance(item, dict):
+            item_type = str(item.get("type") or "").lower()
+            if item_type in {
+                "reasoning",
+                "todo_list",
+                "mcp_tool_call",
+                "function_call",
+                "function_call_output",
+                "command_execution",
+                "error",
+            }:
+                return ""
             candidates.extend([
                 item.get("text"),
                 item.get("content"),

@@ -396,6 +396,7 @@ import EmbeddedAgentRecord from '../../components/education/EmbeddedAgentRecord.
 import SafeHtmlPreview from '../../components/education/SafeHtmlPreview.vue'
 import SlideDocumentEditor from '../../components/education/SlideDocumentEditor.vue'
 import { educationErrorMessage } from '../../utils/educationErrors'
+import downloadBlob from '../../utils/downloadBlob'
 const { formatVersionTime } = require('../../utils/educationContent')
 const {
   PRESENTATION_THEMES,
@@ -742,12 +743,7 @@ export default {
       this.exportingKey = `${entry.content.id}:${format}`
       try {
         const blob = await exportEducationContent(entry.content.id, format)
-        const objectUrl = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = objectUrl
-        link.download = `${entry.lesson.title}-v${entry.version.version_number}.${format}`
-        link.click()
-        URL.revokeObjectURL(objectUrl)
+        downloadBlob(blob, `${entry.lesson.title}-v${entry.version.version_number}.${format}`)
       } catch (error) {
         this.$message.error(`${format.toUpperCase()} 导出失败，请尝试 JSON 或 HTML`)
       } finally {
