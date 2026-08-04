@@ -98,7 +98,7 @@
                     </div>
                     <div class="reference-meta-row meeting-link-row">
                       <i class="el-icon-link"></i>
-                      <div><small>{{ t("tencent") }}</small><a v-if="selectedMeeting.meeting_link" :href="selectedMeeting.meeting_link" target="_blank" rel="noopener noreferrer"><i class="el-icon-link"></i> {{ meetingLinkText(selectedMeeting.meeting_link) }}</a><b v-else>{{ t("noMeetingLink") }}</b></div>
+                      <div><small>{{ t("tencent") }}</small><a v-if="selectedMeeting.meeting_link" :href="selectedMeeting.meeting_link" target="_blank" rel="noopener noreferrer"><i class="el-icon-link"></i> {{ meetingLinkText(selectedMeeting.meeting_link) }}</a><b v-else>{{ t("noMeetingLink") }}</b></div><button v-if="isMeetingManager" class="detail-manage-button" @click="openMeetingLinkEdit">设置</button>
                     </div>
                   </div>
                   <div class="reference-attendance">
@@ -112,17 +112,17 @@
                 </div>
                 <div class="reference-bottom">
                   <div class="reference-block materials-block">
-                    <div class="reference-block-head"><b>{{ t("meetingMaterials") }} ({{ materialItems.length }})</b><button v-if="materialItems.length" @click="downloadAllMaterials">{{ t("downloadAll") }}</button></div>
-                    <div v-if="materialItems.length" class="material-list"><button v-for="item in materialItems.slice(0, 3)" :key="item.id || item.name" @click="downloadMaterial(item)"><i class="el-icon-document"></i>{{ item.name }}<em class="el-icon-download"></em></button></div>
+                    <div class="reference-block-head"><b>{{ t("meetingMaterials") }} ({{ materialItems.length }})</b><span class="reference-head-actions"><button v-if="isMeetingManager" @click="openMaterialUpload">上传</button><button v-if="materialItems.length" @click="downloadAllMaterials">{{ t("downloadAll") }}</button></span></div>
+                    <div v-if="materialItems.length" class="material-list"><div v-for="item in materialItems.slice(0, 3)" :key="item.id || item.name" class="deletable-row"><button @click="downloadMaterial(item)"><i class="el-icon-document"></i>{{ item.name }}<em class="el-icon-download"></em></button><button v-if="isMeetingManager" class="mini-delete" title="删除会议材料" @click.stop="removeMaterial(item)"><i class="el-icon-close"></i></button></div></div>
                     <p v-else class="reference-empty">{{ t("noMaterials") }}</p>
                   </div>
                   <div class="reference-block records-block">
-                    <div class="reference-block-head"><b>{{ t("minutesRecord") }}</b><button v-if="isMeetingManager" @click="startMinutesEdit">维护纪要</button><span v-else :class="{ pending: !selectedMeeting.minutes }">{{ selectedMeeting.minutes ? t("done") : t("notGenerated") }}</span></div>
+                    <div class="reference-block-head"><b>{{ t("minutesRecord") }}</b><span v-if="isMeetingManager" class="reference-head-actions"><button @click="startMinutesEdit">维护纪要</button><button v-if="selectedMeeting.minutes || (selectedMeeting.resolutions || []).length" class="mini-delete" title="删除纪要与记录" @click="removeMinutes"><i class="el-icon-close"></i></button></span><span v-else :class="{ pending: !selectedMeeting.minutes }">{{ selectedMeeting.minutes ? t("done") : t("notGenerated") }}</span></div>
                     <button class="record-line" :disabled="!selectedMeeting.minutes" @click="openMinutes"><b>{{ t("meetingMinutes") }} <i v-if="selectedMeeting.minutes" class="el-icon-view"></i></b><p>{{ selectedMeeting.minutes || t("minutesPending") }}</p></button>
                   </div>
                   <div class="reference-block action-block">
                     <div class="reference-block-head"><b>{{ t("linkedActions") }}（{{ selectedActions.length }}）</b><button v-if="isMeetingManager" @click="openActionAdd">+ 新增行动项</button><button v-else-if="selectedActions.length" @click="openAction(selectedActions[0])">{{ t("viewAll") }} <i class="el-icon-arrow-right"></i></button></div>
-                    <div v-if="selectedActions.length" class="action-list action-cards"><button v-for="action in selectedActions" :key="action.id" class="action-card" @click="openAction(action)"><b>{{ action.title }}</b><small>{{ action.assignee_name || '未指派' }}<template v-if="action.due_date"> · 截止 {{ dateTime(action.due_date) }}</template></small><em>{{ actionState(action) }}</em></button></div>
+                    <div v-if="selectedActions.length" class="action-list action-cards"><div v-for="action in selectedActions" :key="action.id" class="action-card-wrap"><button class="action-card" @click="openAction(action)"><span class="action-card-icon"><i class="el-icon-finished"></i></span><span class="action-card-content"><b :title="action.title">{{ action.title }}</b><small><i class="el-icon-user"></i>{{ action.assignee_name || '未指派' }}<template v-if="action.due_date"> · {{ String(action.due_date).slice(5, 10) }}</template></small></span></button><button v-if="isMeetingManager" class="mini-delete action-delete" title="删除行动项" @click.stop="removeAction(action)"><i class="el-icon-close"></i></button></div></div>
                     <p v-else class="reference-empty">{{ t("noAction") }}</p>
                   </div>
                 </div>
@@ -314,7 +314,8 @@
     <el-dialog
       :title="t('newMeeting')"
       :visible.sync="meetingVisible"
-      width="600px"
+      width="540px"
+      class="compact-form-dialog"
       @closed="resetMeetingForm"
     >
       <el-form :model="meetingForm" label-width="86px" size="small" class="dialog-form-card"
@@ -339,6 +340,15 @@
           t("createNotify")
         }}</el-button></span
       >
+    </el-dialog>
+    <el-dialog title="上传会议材料" :visible.sync="materialUploadVisible" width="500px" class="material-upload-dialog">
+      <div class="material-upload-intro"><span class="material-upload-icon"><i class="el-icon-folder-add"></i></span><div><b>为会议补充资料</b><p>上传后的文件将显示在会议详情中，供参会成员下载。</p></div></div>
+      <el-upload class="material-dropzone" drag action="#" :auto-upload="false" :file-list="detailMaterialFiles" :on-change="onDetailMaterialChange" :on-remove="onDetailMaterialRemove"><i class="el-icon-upload"></i><div class="el-upload__text">拖拽文件到这里，或 <em>点击选择</em></div><div slot="tip" class="el-upload__tip">支持一次选择多个文件</div></el-upload>
+      <span slot="footer"><el-button @click="materialUploadVisible = false">取消</el-button><el-button type="primary" :disabled="!detailMaterialFiles.length" @click="appendMaterials">添加 {{ detailMaterialFiles.length ? detailMaterialFiles.length + ' 份资料' : '资料' }}</el-button></span>
+    </el-dialog>
+    <el-dialog title="设置腾讯会议" :visible.sync="meetingLinkVisible" width="460px">
+      <el-form :model="meetingLinkForm" label-width="84px" size="small"><el-form-item label="会议链接"><el-input v-model="meetingLinkForm.meeting_link" placeholder="粘贴腾讯会议链接或会议号" /></el-form-item></el-form>
+      <span slot="footer"><el-button @click="meetingLinkVisible = false">取消</el-button><el-button type="primary" @click="saveMeetingLink">保存</el-button></span>
     </el-dialog>
     <el-dialog
       :title="t('newTask')"
@@ -518,6 +528,10 @@ export default {
     actionAddVisible: false,
     actionForm: { title: "", assigneeId: "", dueDate: "" },
     actionVisible: false,
+    materialUploadVisible: false,
+    detailMaterialFiles: [],
+    meetingLinkVisible: false,
+    meetingLinkForm: { meeting_link: "" },
     activeAction: null,
     selectedMeeting: null,
     selectedScheduleDate: "",
@@ -810,6 +824,8 @@ export default {
     },
     onMaterialChange(file, fileList) { this.meetingFiles = fileList; },
     onMaterialRemove(_, fileList) { this.meetingFiles = fileList; },
+    onDetailMaterialChange(_, fileList) { this.detailMaterialFiles = fileList; },
+    onDetailMaterialRemove(_, fileList) { this.detailMaterialFiles = fileList; },
     readMaterial(file) {
       return new Promise((resolve) => {
         if (!file || !file.raw) return resolve({ name: file && file.name });
@@ -907,6 +923,47 @@ export default {
       this.minutesEditVisible = false;
       this.$message.success("会议纪要已保存");
     },
+    openMaterialUpload() {
+      if (!this.isMeetingManager) return;
+      this.detailMaterialFiles = [];
+      this.materialUploadVisible = true;
+    },
+    async appendMaterials() {
+      if (!this.detailMaterialFiles.length) return this.$message.warning("请选择需要添加的会议材料");
+      const additions = await Promise.all(this.detailMaterialFiles.map((file) => this.readMaterial(file)));
+      await this.$store.dispatch("office/updateMeeting", { id: this.selectedMeeting.id, data: { materials: [...this.materialItems, ...additions] }, workspaceId: this.ws.id });
+      await this.selectMeeting(this.selectedMeeting);
+      this.materialUploadVisible = false;
+      this.$message.success("会议材料已添加");
+    },
+    async removeMaterial(item) {
+      try {
+        await this.$confirm(`确认删除会议材料“${item.name || "未命名材料"}”吗？`, "删除确认", { type: "warning" });
+        const materials = this.materialItems.filter((candidate) => candidate !== item);
+        await this.$store.dispatch("office/updateMeeting", { id: this.selectedMeeting.id, data: { materials }, workspaceId: this.ws.id });
+        await this.selectMeeting(this.selectedMeeting);
+        this.$message.success("会议材料已删除");
+      } catch (error) { if (error !== "cancel") this.$message.error("删除会议材料失败"); }
+    },
+    openMeetingLinkEdit() {
+      if (!this.isMeetingManager) return;
+      this.meetingLinkForm = { meeting_link: this.selectedMeeting.meeting_link || "" };
+      this.meetingLinkVisible = true;
+    },
+    async saveMeetingLink() {
+      await this.$store.dispatch("office/updateMeeting", { id: this.selectedMeeting.id, data: { meeting_link: this.meetingLinkForm.meeting_link.trim() }, workspaceId: this.ws.id });
+      await this.selectMeeting(this.selectedMeeting);
+      this.meetingLinkVisible = false;
+      this.$message.success("腾讯会议已更新");
+    },
+    async removeMinutes() {
+      try {
+        await this.$confirm("确认删除会议纪要与会议记录吗？", "删除确认", { type: "warning" });
+        await this.$store.dispatch("office/updateMeeting", { id: this.selectedMeeting.id, data: { minutes: "", resolutions: [] }, workspaceId: this.ws.id });
+        await this.selectMeeting(this.selectedMeeting);
+        this.$message.success("会议纪要与记录已删除");
+      } catch (error) { if (error !== "cancel") this.$message.error("删除会议纪要失败"); }
+    },
     openActionAdd() {
       if (!this.isMeetingManager) return;
       this.actionForm = { title: "", assigneeId: "", dueDate: "" };
@@ -920,6 +977,14 @@ export default {
       await this.selectMeeting(this.selectedMeeting);
       await this.$store.dispatch("office/loadSchedules", this.ws.id);
       this.$message.success("行动项已添加，可继续新增");
+    },
+    async removeAction(action) {
+      try {
+        await this.$confirm(`确认删除行动项“${action.title}”吗？`, "删除确认", { type: "warning" });
+        await this.$store.dispatch("office/deleteActionItem", { id: action.id, workspaceId: this.ws.id });
+        await this.selectMeeting(this.selectedMeeting);
+        this.$message.success("行动项已删除");
+      } catch (error) { if (error !== "cancel") this.$message.error("删除行动项失败"); }
     },
     async downloadMaterial(item) {
       if (item.content && String(item.content).startsWith("data:")) {
@@ -2007,6 +2072,55 @@ export default {
   cursor: pointer;
 }
 .reference-block-head button:hover { color: #337ddf; }
+.reference-head-actions { display: inline-flex; align-items: center; gap: 8px; }
+.detail-manage-button {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid #dbe7f4;
+  border-radius: 4px;
+  background: #fff;
+  color: #5d83b3;
+  font-size: 10px;
+  cursor: pointer;
+}
+.detail-manage-button:hover { border-color: #9ec0ec; color: #2875d2; }
+.deletable-row,
+.action-card-wrap { position: relative; }
+.deletable-row { display: flex; align-items: center; gap: 5px; }
+.deletable-row > button:first-child { margin-bottom: 7px; }
+.mini-delete {
+  display: inline-flex !important;
+  width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50%;
+  background: #fff0f0 !important;
+  color: #e04d4d !important;
+  font-size: 11px !important;
+  cursor: pointer;
+}
+.mini-delete:hover { background: #e94d4d !important; color: #fff !important; }
+.material-upload-dialog /deep/ .el-dialog__body { padding: 18px 24px 12px; }
+.material-upload-intro { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.material-upload-icon { display: inline-flex; width: 42px; height: 42px; align-items: center; justify-content: center; border-radius: 12px; background: #edf5ff; color: #4a91e8; font-size: 21px; }
+.material-upload-intro b { display: block; color: #334e6e; font-size: 14px; }
+.material-upload-intro p { margin: 4px 0 0; color: #91a0b1; font-size: 12px; line-height: 1.5; }
+.material-dropzone { display: block; }
+.material-dropzone /deep/ .el-upload,
+.material-dropzone /deep/ .el-upload-dragger { width: 100%; }
+.material-dropzone /deep/ .el-upload-dragger { height: 144px; padding-top: 27px; border: 1px dashed #b7d3f5; border-radius: 10px; background: linear-gradient(145deg, #fbfdff, #f4f9ff); }
+.material-dropzone /deep/ .el-upload-dragger:hover { border-color: #5599ec; background: #f0f7ff; }
+.material-dropzone /deep/ .el-icon-upload { margin: 0 0 8px; color: #5599ec; font-size: 35px; line-height: 1; }
+.material-dropzone /deep/ .el-upload__text { color: #62768e; font-size: 13px; }
+.material-dropzone /deep/ .el-upload__text em { color: #397fe0; font-style: normal; font-weight: 600; }
+.material-dropzone /deep/ .el-upload__tip { margin-top:7px; color: #9aa9b8; font-size: 11px; }
+.material-dropzone /deep/ .el-upload-list { margin-top: 10px; }
+.material-dropzone /deep/ .el-upload-list__item { height: 30px; margin-top: 4px; padding: 5px 28px 5px 10px; border-radius: 6px; background: #f6f9fd; color: #55718f; }
 .material-list i {
   color: #6d9be6;
 }
@@ -2074,28 +2188,47 @@ button.record-line:not(:disabled):hover b { color: #347edc; }
   gap: 7px;
 }
 .action-cards .action-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  padding: 8px 10px;
-  border: 1px solid #e5edf6;
-  border-radius: 7px;
-  background: #fff;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 6px 25px 6px 7px;
+  border: 1px solid #dce9f6;
+  border-radius: 8px;
+  background: linear-gradient(105deg, #fff, #f9fcff);
   text-align: left;
 }
+.action-card-wrap .action-card { width: 100%; }
+.action-card-wrap .action-delete { position: absolute; top: 7px; right: 7px; opacity: .72; }
+.action-card-wrap:hover .action-delete { opacity: 1; }
+.action-cards .action-card i,
+.action-cards .mini-delete i {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+}
 .action-cards .action-card:hover {
-  border-color: #b9d4f4;
-  color: #3279dc;
+  border-color: #9fc5f2;
+  background: #f5faff;
+  box-shadow: 0 3px 8px rgba(50, 123, 220, .08);
 }
+.action-card-icon { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 7px; background: #eaf3ff; color: #4d8fe5; font-size: 12px; }
+.action-card-content { min-width: 0; }
+.action-cards .action-card b { display: block; overflow: hidden; color: #415c7a; font-size: 11px; font-weight: 600; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .action-cards .action-card small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  margin-top: 2px;
   color: #8a9bb0;
-  font-size: 10px;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.action-cards .action-card em {
-  align-self: flex-end;
-  margin-left: 0;
-}
+.action-cards .action-card small i { color: #9eb3c9; font-size: 10px; }
 .action-dialog-title { color: #253e5c; font-size: 17px; font-weight: 700; }
 .action-dialog-desc { min-height: 45px; margin: 12px 0; color: #65788f; font-size: 13px; line-height: 1.7; }
 .action-dialog-meta { display: flex; gap: 22px; padding: 10px 12px; border-radius: 6px; background: #f6f9fd; color: #6b7f97; font-size: 12px; }
@@ -2316,6 +2449,7 @@ button.record-line:not(:disabled):hover b { color: #347edc; }
 .schedule-day { position: relative; }
 .schedule-dot { position: absolute; bottom: 4px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: #ed5c5c; }
 .schedule-day.active .schedule-dot { background: #ffe3e3; }
+.compact-form-dialog /deep/ .el-dialog__body { max-height: 62vh; overflow-y: auto; padding-right: 16px; }
 .dialog-form-card { max-height: 62vh; overflow-y: auto; padding-right: 4px; }
 .form-card { margin-bottom: 12px; padding: 13px 14px 4px; border: 1px solid #e4ebf5; border-radius: 9px; background: linear-gradient(145deg, #fff, #fafcff); }
 .form-card:last-child { margin-bottom: 0; }

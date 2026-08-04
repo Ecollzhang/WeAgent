@@ -2000,6 +2000,10 @@ export default {
   background: #e8f5e9;
   color: #4caf50;
 }
+.context-chip.office {
+  background: #f3e5f5;
+  color: #9c27b0;
+}
 .context-chip.project {
   background: #fff3e0;
   color: #e65100;

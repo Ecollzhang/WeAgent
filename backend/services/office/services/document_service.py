@@ -79,7 +79,10 @@ class DocumentService:
         visible = []
         for item in query.order_by(OfficialDocument.updated_at.desc()).all():
             is_approver = any(user_id == step.get('approver_id') for approval in Approval.query.filter_by(document_id=item.id).all() for step in (approval.steps or []))
-            can_receive = user_id in self._recipient_ids(item)
+            # Recipients receive a document only once it has been published.
+            # Drafts and documents moving through approval remain visible to the
+            # author and approvers, but must not leak to the recipient inbox.
+            can_receive = item.status == 'published' and user_id in self._recipient_ids(item)
             if item.user_id == user_id or is_approver or can_receive:
                 visible.append(item)
         total = len(visible)
@@ -109,7 +112,8 @@ class DocumentService:
         if document and document.user_id != user_id:
             related = Approval.query.filter_by(document_id=document.id).all()
             is_approver = any(user_id == step.get('approver_id') for item in related for step in (item.steps or []))
-            if not is_approver and user_id not in self._recipient_ids(document):
+            is_recipient = document.status == 'published' and user_id in self._recipient_ids(document)
+            if not is_approver and not is_recipient:
                 document = None
         if not document:
             return None, 'Document not found'

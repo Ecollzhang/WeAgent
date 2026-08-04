@@ -43,6 +43,7 @@ export default {
     async generateWeeklyDraft(_, data) { return unwrap(await api.generateWeeklyDraft(data)) },
     async createActionItem({ dispatch }, { meetingId, data, workspaceId }) { const r = await api.createActionItem(meetingId, data); await Promise.all([dispatch('loadMeetings', workspaceId), dispatch('loadSchedules', workspaceId)]); return r },
     async updateActionItem({ dispatch }, { id, data, workspaceId }) { const r = await api.updateActionItem(id, data); await Promise.all([dispatch('loadMeetings', workspaceId), dispatch('loadSchedules', workspaceId)]); return r },
+    async deleteActionItem({ dispatch }, { id, workspaceId }) { const r = await api.deleteActionItem(id); await Promise.all([dispatch('loadMeetings', workspaceId), dispatch('loadSchedules', workspaceId)]); return r },
     async createSchedule({ dispatch }, data) { const r = await api.createSchedule(data); await dispatch('loadSchedules', data.workspace_id); return r },
     async updateSchedule({ dispatch }, { id, data, workspaceId }) { const r = await api.updateSchedule(id, data); await dispatch('loadSchedules', workspaceId); return r },
     async createDocument({ dispatch }, data) { const r = await api.createDocument(data); await dispatch('loadDocuments', data.workspace_id); return r },

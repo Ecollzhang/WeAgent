@@ -101,3 +101,12 @@ def update_action_item(action_item_id):
     if error:
         return error_response(error, code=400)
     return success_response(result, message='Action item updated')
+
+
+@meeting_bp.route('/action-items/<action_item_id>', methods=['DELETE'])
+@jwt_required()
+def delete_action_item(action_item_id):
+    result, error = meeting_service.delete_action_item(action_item_id, get_jwt_identity())
+    if error:
+        return error_response(error, code=404)
+    return success_response(result, message='Action item deleted')

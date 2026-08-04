@@ -352,5 +352,16 @@ class MeetingService:
         db.session.commit()
         return action_item.to_dict(), None
 
+    def delete_action_item(self, action_item_id, user_id):
+        """Delete an action item and its generated calendar task, if any."""
+        action_item = ActionItem.query.filter_by(id=action_item_id, creator_id=user_id).first()
+        if not action_item:
+            return None, 'Action item not found'
+        if action_item.schedule_id:
+            Schedule.query.filter_by(id=action_item.schedule_id).delete(synchronize_session=False)
+        db.session.delete(action_item)
+        db.session.commit()
+        return {'id': action_item_id}, None
+
 
 meeting_service = MeetingService()
