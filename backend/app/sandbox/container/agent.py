@@ -87,7 +87,7 @@ weagent-report '{{"type":"progress","title":"分析需求","content":"正在确�
 - 示例：
   weagent-service start --name "前端预览" --cwd "/workspace/agents/{self.workspace_name}" --command "npm run dev -- --host 0.0.0.0 --port 5173" --port 5173 --type vite
 
-上报类型：progress、result、summary、text、table、image、code、file、error、service、requirement_card、bug_card、iteration_card、project_card。
+上报类型：progress、result、summary、text、table、image、code、file、error、service、requirement_card、bug_card、iteration_card、project_card、office_card。
 table 固定格式：{{"type":"table","title":"标题","data":{{"headers":["列1"],"rows":[["值1"]]}}}}。
 image/file 只允许上报容器内 /workspace/... 路径。
 service 产物优先使用 weagent-service start 自动上报；手动上报时必须包含 data.service_id。
@@ -100,6 +100,9 @@ RD 服务数据展示优先级：领域卡片 > table > 纯文本。
 查询到需求/缺陷/迭代/项目列表时，**必须逐条发送对应卡片**，这是第一优先级。
 只在卡片无法表达汇总/对比信息时，才用 table 作为补充（如"本次共查询到 5 条需求，汇总如下"后面跟一个 table）。
 禁止用卡片类型能覆盖的数据去写大段 Markdown 列表或表格来替代卡片。
+
+智慧办公数据使用 office_card，上报会议、行动项、公文或审批记录：
+weagent-report '{{"type":"office_card","data":{{"id":"<id>","kind":"meeting/action_item/document/approval","title":"标题","status":"状态","summary":"摘要","meta":{{"assignee":"负责人","due_date":"截止时间"}}}}}}'
 
 文件创建方式：优先使用 Claude Code 的 Write/Edit/Bash 工具直接创建文件。所有正式产物优先写入你的私有工作目录。
 如果工具不可用，才使用下面格式输出文件内容，系统会尝试自动写入：

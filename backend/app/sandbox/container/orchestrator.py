@@ -1555,7 +1555,7 @@ class Orchestrator:
         filename = os.path.basename(real_path)
         return content, mime_type, filename
 
-    REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service", "requirement_card", "bug_card", "iteration_card", "project_card"}
+    REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service", "requirement_card", "bug_card", "iteration_card", "project_card", "office_card"}
     REPORT_STATUSES = {"running", "done", "error", "stopped", "starting", "stopping", "failed", "exited"}
     REPORT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
@@ -1622,7 +1622,7 @@ class Orchestrator:
         title = str(report.get("title") or "").strip()
 
         # 领域卡片类型：title/content 从 data 中提取，content 可选
-        DOMAIN_CARD_TYPES = {"requirement_card", "bug_card", "iteration_card", "project_card"}
+        DOMAIN_CARD_TYPES = {"requirement_card", "bug_card", "iteration_card", "project_card", "office_card"}
         if element_type in DOMAIN_CARD_TYPES:
             if not title:
                 title = str(data.get("title") or "").strip()
@@ -1716,7 +1716,7 @@ class Orchestrator:
             f"WEAGENT_REPORT_VALIDATION_ERROR: {message}\n"
             "weagent-report 只接受一个 JSON 对象字符串。\n"
             "必填字段：type、title；除 table 外还必须有非空 content。\n"
-            "type 只能是 progress/result/summary/text/table/image/code/file/error/service/requirement_card/bug_card/iteration_card/project_card。\n"
+            "type 只能是 progress/result/summary/text/table/image/code/file/error/service/requirement_card/bug_card/iteration_card/project_card/office_card。\n"
             "status 可选，只能是 running/done/error/stopped/starting/stopping/failed/exited。\n"
             "table 格式：{\"type\":\"table\",\"title\":\"任务分派计划\",\"data\":{\"headers\":[\"Agent\",\"任务\",\"产出\"],\"rows\":[[\"frontend\",\"实现登录页\",\"index.html\"]]}}\n"
             "file 格式：{\"type\":\"file\",\"title\":\"前端页面\",\"content\":\"/workspace/agents/frontend/index.html\",\"data\":{\"path\":\"/workspace/agents/frontend/index.html\"}}\n"

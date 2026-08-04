@@ -95,7 +95,14 @@ summer 对比/汇总信息可以补充用 table（如"以下是查询汇总"后�
 - 迭代卡片: weagent-report '{"type":"iteration_card","data":{"id":"<id>","title":"<名称>","project_id":"项目ID","status":"planned/active/completed","meta":{"start_date":"开始日期","end_date":"截止日期"},"progress":75}}'
 - 项目卡片: weagent-report '{"type":"project_card","data":{"id":"<id>","title":"<项目名>","summary":"<描述>","project_id":"<id>","meta":{"requirement_count":5,"bug_count":3}}"}'
 每个卡片独立发送一条 weagent-report，一条消息可以发多个不同类型的卡片。""")
-    # 未来扩展: if 'edu' in services: ...  if 'office' in services: ...
+    if 'office' in services:
+        lines.append("""
+## 智慧办公(Office)操作与报告规范
+先读取会议、公文、审批或日程数据，再基于真实接口返回内容回答；不得编造业务记录。
+涉及创建、修改、提交、审批、发布、确认签收等写操作时，必须先向用户复述影响范围并取得明确确认。
+查询结果中的会议、行动项、公文或审批事项应逐条上报办公卡片：
+- weagent-report '{"type":"office_card","data":{"id":"<记录ID>","kind":"meeting/action_item/document/approval","title":"<标题>","status":"<状态>","summary":"<简要说明>","meta":{"assignee":"负责人","due_date":"截止时间","start_time":"开始时间","document_type":"文种"}}}'
+每条卡片独立发送；汇总数据可补充 table，卡片无法表达的说明再用纯文本。""")
     return '\n'.join(lines)
 
 
