@@ -2,7 +2,10 @@
   <div class="chat-window">
     <div class="chat-header" v-if="conversation">
       <div class="header-left">
-        <h3>{{ conversation.title }}</h3>
+        <h3
+          :class="{ 'compact-education-title': compactEducationTitle }"
+          :title="compactEducationTitle ? conversation.title : null"
+        >{{ conversation.title }}</h3>
         <span class="participant-count">
           {{ participantCount }} 个参与者
         </span>
@@ -585,6 +588,13 @@ export default {
     },
     chatAttachmentsVisible() {
       return checkVisible(this.$store.state.grayscale, this.activeDomain, 'ui.chat.attachments')
+    },
+    compactEducationTitle() {
+      return this.activeDomain === 'edu' && checkVisible(
+        this.$store.state.grayscale,
+        this.activeDomain,
+        'ui.chat.header.compact_title'
+      )
     },
     participantCount() {
       if (!this.conversation || !this.conversation.participant_ids) return 0
@@ -1721,6 +1731,18 @@ export default {
   color: #1e293b;
 }
 
+.header-left {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.header-left h3.compact-education-title {
+  overflow: hidden;
+  max-width: clamp(320px, 48vw, 680px);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .header-left .text-primary {
   color: #4080ff;
 }
@@ -1737,6 +1759,7 @@ export default {
 
 .header-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 4px;
   color: #86909c;

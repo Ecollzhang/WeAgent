@@ -62,6 +62,7 @@ def test_education_chat_flags_and_domain_card_boundaries_are_migrated():
             ("feature.education.chat.manual_create", "edu"),
             ("feature.education.chat.tools", "edu"),
             ("feature.education.rag.enabled", "edu"),
+            ("ui.chat.header.compact_title", "edu"),
             ("ui.chat.card.education", "common"),
         }
         present = {

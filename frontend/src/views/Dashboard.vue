@@ -790,6 +790,9 @@ export default {
       this.$store.dispatch('agent/fetchAgents'),
     ])
     await this.selectConversationFromRoute()
+    if (!this.currentConversation) {
+      this.restoreConversationSelection(wsId)
+    }
     this.handleProjectFromRoute()
   },
     beforeDestroy() {
@@ -849,7 +852,7 @@ export default {
       if (newId && newId !== oldId) {
         this.$store.commit('conversation/SET_CURRENT_CONVERSATION', null)
         this.$store.dispatch('conversation/fetchConversations', newId)
-          .then(() => this.selectConversationFromRoute())
+          .then(() => this.restoreConversationSelection(newId))
       }
     },
   },
@@ -930,12 +933,54 @@ export default {
       }
       this.stopMessageRefresh()
       this.$store.commit('conversation/SET_CURRENT_CONVERSATION', conversation)
+      this.rememberConversationSelection(conversation)
       this.isAgentResponding = false
       socketClient.joinConversation(conversation.id)
       this.$store.dispatch('message/fetchMessages', {
         conversationId: conversation.id,
       })
       this.loadEducationContext(conversation.id)
+    },
+
+    conversationSelectionKey(workspaceId) {
+      return `weagent.web.lastConversation.${workspaceId || ''}`
+    },
+
+    rememberConversationSelection(conversation) {
+      const workspaceId = conversation?.workspace_id || this.activeWorkspaceId
+      if (!workspaceId || !conversation?.id) return
+      try {
+        window.localStorage.setItem(
+          this.conversationSelectionKey(workspaceId),
+          conversation.id
+        )
+      } catch (error) {
+        // The current chat remains usable when browser storage is unavailable.
+      }
+    },
+
+    restoreConversationSelection(workspaceId) {
+      if (!workspaceId) return false
+      let conversationId = ''
+      try {
+        conversationId = window.localStorage.getItem(
+          this.conversationSelectionKey(workspaceId)
+        ) || ''
+      } catch (error) {
+        return false
+      }
+      if (!conversationId) return false
+      const conversation = this.conversations.find(item => (
+        item.id === conversationId && item.workspace_id === workspaceId
+      ))
+      if (!conversation) {
+        window.localStorage.removeItem(this.conversationSelectionKey(workspaceId))
+        return false
+      }
+      if (this.currentConversation?.id !== conversation.id) {
+        this.handleSelectConversation(conversation)
+      }
+      return true
     },
 
     async loadEducationContext(conversationId) {

@@ -410,6 +410,9 @@ const COURSEWARE_THEME_ORDER = [
   'dark_focus',
 ]
 
+const VISUAL_QA_REPORT_CACHE = new Map()
+const VISUAL_QA_REPORT_CACHE_LIMIT = 6
+
 export default {
   name: 'CoursewareLibrary',
   components: { EducationShell, EmbeddedAgentRecord, SafeHtmlPreview, SlideDocumentEditor },
@@ -760,9 +763,15 @@ export default {
     },
     async inspectGenerated(entry) {
       this.visualQaDialog = true
+      this.visualQaEntry = entry
+      const cached = this.getCachedVisualQa(entry)
+      if (cached) {
+        this.visualQaReport = cached
+        this.visualQaLoading = false
+        return
+      }
       this.visualQaLoading = true
       this.visualQaReport = null
-      this.visualQaEntry = entry
       try {
         const response = await getContentVisualQa(entry.content.id)
         this.visualQaReport = response
@@ -770,11 +779,36 @@ export default {
           && response.code !== undefined
           ? response.data
           : response
+        this.cacheVisualQa(entry, this.visualQaReport)
       } catch (error) {
         this.$message.error('视觉检查失败，请确认当前课件版本可以正常导出')
         this.visualQaDialog = false
       } finally {
         this.visualQaLoading = false
+      }
+    },
+    visualQaCacheKey(entry) {
+      const contentId = entry?.content?.id || ''
+      const version = entry?.version || {}
+      const versionKey = version.id || version.version_number || ''
+      return contentId && versionKey ? `${contentId}:${versionKey}` : ''
+    },
+    getCachedVisualQa(entry) {
+      const key = this.visualQaCacheKey(entry)
+      if (!key || !VISUAL_QA_REPORT_CACHE.has(key)) return null
+      const report = VISUAL_QA_REPORT_CACHE.get(key)
+      VISUAL_QA_REPORT_CACHE.delete(key)
+      VISUAL_QA_REPORT_CACHE.set(key, report)
+      return report
+    },
+    cacheVisualQa(entry, report) {
+      const key = this.visualQaCacheKey(entry)
+      if (!key || !report) return
+      VISUAL_QA_REPORT_CACHE.delete(key)
+      VISUAL_QA_REPORT_CACHE.set(key, report)
+      while (VISUAL_QA_REPORT_CACHE.size > VISUAL_QA_REPORT_CACHE_LIMIT) {
+        const oldestKey = VISUAL_QA_REPORT_CACHE.keys().next().value
+        VISUAL_QA_REPORT_CACHE.delete(oldestKey)
       }
     },
     qaStatusLabel(status) {

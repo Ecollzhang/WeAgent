@@ -257,6 +257,7 @@ def _migrate_grayscale_configs():
             'feature.education.chat.manual_create',
             'feature.education.chat.tools',
             'feature.education.rag.enabled',
+            'ui.chat.header.compact_title',
             # RD 领域卡片
             'ui.chat.card.requirement', 'ui.chat.card.bug', 'ui.chat.card.iteration', 'ui.chat.card.project',
             'ui.chat.card.education',
@@ -350,12 +351,13 @@ def _migrate_grayscale_configs():
             ), {'key': key})
 
         education_chat_flags = [
-            ('feature.education.chat.enabled', 'Education chat'),
-            ('feature.education.chat.manual_create', 'Education manual conversation'),
-            ('feature.education.chat.tools', 'Education chat tools'),
-            ('feature.education.rag.enabled', 'Education course knowledge search'),
+            ('feature.education.chat.enabled', 'Education chat', 'feature'),
+            ('feature.education.chat.manual_create', 'Education manual conversation', 'feature'),
+            ('feature.education.chat.tools', 'Education chat tools', 'feature'),
+            ('feature.education.rag.enabled', 'Education course knowledge search', 'feature'),
+            ('ui.chat.header.compact_title', 'Education compact chat title', 'ui'),
         ]
-        for key, name in education_chat_flags:
+        for key, name, config_type in education_chat_flags:
             exists = conn.execute(_text(
                 "SELECT id FROM grayscale_config "
                 "WHERE config_key = :key AND domain = 'edu'"
@@ -364,8 +366,8 @@ def _migrate_grayscale_configs():
                 conn.execute(_text(
                     "INSERT INTO grayscale_config "
                     "(config_key, config_name, config_type, domain, enabled, visible, domains) "
-                    "VALUES (:key, :name, 'feature', 'edu', 1, 1, NULL)"
-                ), {'key': key, 'name': name})
+                    "VALUES (:key, :name, :config_type, 'edu', 1, 1, NULL)"
+                ), {'key': key, 'name': name, 'config_type': config_type})
             conn.execute(_text(
                 "DELETE FROM grayscale_config "
                 "WHERE config_key = :key AND domain != 'edu'"
@@ -460,6 +462,7 @@ def _seed_grayscale_configs():
             ('ui.sidebar.grades', '侧边栏-成绩管理', 'ui', 'edu', 1, 1),
             ('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1),
             ('feature.education.enabled', 'Education feature', 'feature', 'edu', 1, 1),
+            ('ui.chat.header.compact_title', 'Education compact chat title', 'ui', 'edu', 1, 1),
             # ===== 智慧办公 (office) =====
             ('ui.sidebar.documents', '侧边栏-公文管理', 'ui', 'office', 1, 1),
             ('ui.sidebar.meetings', '侧边栏-会议管理', 'ui', 'office', 1, 1),

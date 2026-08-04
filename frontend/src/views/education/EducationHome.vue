@@ -16,6 +16,7 @@
         @click="createDialog = true"
       >创建课程</el-button>
       <el-button
+        v-if="agentCourseCreateVisible"
         data-testid="create-course-with-agent"
         icon="el-icon-chat-dot-round"
         :loading="agentCourseLoading"
@@ -128,6 +129,7 @@
 import EducationShell from '../../components/education/EducationShell.vue'
 import CourseCard from '../../components/education/CourseCard.vue'
 import { bootstrapEducationConversation } from '../../api/education'
+import { checkVisible } from '../../store/modules/grayscale'
 
 export default {
   name: 'EducationHome',
@@ -160,6 +162,13 @@ export default {
     },
     studentCount() {
       return this.courses.filter(course => course.membership_role === 'student').length
+    },
+    agentCourseCreateVisible() {
+      return checkVisible(
+        this.$store.state.grayscale,
+        'edu',
+        'feature.education.chat.manual_create'
+      )
     },
   },
   created() {
