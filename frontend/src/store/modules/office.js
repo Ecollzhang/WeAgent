@@ -37,6 +37,7 @@ export default {
     async updateMeeting({ dispatch }, { id, data, workspaceId }) { const r = await api.updateMeeting(id, data); await dispatch('loadMeetings', workspaceId); return r },
     async deleteMeeting({ dispatch }, { id, workspaceId }) { const r = await api.deleteMeeting(id); await Promise.all([dispatch('loadMeetings', workspaceId), dispatch('loadSchedules', workspaceId)]); return r },
     async getMeeting(_, id) { return unwrap(await api.getMeeting(id)) },
+    async confirmMeeting({ dispatch }, { id, workspaceId }) { const r = unwrap(await api.confirmMeeting(id)); await dispatch('loadMeetings', workspaceId); return r },
     async generateMeetingDraft(_, data) { return unwrap(await api.generateMeetingDraft(data)) },
     async generateDocumentDraft(_, data) { return unwrap(await api.generateDocumentDraft(data)) },
     async generateWeeklyDraft(_, data) { return unwrap(await api.generateWeeklyDraft(data)) },

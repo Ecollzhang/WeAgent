@@ -205,8 +205,14 @@ export default {
   flex: 1;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
   padding: 8px 12px;
   gap: 2px;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar.collapsed .sidebar-nav {
