@@ -32,7 +32,7 @@
           </div>
           <div class="schedule-week">
             <button class="week-shift" @click="shiftWeek(-1)"><i class="el-icon-arrow-left"></i></button>
-            <button v-for="day in scheduleDays" :key="day.key" class="schedule-day" :class="{ active: selectedScheduleDate === day.key, weekend: day.weekend, 'has-meeting': hasMeetingOn(day.key) }" @click="selectedScheduleDate = day.key"><small>{{ day.label }}</small><b>{{ day.text }}</b><i v-if="hasMeetingOn(day.key)" class="schedule-dot"></i></button>
+            <button v-for="day in scheduleDays" :key="day.key" class="schedule-day" :class="{ active: selectedScheduleDate === day.key, weekend: day.weekend, 'has-meeting': hasMeetingOn(day.key) }" @click="selectScheduleDate(day.key)"><small>{{ day.label }}</small><b>{{ day.text }}</b><i v-if="hasMeetingOn(day.key)" class="schedule-dot"></i></button>
             <button class="week-shift" @click="shiftWeek(1)"><i class="el-icon-arrow-right"></i></button>
           </div>
           <div class="meeting-list schedule-list" v-if="scheduleMeetings.length">
@@ -66,6 +66,8 @@
               <div class="schedule-actions">
                 <a v-if="meeting.meeting_link" :href="meeting.meeting_link" target="_blank" rel="noopener noreferrer" class="schedule-link" @click.stop><i class="el-icon-link"></i>{{ t("enterMeeting") }}</a>
                 <span v-else class="schedule-link disabled"><i class="el-icon-link"></i>{{ t("noMeetingLink") }}</span>
+                <button v-if="needsMyConfirm(meeting)" class="schedule-confirm" @click.stop="confirmMyMeeting(meeting)"><i class="el-icon-check"></i>确认参会</button>
+                <em v-else-if="isMeetingHost(meeting)" class="schedule-chip host">主持人</em>
               </div>
             </div>
           </div>
@@ -102,9 +104,10 @@
                   <div class="reference-attendance">
                     <div class="reference-block-head"><b>{{ t("attendance") }} ({{ participants(selectedMeeting).length }})</b><span>{{ t("detailMore") }} <i class="el-icon-arrow-right"></i></span></div>
                     <div class="reference-people" v-if="participants(selectedMeeting).length">
-                      <span v-for="person in participants(selectedMeeting).slice(0, 6)" :key="person.user_id || person.display_name"><img :src="avatar(person.display_name)" /><b>{{ person.display_name }}</b><small>{{ t("confirmed") }}</small></span>
+                      <span v-for="person in participants(selectedMeeting).slice(0, 6)" :key="person.user_id || person.display_name"><img :src="avatar(person.display_name)" /><b>{{ person.display_name }}</b><small :class="{ host: isOrganizer(selectedMeeting, person) }">{{ participationLabel(person, selectedMeeting) }}</small></span>
                     </div>
                     <p v-else class="reference-empty">{{ t("noParticipants") }}</p>
+                    <button v-if="needsMyConfirm(selectedMeeting)" class="confirm-entry" @click="confirmMyMeeting(selectedMeeting)"><i class="el-icon-check"></i>确认参会</button>
                   </div>
                 </div>
                 <div class="reference-bottom">
@@ -114,12 +117,12 @@
                     <p v-else class="reference-empty">{{ t("noMaterials") }}</p>
                   </div>
                   <div class="reference-block records-block">
-                    <div class="reference-block-head"><b>{{ t("minutesRecord") }}</b><button v-if="isMeetingManager" @click="openFollowup">维护会后内容</button><span v-else :class="{ pending: !selectedMeeting.minutes }">{{ selectedMeeting.minutes ? t("done") : t("notGenerated") }}</span></div>
+                    <div class="reference-block-head"><b>{{ t("minutesRecord") }}</b><button v-if="isMeetingManager" @click="startMinutesEdit">维护纪要</button><span v-else :class="{ pending: !selectedMeeting.minutes }">{{ selectedMeeting.minutes ? t("done") : t("notGenerated") }}</span></div>
                     <button class="record-line" :disabled="!selectedMeeting.minutes" @click="openMinutes"><b>{{ t("meetingMinutes") }} <i v-if="selectedMeeting.minutes" class="el-icon-view"></i></b><p>{{ selectedMeeting.minutes || t("minutesPending") }}</p></button>
                   </div>
                   <div class="reference-block action-block">
-                    <div class="reference-block-head"><b>{{ t("linkedActions") }}（{{ selectedActions.length }}）</b><button v-if="selectedActions.length" @click="openAction(selectedActions[0])">{{ t("viewAll") }} <i class="el-icon-arrow-right"></i></button></div>
-                    <div v-if="selectedActions.length" class="action-list"><button v-for="action in selectedActions.slice(0, 3)" :key="action.id" @click="openAction(action)"><i></i><b>{{ action.title }}</b><em>{{ actionState(action) }}</em></button></div>
+                    <div class="reference-block-head"><b>{{ t("linkedActions") }}（{{ selectedActions.length }}）</b><button v-if="isMeetingManager" @click="openActionAdd">+ 新增行动项</button><button v-else-if="selectedActions.length" @click="openAction(selectedActions[0])">{{ t("viewAll") }} <i class="el-icon-arrow-right"></i></button></div>
+                    <div v-if="selectedActions.length" class="action-list action-cards"><button v-for="action in selectedActions" :key="action.id" class="action-card" @click="openAction(action)"><b>{{ action.title }}</b><small>{{ action.assignee_name || '未指派' }}<template v-if="action.due_date"> · 截止 {{ dateTime(action.due_date) }}</template></small><em>{{ actionState(action) }}</em></button></div>
                     <p v-else class="reference-empty">{{ t("noAction") }}</p>
                   </div>
                 </div>
@@ -164,7 +167,7 @@
                       ><img :src="avatar(person.display_name)" /><small>{{
                         person.display_name
                       }}</small
-                      ><em>{{ t("confirmed") }}</em></span
+                      ><em :class="{ host: isOrganizer(selectedMeeting, person) }">{{ participationLabel(person, selectedMeeting) }}</em></span
                     >
                   </div>
                 </div>
@@ -284,23 +287,24 @@
             ><span>{{ t("sourceNote") }}</span>
           </div>
           <section class="reminder-panel">
-            <div class="reminder-head"><b>待确认提醒</b><span><i></i> 3 项需处理</span></div>
+            <div class="reminder-head"><b>待确认提醒</b><span><i></i> {{ reminderCount }} 项需处理</span></div>
             <div class="reminder-grid">
-              <div class="reminder-item meeting-reminder">
+              <div v-for="meeting in meetingReminders" :key="meeting.id" class="reminder-item meeting-reminder">
                 <div class="reminder-icon"><i class="el-icon-date"></i></div>
-                <div><small>会议确认</small><b>确认明日线下评审会</b><p>产品上线评审会 · 10:00</p></div>
-                <button @click="handleReminder('meeting')">查看会议</button>
+                <div><small>会议确认</small><b>{{ meeting.title }}</b><p>{{ dateTime(meeting.start_time) }} · {{ meeting.location || t("online") }}</p></div>
+                <button @click="confirmMyMeeting(meeting)">确认参会</button>
               </div>
-              <div class="reminder-item action-reminder">
+              <div v-for="task in actionReminders" :key="'action-' + task.id" class="reminder-item action-reminder">
                 <div class="reminder-icon"><i class="el-icon-finished"></i></div>
-                <div><small>行动项提醒</small><b>完善产品评审会议纪要</b><p>会议行动项 · 今日 16:00 截止</p></div>
+                <div><small>行动项提醒</small><b>{{ task.title }}</b><p>今日 {{ time(task.start_time) }} 截止</p></div>
                 <button @click="handleReminder('task')">查看任务</button>
               </div>
-              <div class="reminder-item meeting-reminder">
+              <div v-for="meeting in prepReminders" :key="'prep-' + meeting.id" class="reminder-item meeting-reminder">
                 <div class="reminder-icon"><i class="el-icon-alarm-clock"></i></div>
-                <div><small>会前准备</small><b>上传评审会议材料</b><p>产品评审会 · 距开始还有 1 小时</p></div>
-                <button @click="handleReminder('meeting')">查看会议</button>
+                <div><small>会前准备</small><b>{{ meeting.title }}</b><p>{{ meeting.location || t("online") }} · {{ time(meeting.start_time) }} 开始</p></div>
+                <button @click="selectMeetingFromReminder(meeting)">查看会议</button>
               </div>
+              <div v-if="!reminderCount" class="reminder-empty"><i class="el-icon-circle-check"></i>暂无待处理提醒</div>
             </div>
           </section>
         </section>
@@ -318,7 +322,7 @@
           ><el-input v-model="meetingForm.title" /></el-form-item
         ><el-form-item :label="t('time')"
           ><div class="meeting-time-fields"><el-date-picker v-model="meetingForm.date" type="date" value-format="yyyy-MM-dd" placeholder="会议日期" /><el-time-picker v-model="meetingForm.startTime" value-format="HH:mm:ss" placeholder="开始时间" /><el-time-picker v-model="meetingForm.endTime" value-format="HH:mm:ss" placeholder="结束时间" /></div></el-form-item></section
-        ><section class="form-card"><div class="form-card-title"><i class="el-icon-user-solid"></i>参会成员</div><div class="department-selector" v-for="department in participantTree" :key="department.id"><div class="department-card"><el-checkbox :value="isGroupChecked(department)" :indeterminate="isGroupPartial(department)" @change="toggleGroup(department, $event)">{{ department.label }}</el-checkbox><small>勾选部门将自动邀请全部成员</small></div><el-collapse v-model="participantExpanded" class="participant-groups"><el-collapse-item v-for="group in department.children" :key="group.id" :name="group.id"><template slot="title"><el-checkbox :value="isGroupChecked(group)" :indeterminate="isGroupPartial(group)" @click.native.stop @change="toggleGroup(group, $event)">{{ group.label }}</el-checkbox><span class="group-count">{{ group.children.length }} 人</span></template><div class="member-card-list"><el-checkbox v-for="member in group.children" :key="member.id" v-model="meetingForm.participantIds" :label="member.user_id">{{ member.label }}</el-checkbox></div></el-collapse-item></el-collapse></div></section
+        ><section class="form-card"><div class="form-card-title"><i class="el-icon-user-solid"></i>参会成员</div><div class="department-selector" v-for="department in participantTree" :key="department.id"><div class="department-card"><el-checkbox :value="isGroupChecked(department)" :indeterminate="isGroupPartial(department)" @change="toggleGroup(department, $event)">{{ department.label }}</el-checkbox><small>勾选部门将自动邀请全部成员</small></div><el-collapse v-model="participantExpanded" class="participant-groups"><el-collapse-item v-for="group in department.children" :key="group.id" :name="group.id"><template slot="title"><el-checkbox :value="isGroupChecked(group)" :indeterminate="isGroupPartial(group)" @click.native.stop @change="toggleGroup(group, $event)">{{ group.label }}</el-checkbox><span class="group-count">{{ group.children.length }} 人</span></template><div class="member-card-list"><el-checkbox v-for="member in group.children" :key="member.id" v-model="meetingForm.participantIds" :label="member.user_id" :disabled="member.user_id === currentUser.id">{{ member.label }}<small v-if="member.user_id === currentUser.id">（主持人默认参会）</small></el-checkbox></div></el-collapse-item></el-collapse></div></section
         ><section class="form-card"><div class="form-card-title"><i class="el-icon-connection"></i>会议信息</div><el-form-item :label="t('place')"
          ><el-input
             v-model="meetingForm.location"
@@ -376,9 +380,13 @@
     <el-dialog title="会议纪要" :visible.sync="minutesVisible" width="520px">
       <p class="minutes-dialog-text">{{ (selectedMeeting && selectedMeeting.minutes) || t("minutesPending") }}</p>
     </el-dialog>
-    <el-dialog title="会后维护" :visible.sync="followupVisible" width="600px">
-      <el-form :model="followupForm" label-width="92px" size="small"><el-form-item label="会议纪要"><el-input v-model="followupForm.minutes" type="textarea" :rows="6" placeholder="填写会议结论、关键讨论与决议" /></el-form-item><el-form-item label="会议记录"><el-input v-model="followupForm.resolutions" type="textarea" :rows="3" placeholder="每行一条会议决议或记录" /></el-form-item><el-divider>新增行动项（可选）</el-divider><el-form-item label="行动项"><el-input v-model="followupForm.actionTitle" placeholder="例如：完成产品评审材料修订" /></el-form-item><el-form-item label="负责人"><el-select v-model="followupForm.assigneeId" clearable filterable style="width:100%"><el-option v-for="member in members" :key="member.user_id" :label="member.display_name" :value="member.user_id" /></el-select></el-form-item><el-form-item label="截止时间"><el-date-picker v-model="followupForm.dueDate" type="datetime" value-format="yyyy-MM-ddTHH:mm:ss" style="width:100%" /></el-form-item></el-form>
-      <span slot="footer"><el-button @click="followupVisible=false">取消</el-button><el-button type="primary" @click="saveFollowup">保存会后维护</el-button></span>
+    <el-dialog title="维护纪要" :visible.sync="minutesEditVisible" width="600px">
+      <el-form :model="minutesForm" label-width="92px" size="small"><el-form-item label="会议纪要"><el-input v-model="minutesForm.minutes" type="textarea" :rows="6" placeholder="填写会议结论、关键讨论与决议" /></el-form-item><el-form-item label="会议记录"><el-input v-model="minutesForm.resolutions" type="textarea" :rows="3" placeholder="每行一条会议决议或记录（可选）" /></el-form-item></el-form>
+      <span slot="footer"><el-button @click="minutesEditVisible = false">取消</el-button><el-button type="primary" @click="saveMinutes">保存纪要</el-button></span>
+    </el-dialog>
+    <el-dialog title="新增行动项" :visible.sync="actionAddVisible" width="560px">
+      <el-form :model="actionForm" label-width="92px" size="small"><el-form-item label="行动项"><el-input v-model="actionForm.title" placeholder="例如：完成产品评审材料修订" /></el-form-item><el-form-item label="负责人"><el-select v-model="actionForm.assigneeId" clearable filterable style="width:100%"><el-option v-for="member in members" :key="member.user_id" :label="member.display_name" :value="member.user_id" /></el-select></el-form-item><el-form-item label="截止时间"><el-date-picker v-model="actionForm.dueDate" type="datetime" value-format="yyyy-MM-ddTHH:mm:ss" style="width:100%" /></el-form-item></el-form>
+      <span slot="footer"><el-button @click="actionAddVisible = false">完成</el-button><el-button type="primary" @click="addAction">添加并继续新增</el-button></span>
     </el-dialog>
     <el-dialog title="关联行动项" :visible.sync="actionVisible" width="500px">
       <template v-if="activeAction">
@@ -505,7 +513,10 @@ export default {
     meetingVisible: false,
     taskVisible: false,
     minutesVisible: false,
-    followupVisible: false,
+    minutesEditVisible: false,
+    minutesForm: { minutes: "", resolutions: "" },
+    actionAddVisible: false,
+    actionForm: { title: "", assigneeId: "", dueDate: "" },
     actionVisible: false,
     activeAction: null,
     selectedMeeting: null,
@@ -513,10 +524,9 @@ export default {
     scheduleAnchorDate: "",
     sourceFilter: "",
     stateFilter: "",
-    meetingForm: { date: "", startTime: "", endTime: "", participantIds: [] },
+    meetingForm: { title: "", date: "", startTime: "", endTime: "", participantIds: [], location: "", meeting_link: "" },
     taskForm: { source: "personal" },
     meetingFiles: [],
-    followupForm: {},
     participantExpanded: [],
   }),
   computed: {
@@ -599,6 +609,29 @@ export default {
               : x.status === this.stateFilter))
       );
     },
+    meetingReminders() {
+      return this.meetings.filter((meeting) => this.needsMyConfirm(meeting));
+    },
+    actionReminders() {
+      const today = this.dayKey(new Date());
+      return this.taskItems.filter(
+        (task) =>
+          task.status !== "done" &&
+          task.status !== "cancelled" &&
+          this.dayKey(task.start_time) === today
+      );
+    },
+    prepReminders() {
+      const now = new Date().getTime();
+      const day = 24 * 3600 * 1000;
+      return this.meetings.filter((meeting) => {
+        const start = new Date(String(meeting.start_time || "").replace(" ", "T")).getTime();
+        return meeting.status === "scheduled" && start > now && start - now < day;
+      });
+    },
+    reminderCount() {
+      return this.meetingReminders.length + this.actionReminders.length + this.prepReminders.length;
+    },
   },
   watch: {
     "ws.id": {
@@ -606,6 +639,9 @@ export default {
       handler() {
         this.load();
       },
+    },
+    selectedScheduleDate(date) {
+      this.syncMeetingDetailForDate(date);
     },
   },
   methods: {
@@ -625,14 +661,70 @@ export default {
         this.selectedScheduleDate = this.dayKey(this.meetings[0].start_time);
         this.scheduleAnchorDate = this.selectedScheduleDate;
       }
+      this.syncMeetingDetailForDate(this.selectedScheduleDate);
     },
     participants(meeting) {
-      if (Array.isArray(meeting.participants)) return meeting.participants;
-      try {
-        return JSON.parse(meeting.participants || "[]");
-      } catch (e) {
-        return [];
+      let list;
+      if (Array.isArray(meeting.participants)) {
+        list = meeting.participants;
+      } else {
+        try {
+          list = JSON.parse(meeting.participants || "[]");
+        } catch (e) {
+          list = [];
+        }
       }
+      // 主持人始终排在最前面
+      return list
+        .slice()
+        .sort(
+          (a, b) =>
+            (b.user_id === meeting.organizer_id) -
+            (a.user_id === meeting.organizer_id)
+        );
+    },
+    isOrganizer(meeting, person) {
+      return !!(meeting && meeting.organizer_id && meeting.organizer_id === (person || {}).user_id);
+    },
+    isMeetingHost(meeting) {
+      return !!(meeting && meeting.organizer_id && meeting.organizer_id === this.currentUser.id);
+    },
+    myParticipation(meeting) {
+      return (this.participants(meeting) || []).find(
+        (item) => item.user_id === this.currentUser.id
+      ) || null;
+    },
+    needsMyConfirm(meeting) {
+      const item = this.myParticipation(meeting);
+      return !!item && !item.confirmed && meeting.status !== "cancelled";
+    },
+    participationLabel(person, meeting) {
+      if (this.isOrganizer(meeting, person)) return "主持人";
+      return person.confirmed ? "已确认" : "待确认";
+    },
+    async confirmMyMeeting(meeting) {
+      try {
+        await this.$store.dispatch("office/confirmMeeting", {
+          id: meeting.id,
+          workspaceId: this.ws.id,
+        });
+        if (this.selectedMeeting && this.selectedMeeting.id === meeting.id) {
+          this.selectedMeeting = await this.$store.dispatch(
+            "office/getMeeting",
+            meeting.id
+          );
+        }
+        this.$message.success("已确认参会");
+      } catch (error) {
+        const message =
+          error && error.response && error.response.data && error.response.data.message;
+        this.$message.error(message || "确认参会失败");
+      }
+    },
+    selectMeetingFromReminder(meeting) {
+      this.selectedScheduleDate = this.dayKey(meeting.start_time);
+      this.scheduleAnchorDate = this.selectedScheduleDate;
+      this.selectMeeting(meeting);
     },
     avatar(name) {
       return avatarMap[name] || wang;
@@ -669,12 +761,24 @@ export default {
     shiftWeek(amount) {
       const target = this.scheduleAnchorDate || this.selectedScheduleDate || this.dayKey(new Date());
       this.scheduleAnchorDate = this.dayKey(this.addDays(target, amount * 7));
-      this.selectedScheduleDate = this.scheduleAnchorDate;
+      this.selectScheduleDate(this.scheduleAnchorDate);
     },
     goToday() {
       const today = this.dayKey(new Date());
       this.scheduleAnchorDate = today;
-      this.selectedScheduleDate = today;
+      this.selectScheduleDate(today);
+    },
+    selectScheduleDate(date) {
+      this.selectedScheduleDate = date;
+    },
+    async syncMeetingDetailForDate(date) {
+      if (!date) return;
+      const meeting = this.meetings.find((item) => this.dayKey(item.start_time) === date);
+      // 空日期只切换日程视图，保留用户正在查看的会议详情。
+      if (!meeting || (this.selectedMeeting && this.selectedMeeting.id === meeting.id)) return;
+      const detail = await this.$store.dispatch("office/getMeeting", meeting.id);
+      // 防止连续切换日期时较慢的请求覆盖最新选择。
+      if (this.selectedScheduleDate === date) this.selectedMeeting = detail;
     },
     openMeeting() {
       this.meetingVisible = true;
@@ -684,7 +788,7 @@ export default {
       this.taskVisible = true;
     },
     resetMeetingForm() {
-      this.meetingForm = { date: "", startTime: "", endTime: "", participantIds: [] };
+      this.meetingForm = { title: "", date: "", startTime: "", endTime: "", participantIds: [this.currentUser.id], location: "", meeting_link: "" };
       this.meetingFiles = [];
     },
     resetTaskForm() {
@@ -694,10 +798,13 @@ export default {
       const children = group.children || [];
       return children.reduce((ids, child) => ids.concat(child.kind === "member" ? [child.user_id] : this.groupMemberIds(child)), []);
     },
-    isGroupChecked(group) { const ids = this.groupMemberIds(group); return ids.length > 0 && ids.every((id) => this.meetingForm.participantIds.includes(id)); },
-    isGroupPartial(group) { const ids = this.groupMemberIds(group); const selected = ids.filter((id) => this.meetingForm.participantIds.includes(id)).length; return selected > 0 && selected < ids.length; },
+    selectableGroupIds(group) {
+      return this.groupMemberIds(group).filter((id) => id !== this.currentUser.id);
+    },
+    isGroupChecked(group) { const ids = this.selectableGroupIds(group); return ids.length > 0 && ids.every((id) => this.meetingForm.participantIds.includes(id)); },
+    isGroupPartial(group) { const ids = this.selectableGroupIds(group); const selected = ids.filter((id) => this.meetingForm.participantIds.includes(id)).length; return selected > 0 && selected < ids.length; },
     toggleGroup(group, checked) {
-      const ids = this.groupMemberIds(group);
+      const ids = this.selectableGroupIds(group);
       const current = this.meetingForm.participantIds.filter((id) => !ids.includes(id));
       this.meetingForm.participantIds = checked ? [...new Set([...current, ...ids])] : current;
     },
@@ -713,6 +820,11 @@ export default {
       });
     },
     hasMeetingOn(day) { return this.meetings.some((meeting) => this.dayKey(meeting.start_time) === day); },
+    meetingDateTime(date, time) {
+      const day = String(date || "").slice(0, 10);
+      const clock = String(time || "").slice(-8);
+      return `${day}T${clock.length === 5 ? `${clock}:00` : clock}`;
+    },
     async createMeeting() {
       if (!this.meetingForm.title || !this.meetingForm.date || !this.meetingForm.startTime || !this.meetingForm.endTime)
         return this.$message.warning(
@@ -721,22 +833,40 @@ export default {
       const participants = this.members
         .filter((m) => this.meetingForm.participantIds.includes(m.user_id))
         .map((m) => ({ user_id: m.user_id, display_name: m.display_name }));
-      const materials = await Promise.all(this.meetingFiles.map((file) => this.readMaterial(file)));
-      await this.$store.dispatch("office/createMeeting", {
-        workspace_id: this.ws.id,
-        title: this.meetingForm.title,
-        start_time: `${this.meetingForm.date}T${this.meetingForm.startTime}`,
-        end_time: `${this.meetingForm.date}T${this.meetingForm.endTime}`,
-        participants,
-        meeting_link: this.meetingForm.meeting_link,
-        location: this.meetingForm.location,
-        materials,
-      });
-      this.meetingVisible = false;
-      await this.load();
-      this.$message.success(
-        "\u4f1a\u8bae\u5df2\u521b\u5efa\uff0c\u53c2\u4f1a\u6210\u5458\u5c06\u6536\u5230\u901a\u77e5"
-      );
+      if (
+        this.meetingForm.participantIds.includes(this.currentUser.id) &&
+        !participants.some((p) => p.user_id === this.currentUser.id)
+      ) {
+        participants.push({
+          user_id: this.currentUser.id,
+          display_name:
+            this.currentUser.name ||
+            this.currentUser.nickname ||
+            this.currentUser.username ||
+            "主持人",
+        });
+      }
+      try {
+        const materials = await Promise.all(this.meetingFiles.map((file) => this.readMaterial(file)));
+        await this.$store.dispatch("office/createMeeting", {
+          workspace_id: this.ws.id,
+          title: this.meetingForm.title.trim(),
+          start_time: this.meetingDateTime(this.meetingForm.date, this.meetingForm.startTime),
+          end_time: this.meetingDateTime(this.meetingForm.date, this.meetingForm.endTime),
+          participants,
+          meeting_link: this.meetingForm.meeting_link || "",
+          location: this.meetingForm.location || "",
+          materials,
+        });
+        this.meetingVisible = false;
+        await this.load();
+        this.$message.success(
+          "\u4f1a\u8bae\u5df2\u521b\u5efa\uff0c\u53c2\u4f1a\u6210\u5458\u5c06\u6536\u5230\u901a\u77e5"
+        );
+      } catch (error) {
+        const message = error && error.response && error.response.data && error.response.data.message;
+        this.$message.error(message || "创建会议失败，请检查会议时间和参会成员后重试");
+      }
     },
     async createTask() {
       if (!this.taskForm.title || !this.taskForm.due)
@@ -765,22 +895,31 @@ export default {
         meeting.id
       );
     },
-    openFollowup() {
+    startMinutesEdit() {
       if (!this.isMeetingManager) return;
-      this.followupForm = { minutes: this.selectedMeeting.minutes || "", resolutions: (this.selectedMeeting.resolutions || []).join("\n"), actionTitle: "", assigneeId: "", dueDate: "" };
-      this.followupVisible = true;
+      this.minutesForm = { minutes: this.selectedMeeting.minutes || "", resolutions: (this.selectedMeeting.resolutions || []).join("\n") };
+      this.minutesEditVisible = true;
     },
-    async saveFollowup() {
-      if (!this.followupForm.minutes.trim()) return this.$message.warning("请填写会议纪要");
-      await this.$store.dispatch("office/updateMeeting", { id: this.selectedMeeting.id, data: { minutes: this.followupForm.minutes, resolutions: this.followupForm.resolutions.split("\n").map((item) => item.trim()).filter(Boolean) }, workspaceId: this.ws.id });
-      if (this.followupForm.actionTitle.trim()) {
-        const member = this.members.find((item) => item.user_id === this.followupForm.assigneeId) || {};
-        await this.$store.dispatch("office/createActionItem", { meetingId: this.selectedMeeting.id, workspaceId: this.ws.id, data: { title: this.followupForm.actionTitle, assignee_id: member.user_id, assignee_name: member.display_name, due_date: this.followupForm.dueDate || this.selectedMeeting.end_time, create_schedule: true } });
-      }
+    async saveMinutes() {
+      if (!this.minutesForm.minutes.trim()) return this.$message.warning("请填写会议纪要");
+      await this.$store.dispatch("office/updateMeeting", { id: this.selectedMeeting.id, data: { minutes: this.minutesForm.minutes, resolutions: this.minutesForm.resolutions.split("\n").map((item) => item.trim()).filter(Boolean) }, workspaceId: this.ws.id });
+      await this.selectMeeting(this.selectedMeeting);
+      this.minutesEditVisible = false;
+      this.$message.success("会议纪要已保存");
+    },
+    openActionAdd() {
+      if (!this.isMeetingManager) return;
+      this.actionForm = { title: "", assigneeId: "", dueDate: "" };
+      this.actionAddVisible = true;
+    },
+    async addAction() {
+      if (!this.actionForm.title.trim()) return this.$message.warning("请填写行动项标题");
+      const member = this.members.find((item) => item.user_id === this.actionForm.assigneeId) || {};
+      await this.$store.dispatch("office/createActionItem", { meetingId: this.selectedMeeting.id, workspaceId: this.ws.id, data: { title: this.actionForm.title, assignee_id: member.user_id, assignee_name: member.display_name, due_date: this.actionForm.dueDate || this.selectedMeeting.end_time, create_schedule: true } });
+      this.actionForm = { title: "", assigneeId: "", dueDate: "" };
       await this.selectMeeting(this.selectedMeeting);
       await this.$store.dispatch("office/loadSchedules", this.ws.id);
-      this.followupVisible = false;
-      this.$message.success("会后内容已维护，关联提醒将自动更新");
+      this.$message.success("行动项已添加，可继续新增");
     },
     async downloadMaterial(item) {
       if (item.content && String(item.content).startsWith("data:")) {
@@ -947,7 +1086,9 @@ export default {
 <style scoped>
 .office-page {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  box-sizing: border-box;
+  overflow: hidden;
   padding: 12px;
   gap: 12px;
   background: #f3f6fb;
@@ -955,6 +1096,7 @@ export default {
 .main {
   flex: 1;
   min-width: 0;
+  overflow-y: auto;
   padding: 18px;
   background: #fff;
   border-radius: 12px;
@@ -989,7 +1131,6 @@ export default {
   display: grid;
   grid-template-columns: 1.08fr 0.92fr;
   gap: 14px;
-  align-items: start;
 }
 .panel {
   border: 1px solid #e4ebf4;
@@ -1188,6 +1329,10 @@ export default {
 }
 .participant-list em {
   color: #31a873;
+}
+.participant-list em.host {
+  color: #d98a1f;
+  font-weight: 700;
 }
 .detail-actions p {
   height: 40px;
@@ -1776,6 +1921,30 @@ export default {
   color: #35af76;
   font-size: 9px;
 }
+.reference-people small.host {
+  color: #d98a1f;
+  font-weight: 700;
+}
+.confirm-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 5px 12px;
+  border: 1px solid #3ec88f;
+  border-radius: 14px;
+  color: #fff;
+  background: #3ec88f;
+  font-size: 11px;
+  cursor: pointer;
+}
+.confirm-entry:hover { background: #2fb87f; border-color: #2fb87f; }
+.confirmed-entry {
+  display: block;
+  margin-top: 10px;
+  color: #31a873;
+  font-size: 10px;
+}
 .reference-bottom {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -1899,6 +2068,34 @@ button.record-line:not(:disabled):hover b { color: #347edc; }
   white-space: nowrap;
 }
 .minutes-dialog-text { margin: 0; color: #4d627b; font-size: 14px; line-height: 1.9; white-space: pre-wrap; }
+.action-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.action-cards .action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid #e5edf6;
+  border-radius: 7px;
+  background: #fff;
+  text-align: left;
+}
+.action-cards .action-card:hover {
+  border-color: #b9d4f4;
+  color: #3279dc;
+}
+.action-cards .action-card small {
+  color: #8a9bb0;
+  font-size: 10px;
+}
+.action-cards .action-card em {
+  align-self: flex-end;
+  margin-left: 0;
+}
 .action-dialog-title { color: #253e5c; font-size: 17px; font-weight: 700; }
 .action-dialog-desc { min-height: 45px; margin: 12px 0; color: #65788f; font-size: 13px; line-height: 1.7; }
 .action-dialog-meta { display: flex; gap: 22px; padding: 10px 12px; border-radius: 6px; background: #f6f9fd; color: #6b7f97; font-size: 12px; }
@@ -1928,6 +2125,11 @@ button.record-line:not(:disabled):hover b { color: #347edc; }
 .task-column {
   min-width: 0;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.task-column .task-foot {
+  margin-top: auto;
 }
 .task-column .task-table-head,
 .task-column .task-row {
@@ -2028,6 +2230,17 @@ button.record-line:not(:disabled):hover b { color: #347edc; }
 .reminder-item button { grid-column: 2; justify-self: start; padding: 0; border: 0; background: transparent; color: #3e83ea; font-size: 11px; cursor: pointer; }
 .reminder-item button:hover { color: #126dde; text-decoration: underline; }
 .action-reminder .reminder-icon { color: #ef9b43; }
+.reminder-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 0 8px;
+  color: #9aa8b8;
+  font-size: 12px;
+}
+.reminder-empty i { color: #43b681; font-size: 15px; }
 @media (max-width: 760px) {
   .reminder-grid { grid-template-columns: 1fr; }
 }
@@ -2243,6 +2456,33 @@ button.record-line:not(:disabled):hover b { color: #347edc; }
 }
 .schedule-link.disabled { color: #a2afbf; border-color: #e8edf4; }
 .schedule-link.disabled i { color: #aeb9c7; }
+.schedule-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  height: 30px;
+  margin-left: 6px;
+  gap: 4px;
+  border: 1px solid #3ec88f;
+  border-radius: 16px;
+  color: #fff;
+  background: #3ec88f;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.schedule-confirm:hover { background: #2fb87f; border-color: #2fb87f; }
+.schedule-chip {
+  margin-left: 6px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.schedule-chip.host { color: #d98a1f; background: #fff3dc; }
+.schedule-chip.confirmed { color: #2a9d6f; background: #e4f7ee; }
 @media (max-width: 1120px) {
   .meeting-card.schedule-row {
     grid-template-columns: 65px minmax(145px, 1fr) 112px;

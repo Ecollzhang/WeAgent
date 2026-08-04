@@ -47,6 +47,16 @@ def update_meeting(meeting_id):
     return success_response(result, message='Meeting updated')
 
 
+@meeting_bp.route('/<meeting_id>/confirm', methods=['POST'])
+@jwt_required()
+def confirm_meeting(meeting_id):
+    """Confirm attendance for an invited participant."""
+    result, error = meeting_service.confirm_participation(meeting_id, get_jwt_identity())
+    if error:
+        return error_response(error, code=404)
+    return success_response(result, message='Participation confirmed')
+
+
 @meeting_bp.route('/<meeting_id>', methods=['DELETE'])
 @jwt_required()
 def delete_meeting(meeting_id):

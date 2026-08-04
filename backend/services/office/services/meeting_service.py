@@ -1,5 +1,7 @@
 """Meeting and action-item business logic."""
 from datetime import timedelta
+from sqlalchemy.orm import load_only
+from sqlalchemy.orm.attributes import flag_modified
 from models.action_item import ActionItem
 from models.meeting import Meeting
 from models.schedule import Schedule
@@ -23,21 +25,69 @@ class MeetingService:
         status = params.get('status')
         if status:
             query = query.filter_by(status=status)
-        visible = [item for item in query.order_by(Meeting.start_time.desc(), Meeting.created_at.desc()).all()
+        # 附件可能以 data URL 保存在 materials JSON 中。列表页无需这些大字段，
+        # 否则 MySQL 会在排序时携带大 JSON，低内存环境下会触发 1038 错误。
+        list_columns = (
+            Meeting.id, Meeting.workspace_id, Meeting.organizer_id, Meeting.title,
+            Meeting.agenda, Meeting.participants, Meeting.location, Meeting.meeting_link,
+            Meeting.start_time, Meeting.end_time, Meeting.status,
+            Meeting.created_at, Meeting.updated_at,
+        )
+        items = query.options(load_only(*list_columns)).order_by(
+            Meeting.start_time.desc(), Meeting.created_at.desc()
+        ).all()
+        visible = [item for item in items
                    if item.organizer_id == user_id or user_id in self._participant_ids(item)]
         total = len(visible)
         visible = visible[(page - 1) * page_size: page * page_size]
         return {
-            'items': [item.to_dict() for item in visible],
+            'items': [self._summary(item) for item in visible],
             'total': total,
             'page': page,
             'page_size': page_size,
         }, None
 
+    @staticmethod
+    def _summary(meeting):
+        """Return the fields used by the schedule/list page without loading large detail JSON."""
+        fields = (
+            'id', 'workspace_id', 'organizer_id', 'title', 'agenda', 'participants',
+            'location', 'meeting_link', 'start_time', 'end_time', 'status',
+            'created_at', 'updated_at',
+        )
+        result = {}
+        for field in fields:
+            value = getattr(meeting, field)
+            result[field] = value.isoformat(sep=' ', timespec='seconds') if hasattr(value, 'isoformat') else value
+        return result
+
     def get(self, meeting_id, user_id):
         meeting = Meeting.query.get(meeting_id)
         if not meeting or (meeting.organizer_id != user_id and user_id not in self._participant_ids(meeting)):
             return None, 'Meeting not found'
+        result = meeting.to_dict()
+        result['action_items'] = [item.to_dict() for item in meeting.action_items.order_by(ActionItem.due_date).all()]
+        return result, None
+
+    def confirm_participation(self, meeting_id, user_id):
+        """Mark the current user as a confirmed participant of a meeting."""
+        meeting = Meeting.query.get(meeting_id)
+        if not meeting:
+            return None, 'Meeting not found'
+        if meeting.status == 'cancelled':
+            return None, 'Meeting has been cancelled'
+        participants = list(meeting.participants or [])
+        found = False
+        for item in participants:
+            if isinstance(item, dict) and item.get('user_id') == user_id:
+                item['confirmed'] = True
+                found = True
+        if not found:
+            return None, 'You are not a participant of this meeting'
+        meeting.participants = participants
+        # JSON 列 in-place 修改后需要显式标记，否则 SQLAlchemy 不认为其已变更。
+        flag_modified(meeting, 'participants')
+        db.session.commit()
         result = meeting.to_dict()
         result['action_items'] = [item.to_dict() for item in meeting.action_items.order_by(ActionItem.due_date).all()]
         return result, None
@@ -58,12 +108,20 @@ class MeetingService:
         except ValueError as error:
             return None, str(error)
 
+        participants = self._normalise_participants(workspace_id, data.get('participants') or [])
+        organizer = organization_service.member(workspace_id, user_id)
+        if organizer and not any(item.get('user_id') == user_id for item in participants):
+            # 主持人默认参会：创建者必然出现在参会名单中。
+            participants.append({'user_id': user_id, 'display_name': organizer.display_name, 'confirmed': True})
+        for item in participants:
+            if item.get('user_id') == user_id:
+                item['confirmed'] = True
         meeting = Meeting(
             workspace_id=workspace_id,
             organizer_id=user_id,
             title=title,
             agenda=data.get('agenda', ''),
-            participants=self._normalise_participants(workspace_id, data.get('participants') or []),
+            participants=participants,
             location=data.get('location', ''),
             meeting_link=data.get('meeting_link', ''),
             start_time=start_time,
@@ -133,6 +191,20 @@ class MeetingService:
                 setattr(meeting, field, data[field])
         if 'participants' in data:
             meeting.participants = self._normalise_participants(meeting.workspace_id, data['participants'] or [])
+        if not any(item.get('user_id') == meeting.organizer_id for item in meeting.participants or []):
+            organizer = organization_service.member(meeting.workspace_id, meeting.organizer_id)
+            if organizer:
+                meeting.participants = list(meeting.participants or []) + [
+                    {'user_id': meeting.organizer_id, 'display_name': organizer.display_name, 'confirmed': True}]
+            flag_modified(meeting, 'participants')
+        else:
+            changed = False
+            for item in meeting.participants or []:
+                if item.get('user_id') == meeting.organizer_id and not item.get('confirmed'):
+                    item['confirmed'] = True
+                    changed = True
+            if changed:
+                flag_modified(meeting, 'participants')
         if 'status' in data:
             if data['status'] not in self.VALID_STATUSES:
                 return None, 'Invalid meeting status'
