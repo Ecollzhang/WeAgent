@@ -55,6 +55,9 @@ ALTER TABLE `workspaces` ADD COLUMN IF NOT EXISTS `sub_role` VARCHAR(20) DEFAULT
 ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `role` VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'admin / user';
 -- conversations 关联工作空间
 ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `workspace_id` VARCHAR(36) DEFAULT NULL AFTER `user_id`;
+-- conversations 领域服务 & 项目关联
+ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `services` JSON DEFAULT NULL COMMENT '启用的领域服务列表' AFTER `kb_document_ids`;
+ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `project_id` VARCHAR(36) DEFAULT NULL COMMENT '关联的RD项目ID' AFTER `services`;
 
 -- ========================================
 -- 4. 灰度配置种子数据
@@ -165,6 +168,16 @@ INSERT IGNORE INTO grayscale_config (config_key, config_name, config_type, domai
 ('tool.doc_template_engine', '工具-公文模板引擎', 'tool', 'office', 1, 1),
 ('tool.format_checker', '工具-格式检查器', 'tool', 'office', 1, 1),
 ('tool.transcript_parser', '工具-录音转写解析器', 'tool', 'office', 1, 1);
+
+-- ---------- 公共 (common)：跨领域共享的 UI 配置 ----------
+INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) VALUES
+-- UI 聊天标签栏
+('ui.chat.tabs.agent_config', '聊天标签-智能体配置', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.artifacts', '聊天标签-产物', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.logs', '聊天标签-日志', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.workflow', '聊天标签-工作流图', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.knowledge_base', '聊天标签-知识库', 'ui', 'common', 1, 1, '["rd","edu","office"]')
+ON DUPLICATE KEY UPDATE config_name=VALUES(config_name), domains=VALUES(domains);
 
 -- ========================================
 -- 5. 已有数据迁移：老用户 → 默认研发空间

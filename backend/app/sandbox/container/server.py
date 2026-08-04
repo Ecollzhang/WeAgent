@@ -400,6 +400,23 @@ def restart_agent(agent_id: str):
     return jsonify(result)
 
 
+@app.route("/api/config/kb", methods=["POST"])
+def update_kb_config():
+    """Hot-update KB document IDs filter for rag_search."""
+    import json as _json
+    import os as _os
+    data = request.get_json(force=True) or {}
+    kb_document_ids = data.get("kb_document_ids")
+    config_path = _os.path.join(_os.path.dirname(__file__), "kb_config.json")
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            _json.dump({"kb_document_ids": kb_document_ids}, f)
+        log_event("api_update_kb_config", kb_document_ids=kb_document_ids)
+        return jsonify({"status": "ok", "kb_document_ids": kb_document_ids})
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
+
+
 @app.route("/api/config/model", methods=["POST"])
 def update_model_config():
     """Hot-update Claude Code config inside this container."""

@@ -1,5 +1,7 @@
 from app.models.user_model_config import UserModelConfig
 from urllib.parse import urlparse
+from app import db as app_db
+import os
 
 
 def _clean_config_value(value):
@@ -79,6 +81,8 @@ class SettingsService:
             return None, 'Custom model name is required'
 
         config.save()
+        # 同步到 RD 服务的本地表
+        _sync_to_rd_db(user_id, data, config)
         result, error = self.get_model_config(user_id, mask_api_key=True)
         if error:
             return result, error
@@ -119,6 +123,65 @@ class SettingsService:
         if model_name:
             env['CODEX_MODEL'] = model_name
         return env, None
+
+
+def _sync_to_rd_db(user_id, data, config):
+    """Sync model config to RD service's local table (weagent_rd.rd_model_configs)."""
+    try:
+        import pymysql
+        from flask import current_app
+        cfg = current_app.config
+        conn = pymysql.connect(
+            host=cfg.get('MYSQL_HOST', 'localhost'),
+            port=cfg.get('MYSQL_PORT', 3306),
+            user=cfg.get('MYSQL_USER', 'root'),
+            password=cfg.get('MYSQL_PASSWORD', ''),
+            database='weagent_rd',
+            charset='utf8mb4',
+        )
+        cursor = conn.cursor()
+        # Ensure table exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rd_model_configs (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                user_id VARCHAR(36) NOT NULL UNIQUE,
+                api_key TEXT NULL,
+                base_url VARCHAR(500) NULL,
+                model VARCHAR(100) NOT NULL DEFAULT 'gpt-4o',
+                custom_model VARCHAR(100) NOT NULL DEFAULT '',
+                temperature FLOAT NOT NULL DEFAULT 0.7,
+                max_tokens INT NOT NULL DEFAULT 4096,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        import uuid as _uuid
+        cursor.execute("""
+            INSERT INTO rd_model_configs
+                (id, user_id, api_key, base_url, model, custom_model, temperature, max_tokens)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                api_key = VALUES(api_key),
+                base_url = VALUES(base_url),
+                model = VALUES(model),
+                custom_model = VALUES(custom_model),
+                temperature = VALUES(temperature),
+                max_tokens = VALUES(max_tokens)
+        """, (
+            str(_uuid.uuid4()),
+            user_id,
+            config.api_key or '',
+            config.base_url or '',
+            config.model or 'gpt-4o',
+            config.custom_model or '',
+            config.temperature or 0.7,
+            config.max_tokens or 4096,
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception:
+        pass  # RD database not available — non-critical
 
 
 settings_service = SettingsService()

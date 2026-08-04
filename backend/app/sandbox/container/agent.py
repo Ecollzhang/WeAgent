@@ -87,11 +87,19 @@ weagent-report '{{"type":"progress","title":"分析需求","content":"正在确�
 - 示例：
   weagent-service start --name "前端预览" --cwd "/workspace/agents/{self.workspace_name}" --command "npm run dev -- --host 0.0.0.0 --port 5173" --port 5173 --type vite
 
-上报类型：progress、result、summary、text、table、image、code、file、error、service。
+上报类型：progress、result、summary、text、table、image、code、file、error、service、requirement_card、bug_card、iteration_card、project_card。
 table 固定格式：{{"type":"table","title":"标题","data":{{"headers":["列1"],"rows":[["值1"]]}}}}。
 image/file 只允许上报容器内 /workspace/... 路径。
 service 产物优先使用 weagent-service start 自动上报；手动上报时必须包含 data.service_id。
 大段代码可以用 code 块上报；如果用户要求生成项目或可运行产物，必须把代码写入文件，再上报 file/image。
+
+领域卡片（requirement_card/bug_card/iteration_card/project_card）用于展示研发管理数据，title/content 放在 data 里，不需要顶层字段：
+weagent-report '{{"type":"project_card","data":{{"id":"<id>","title":"项目名","summary":"描述","project_id":"<id>","meta":{{"requirement_count":5,"bug_count":3}}}}}}'
+weagent-report '{{"type":"requirement_card","data":{{"id":"<id>","title":"需求标题","project_id":"项目ID","priority":"p0/p1/p2/p3","status":"backlog/todo/in_progress/in_review/done","meta":{{"assignee":"负责人","iteration_name":"迭代名"}}}}}}'
+RD 服务数据展示优先级：领域卡片 > table > 纯文本。
+查询到需求/缺陷/迭代/项目列表时，**必须逐条发送对应卡片**，这是第一优先级。
+只在卡片无法表达汇总/对比信息时，才用 table 作为补充（如"本次共查询到 5 条需求，汇总如下"后面跟一个 table）。
+禁止用卡片类型能覆盖的数据去写大段 Markdown 列表或表格来替代卡片。
 
 文件创建方式：优先使用 Claude Code 的 Write/Edit/Bash 工具直接创建文件。所有正式产物优先写入你的私有工作目录。
 如果工具不可用，才使用下面格式输出文件内容，系统会尝试自动写入：
@@ -195,6 +203,12 @@ weagent-report '{{"type":"progress","title":"分析需求","content":"正在确�
 weagent-report '{{"type":"result","title":"分析完成","content":"已确认实现范围","status":"done","step_id":"step-1"}}'
 weagent-report '{{"type":"file","title":"产物文件","content":"/workspace/agents/{self.workspace_name}/index.html","data":{{"path":"/workspace/agents/{self.workspace_name}/index.html"}}}}'
 weagent-report '{{"type":"summary","title":"完成摘要","content":"已完成用户请求，生成的文件位于 /workspace/agents/{self.workspace_name}/index.html","status":"done"}}'
+
+领域卡片示例（RD服务查询结果优先用卡片，汇总对比可补充table）：
+weagent-report '{{"type":"project_card","data":{{"id":"<id>","title":"项目名","summary":"描述","project_id":"<id>","meta":{{"requirement_count":5,"bug_count":3}}}}}}'
+weagent-report '{{"type":"requirement_card","data":{{"id":"<id>","title":"需求标题","project_id":"项目ID","priority":"p0","status":"todo","meta":{{"assignee":"张三"}}}}}}'
+weagent-report '{{"type":"bug_card","data":{{"id":"<id>","title":"缺陷标题","project_id":"项目ID","severity":"critical","status":"open"}}}}'
+weagent-report '{{"type":"iteration_card","data":{{"id":"<id>","title":"迭代名称","project_id":"项目ID","status":"active","meta":{{"start_date":"2026-08-01","end_date":"2026-08-14"}},"progress":50}}}}'
 
 服务预览命令：
 - 如果需要运行或部署生成的 Vue/Vite/React/Next/Flask/FastAPI 项目，使用 weagent-service。

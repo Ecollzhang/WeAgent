@@ -18,6 +18,10 @@ class Conversation(BaseModel):
                                nullable=False, default='pending')
     workspace_id = db.Column(db.String(36), db.ForeignKey('workspaces.id',
                                 ondelete='SET NULL'), nullable=True)
+    kb_domain = db.Column(db.String(20), nullable=True, comment='KB scope: rd/edu/office/all')
+    kb_document_ids = db.Column(db.JSON, nullable=True, comment='Selected KB document IDs for filtering')
+    services = db.Column(db.JSON, nullable=True, comment='启用的领域服务列表, e.g. ["rd","rag"]')
+    project_id = db.Column(db.String(36), nullable=True, comment='关联的RD项目ID，NULL=全局视角')
     last_active_at = db.Column(db.DateTime, nullable=True)
     stopped_at = db.Column(db.DateTime, nullable=True)
 

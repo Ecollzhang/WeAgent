@@ -114,6 +114,14 @@ class AuthService:
             file.write(content)
         return f'/uploads/{filename}'
 
+    def list_users(self):
+        """List all users (id, username, role)."""
+        users = user_repo.get_all()
+        return {
+            'items': [{'id': u.id, 'username': u.username, 'email': u.email, 'role': u.role, 'avatar_url': u.avatar_url} for u in users],
+            'total': len(users),
+        }, None
+
     def refresh_token(self, identity):
         """Generate a new access token."""
         access_token = create_access_token(identity=identity)

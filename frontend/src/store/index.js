@@ -8,6 +8,7 @@ import settings from './modules/settings'
 import workspace from './modules/workspace'
 import grayscale from './modules/grayscale'
 import office from './modules/office'
+import rd from './modules/rd'
 
 Vue.use(Vuex)
 
@@ -21,5 +22,6 @@ export default new Vuex.Store({
     workspace,
     grayscale,
     office,
+    rd,
   },
 })

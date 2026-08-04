@@ -3,15 +3,16 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+_RD_DIR = os.path.abspath(os.path.dirname(__file__))
+load_dotenv(os.path.join(_RD_DIR, '.env'))
 
 
 class Config:
     SERVICE_NAME = 'weagent-rd'
     PORT = int(os.getenv('RD_PORT', '5101'))
 
-    SECRET_KEY = os.getenv('SECRET_KEY', 'change-me')
-    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'change-me')
+    SECRET_KEY = os.getenv('SECRET_KEY', 'weagent-dev-secret-key-change-in-production')
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'weagent-jwt-secret-key-change-in-production')
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=2)
 
     # MySQL — 独立数据库 weagent_rd
@@ -24,6 +25,11 @@ class Config:
         f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/weagent_rd?charset=utf8mb4',
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # GitHub OAuth App
+    GITHUB_CLIENT_ID = os.getenv('GITHUB_CLIENT_ID', '')
+    GITHUB_CLIENT_SECRET = os.getenv('GITHUB_CLIENT_SECRET', '')
+    GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:5101/api/rd/github/callback')
 
     # Redis
     REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')

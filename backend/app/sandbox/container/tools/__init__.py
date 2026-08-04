@@ -33,6 +33,8 @@ from ..capabilities import (
 # 无需能力绑定即可使用的工具（由运行时环境自动提供）
 _ALWAYS_ALLOWED_TOOLS = {
     "rag_search": True,
+    "call_service_api": True,
+    "list_services": True,
 }
 
 
@@ -585,63 +587,141 @@ def _configured_database_query(query: str, max_rows: int = 50,
     return result
 
 
-def _rag_search(query: str, top_k: int = 5, domain: str = "",
-                workspace_id: str = "", score_threshold: float = 0.0) -> dict:
-    """Search the RAG knowledge base for relevant document chunks.
+def _list_services() -> dict:
+    """List all available microservices from the service registry.
+
+    Returns a dict with a 'services' key mapping service_name -> base_url.
+    """
+    registry_raw = os.environ.get("SERVICE_REGISTRY", "{}")
+    try:
+        services = json.loads(registry_raw) if registry_raw else {}
+    except json.JSONDecodeError:
+        services = {}
+    return {"services": services}
+
+
+def _call_service_api(service_name: str, method: str = "GET",
+                      path: str = "/", body: dict = None,
+                      query_params: dict = None) -> dict:
+    """Call a microservice API endpoint generically.
 
     Args:
-        query: Search query text
-        top_k: Number of results to return (default 5)
-        domain: Filter by domain (optional, e.g. 'rd', 'edu', 'office')
-        workspace_id: Filter by workspace (optional)
-        score_threshold: Minimum similarity score 0.0-1.0 (default 0.0)
+        service_name: Name of the service (e.g. 'rag', 'rd', 'edu', 'office')
+        method: HTTP method (GET, POST, PUT, DELETE, PATCH)
+        path: API path (e.g. '/api/rag/search', '/api/rd/spec')
+        body: JSON-serializable dict for the request body (for POST/PUT)
+        query_params: Optional dict of query string parameters
 
     Returns:
-        dict with query, results list, and total count.
-        Each result has chunk_id, content, score, metadata, and document info.
+        The parsed JSON response from the service.
     """
-    rag_url = os.environ.get("RAG_SERVICE_URL", "http://host.docker.internal:5104")
-    api_key = os.environ.get("RAG_INTERNAL_API_KEY", "")
+    registry_raw = os.environ.get("SERVICE_REGISTRY", "{}")
+    try:
+        services = json.loads(registry_raw) if registry_raw else {}
+    except json.JSONDecodeError:
+        return {"status": "error", "error": "SERVICE_REGISTRY is not valid JSON"}
 
+    base_url = services.get(service_name)
+    if not base_url:
+        return {
+            "status": "error",
+            "error": f"Unknown service '{service_name}'. Available: {list(services.keys())}",
+        }
+
+    url = f"{base_url.rstrip('/')}{path}"
+    if query_params:
+        url += "?" + urllib.parse.urlencode(query_params)
+
+    data = json.dumps(body).encode("utf-8") if body else None
+
+    user_auth = os.environ.get("USER_AUTH_TOKEN", "")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "WeAgent-ServiceCall/1.0",
+    }
+    if user_auth:
+        # Primary auth: user's JWT token (all services share the same JWT secret)
+        headers["Authorization"] = user_auth
+    else:
+        # Fallback: internal API key for background tasks without user context
+        api_key = os.environ.get("RAG_INTERNAL_API_KEY", "")
+        if api_key:
+            headers["X-Internal-API-Key"] = api_key
+
+    req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp_body = resp.read().decode("utf-8", errors="replace")
+            return json.loads(resp_body)
+    except urllib.error.HTTPError as exc:
+        err_body = ""
+        try:
+            err_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        return {
+            "status": "error",
+            "http_code": exc.code,
+            "error": f"Service {service_name} returned HTTP {exc.code}",
+            "detail": err_body[:1000],
+        }
+    except urllib.error.URLError as exc:
+        return {
+            "status": "error",
+            "error": f"Cannot connect to service '{service_name}' at {base_url}: {exc.reason}",
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+# ---- Backward-compatible rag_search (delegates to call_service_api) ----
+def _rag_search(query: str, top_k: int = 5, domain: str = "",
+                workspace_id: str = "", score_threshold: float = 0.0,
+                document_ids: list = None) -> dict:
+    """Search the RAG knowledge base (delegates to call_service_api for rag service).
+
+    Kept for backward compatibility — agents can also use call_service_api directly.
+    """
     if not query or not str(query).strip():
         return {"query": query, "results": [], "total": 0}
 
-    payload = json.dumps({
+    # Normalize document_ids — try param first, then config file, then env var
+    doc_ids = None
+    if document_ids:
+        doc_ids = [str(d) for d in document_ids if d]
+    if not doc_ids:
+        _config_path = os.path.join(os.path.dirname(__file__), "kb_config.json")
+        try:
+            if os.path.exists(_config_path):
+                with open(_config_path, "r", encoding="utf-8") as _f:
+                    _config = json.loads(_f.read())
+                    _ids = _config.get("kb_document_ids")
+                    if _ids:
+                        doc_ids = [str(d) for d in _ids if d]
+        except Exception:
+            pass
+    if not doc_ids:
+        _env_ids = os.environ.get("KB_DOCUMENT_IDS", "")
+        if _env_ids:
+            try:
+                _parsed = json.loads(_env_ids)
+                if isinstance(_parsed, list):
+                    doc_ids = [str(d) for d in _parsed if d]
+            except Exception:
+                pass
+
+    result = _call_service_api("rag", "POST", "/api/rag/search", body={
         "query": str(query or ""),
         "top_k": max(1, min(int(top_k or 5), 20)),
         "domain": str(domain or "").strip() or None,
         "workspace_id": str(workspace_id or "").strip() or None,
         "score_threshold": max(0.0, min(float(score_threshold or 0.0), 1.0)),
-    }).encode("utf-8")
+        "document_ids": doc_ids,
+    })
 
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "WeAgent-RAG-Tool/1.0",
-    }
-    if api_key:
-        headers["X-Internal-API-Key"] = api_key
+    if result.get("status") == "error":
+        raise RuntimeError(f"知识库检索失败: {result.get('error', 'unknown')}")
 
-    req = urllib.request.Request(
-        f"{rag_url.rstrip('/')}/api/rag/search",
-        data=payload,
-        headers=headers,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"知识库检索失败 (HTTP {exc.code})。请确认 RAG 服务已启动并且知识库中有已确认存储的文档。"
-        )
-    except urllib.error.URLError as exc:
-        raise RuntimeError(
-            f"无法连接到知识库服务 ({rag_url})。请确认 RAG 服务已启动。详情: {exc.reason}"
-        )
-    except Exception as exc:
-        raise RuntimeError(f"知识库检索异常: {exc}")
-
-    result = json.loads(body)
     data = result.get("data", {})
     return {
         "query": data.get("query", query),
@@ -675,3 +755,5 @@ def register_builtin_tools(registry: ToolRegistry):
     registry.register("git_diff", _git_diff, "Read git diff")
     registry.register("git_log", _git_log, "Read git log")
     registry.register("rag_search", _rag_search, "Search the RAG knowledge base for relevant document chunks")
+    registry.register("list_services", _list_services, "List all available microservices and their base URLs")
+    registry.register("call_service_api", _call_service_api, "Call a microservice API endpoint generically (discover via /api/spec)")

@@ -14,8 +14,8 @@ class Config:
     SERVICE_NAME = 'weagent-rag'
     PORT = int(os.getenv('RAG_PORT', '5104'))
 
-    SECRET_KEY = os.getenv('SECRET_KEY', 'change-me')
-    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'change-me')
+    SECRET_KEY = os.getenv('SECRET_KEY', 'weagent-dev-secret-key-change-in-production')
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'weagent-jwt-secret-key-change-in-production')
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=2)
 
     # MySQL — 独立数据库 weagent_rag（存储文档元数据、索引映射）
@@ -40,7 +40,7 @@ class Config:
     MILVUS_PORT = int(os.getenv('MILVUS_PORT', '19530'))
 
     # ── 服务间认证 ──────────────────────────────────────────
-    INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', os.getenv('RAG_INTERNAL_API_KEY', ''))
+    INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', os.getenv('RAG_INTERNAL_API_KEY', 'weagent-rag-internal-key'))
 
     # ── Embedding 模型 ──────────────────────────────────────
     EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'ollama')  # 'ollama' | 'openai'

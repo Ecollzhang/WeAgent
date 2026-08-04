@@ -10,7 +10,10 @@ const service = axios.create({
 service.interceptors.request.use(
   config => {
     const token = sessionStorage.getItem('access_token')
-    if (token) {
+    const body = config.data ? (typeof config.data === 'string' ? config.data : JSON.stringify(config.data)) : ''
+    console.log('[axios-req]', config.method?.toUpperCase(), config.url, 'token:', !!token, 'body:', body.substring(0, 200))
+    const isAuthRequest = config.url && (config.url.includes('/auth/login') || config.url.includes('/auth/register'))
+    if (token && !isAuthRequest) {
       config.headers.Authorization = `Bearer ${token}`
     }
     return config
@@ -33,10 +36,11 @@ service.interceptors.response.use(
 
     if (response) {
       const { status, data } = response
+      console.log('[axios-res]', status, config.url, 'body:', data?.message || data)
 
       switch (status) {
         case 401:
-          if (config.url === '/auth/login' || config.url === '/auth/register') {
+          if (config.url.includes('/auth/login') || config.url.includes('/auth/register')) {
             Message.error(data?.message || '用户名或密码错误')
           } else {
             // Token expired or invalid
@@ -54,6 +58,11 @@ service.interceptors.response.use(
           Message.error(data?.message || 'Resource not found')
           break
         case 422:
+          // JWT token 无效时 flask_jwt_extended 返回 422
+          // 静默处理，让页面使用演示数据
+          if (config.url && config.url.includes('/domain/')) {
+            break
+          }
           Message.error(data?.message || 'Validation error')
           break
         case 500:

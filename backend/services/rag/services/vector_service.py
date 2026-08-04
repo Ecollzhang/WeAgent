@@ -21,9 +21,9 @@ class VectorService:
         self.collection.add(ids, embeddings, documents, metadatas or [{}] * len(ids))
 
     def search(self, query_embedding: list[float], top_k: int = 5,
-               filter_meta: dict = None) -> list[dict]:
-        """语义搜索."""
-        return self.collection.search(query_embedding, top_k, filter_meta)
+               filter_meta: dict = None, document_ids: list[str] = None) -> list[dict]:
+        """语义搜索，支持按 document_ids 过滤."""
+        return self.collection.search(query_embedding, top_k, filter_meta, document_ids=document_ids)
 
     def delete_by_ids(self, ids: list[str]):
         """删除指定向量."""
