@@ -15,11 +15,27 @@
           >
         </div>
       </header>
-      <section class="top">
+      <div class="org-tabs">
+        <button
+          :class="['org-tab', { active: activeTab === 'members' }]"
+          @click="switchTab('members')"
+        >
+          {{ t.tabOrg }}
+        </button>
+        <button
+          :class="['org-tab', { active: activeTab === 'tasks' }]"
+          @click="switchTab('tasks')"
+        >
+          {{ t.tasks }}
+        </button>
+      </div>
+      <section v-show="activeTab === 'members'" class="top">
         <section class="card organization-tree">
           <div class="bar">
             <b>{{ t.relation }}</b
-            ><span>{{ t.whole }}</span>
+            ><button v-if="selectedGroup" class="show-all" @click="clearGroupFilter">
+              <i class="el-icon-refresh-left"></i>{{ t.whole }}
+            </button><span v-else>{{ t.whole }}</span>
           </div>
           <div class="boss">
             <img :src="photo(t.wang)" />
@@ -33,12 +49,16 @@
             <article
               v-for="(g, i) in org.groups"
               :key="g.id"
-              :class="['c' + i, 'org-group-card']"
+              :class="['c' + i, 'org-group-card', { selected: selectedGroupId === g.id }]"
+              role="button"
+              tabindex="0"
+              @click="selectGroup(g)"
+              @keyup.enter="selectGroup(g)"
             >
               <div class="branch"></div>
               <div class="org-group-title">
                 <b>{{ g.name }}</b>
-                <span>{{ members(g.id).length }} {{ t.people }}</span>
+                <span>{{ groupRoster(g).length }} {{ t.people }}</span>
               </div>
               <div class="org-leader">
                 <img :src="photo(leader(g))" />
@@ -65,11 +85,12 @@
             <div>
               <b>{{ t.list }}</b
               ><span class="member-count"
-                >&#128100; {{ t.total }} {{ org.members.length }}
+                >&#128100; {{ selectedGroup ? selectedGroup.name + ' · ' : t.total }} {{ filteredMembers.length }}
                 {{ t.people }}</span
               >
             </div>
             <div class="list-actions">
+              <el-button v-if="selectedGroup" size="mini" plain icon="el-icon-close" @click="clearGroupFilter">{{ t.allMembers }}</el-button>
               <el-dropdown trigger="click" @command="filterRole"
                 ><el-button size="mini" plain icon="el-icon-filter">{{
                   t.filterRoles
@@ -145,7 +166,7 @@
           </div>
         </section>
       </section>
-      <section class="card tasks">
+      <section v-show="activeTab === 'tasks'" class="card tasks">
         <div class="bar">
           <b>{{ t.tasks }}</b>
           <div class="legend">
@@ -277,6 +298,7 @@ const t = {
   manager: "\u76f4\u5c5e\u9886\u5bfc",
   direct: "\u90e8\u95e8\u76f4\u5c5e",
   tasks: "\u56e2\u961f\u4efb\u52a1\u603b\u89c8",
+  tabOrg: "\u7ec4\u7ec7\u5173\u7cfb\u4e0e\u6210\u5458",
   taskDesc:
     "\u6309\u7ec4\u7ec7\u5c42\u7ea7\u5448\u73b0\u5f53\u524d\u4efb\u52a1",
   done: "\u5df2\u5b8c\u6210",
@@ -333,8 +355,10 @@ export default {
   components: { AppSidebar },
   data: () => ({
     t,
+    activeTab: "members",
     aiVisible: false,
     memberRole: "",
+    selectedGroupId: null,
     memberPage: 1,
     memberPageSize: 20,
   }),
@@ -361,8 +385,13 @@ export default {
     },
     filteredMembers() {
       return this.org.members.filter(
-        (member) => !this.memberRole || member.role === this.memberRole
+        (member) =>
+          (!this.memberRole || member.role === this.memberRole) &&
+          (!this.selectedGroupId || this.isInSelectedGroup(member))
       );
+    },
+    selectedGroup() {
+      return this.org.groups.find((group) => group.id === this.selectedGroupId) || null;
     },
     pagedMembers() {
       const start = (this.memberPage - 1) * this.memberPageSize;
@@ -424,6 +453,12 @@ export default {
     },
   },
   watch: {
+    "$route.query.tab": {
+      immediate: true,
+      handler(tab) {
+        this.activeTab = tab === "tasks" ? "tasks" : "members";
+      },
+    },
     "workspace.id": {
       immediate: true,
       handler() {
@@ -440,6 +475,13 @@ export default {
     },
   },
   methods: {
+    switchTab(tab) {
+      if (this.activeTab === tab && this.$route.query.tab === tab) return;
+      this.activeTab = tab;
+      this.$router
+        .replace({ query: { ...this.$route.query, tab } })
+        .catch(() => {});
+    },
     photo(n) {
       return photos[n] || wang;
     },
@@ -453,6 +495,14 @@ export default {
     },
     filterRole(role) {
       this.memberRole = role;
+      this.memberPage = 1;
+    },
+    selectGroup(group) {
+      this.selectedGroupId = group.id;
+      this.memberPage = 1;
+    },
+    clearGroupFilter() {
+      this.selectedGroupId = null;
       this.memberPage = 1;
     },
     changeMemberPageSize(size) {
@@ -510,6 +560,18 @@ export default {
         (x) => x.group_id === id && x.role === "member"
       );
     },
+    groupRoster(group) {
+      if (!group) return [];
+      return this.org.members.filter(
+        (member) =>
+          member.group_id === group.id || member.user_id === group.leader_user_id
+      );
+    },
+    isInSelectedGroup(member) {
+      return this.selectedGroup && this.groupRoster(this.selectedGroup).some(
+        (item) => item.user_id === member.user_id
+      );
+    },
     leader(g) {
       return this.memberName(g.leader_user_id) || t.head;
     },
@@ -535,7 +597,9 @@ export default {
 <style scoped>
 .page {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  box-sizing: border-box;
+  overflow: hidden;
   padding: 12px;
   gap: 12px;
   background: #f3f6fb;
@@ -543,6 +607,7 @@ export default {
 .page main {
   flex: 1;
   min-width: 0;
+  overflow-y: auto;
   padding: 16px;
   background: #fff;
   border-radius: 12px;
@@ -557,6 +622,30 @@ header {
   padding-bottom: 12px;
   margin-bottom: 12px;
   border-bottom: 1px solid #edf0f5;
+}
+.org-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #edf0f5;
+}
+.org-tab {
+  padding: 8px 18px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-size: 14px;
+  color: #606266;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.org-tab:hover {
+  color: #409eff;
+}
+.org-tab.active {
+  color: #409eff;
+  border-bottom-color: #409eff;
+  font-weight: 600;
 }
 h2 {
   margin: 0 0 3px;
@@ -574,6 +663,9 @@ header .el-tag {
   display: grid;
   grid-template-columns: 1.13fr 1fr;
   gap: 12px;
+}
+.member-list {
+  min-height: 640px;
 }
 .card {
   border: 1px solid #e5ecf5;
@@ -1210,6 +1302,42 @@ header .el-tag {
   min-height: 250px;
   padding: 13px;
   text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.organization-tree .groups .org-group-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 18px rgba(54, 95, 144, 0.12);
+}
+.organization-tree .groups .org-group-card.selected {
+  border-color: #3d8bfd;
+  background: linear-gradient(180deg, #f4f9ff 0%, #fff 44%);
+  box-shadow: 0 0 0 3px rgba(64, 149, 244, 0.12), 0 8px 18px rgba(54, 95, 144, 0.1);
+}
+.organization-tree .groups .org-group-card.c1.selected {
+  border-color: #8a5de6;
+  box-shadow: 0 0 0 3px rgba(138, 93, 230, 0.12), 0 8px 18px rgba(54, 95, 144, 0.1);
+}
+.organization-tree .groups .org-group-card.c2.selected {
+  border-color: #f18731;
+  box-shadow: 0 0 0 3px rgba(241, 135, 49, 0.12), 0 8px 18px rgba(54, 95, 144, 0.1);
+}
+.org-group-card:focus {
+  outline: none;
+}
+.org-group-card:focus-visible {
+  box-shadow: 0 0 0 3px rgba(64, 149, 244, 0.22);
+}
+.show-all {
+  padding: 2px 0;
+  border: 0;
+  color: #5b7fae;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.show-all:hover {
+  color: #287fe8;
 }
 .org-group-title {
   display: flex;
