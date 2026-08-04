@@ -35,6 +35,25 @@ class DocumentService:
         return result
 
     @staticmethod
+    def _normalise_approvers(workspace_id, approvers):
+        """Only team leads and department heads can approve office documents."""
+        result, seen = [], set()
+        for item in approvers:
+            user_id = item.get('user_id') if isinstance(item, dict) else item
+            if not user_id or user_id in seen:
+                continue
+            member = organization_service.member(workspace_id, user_id)
+            if not member or member.role not in ('team_lead', 'department_head'):
+                continue
+            seen.add(user_id)
+            result.append({'user_id': user_id, 'display_name': member.display_name})
+        return result
+
+    @staticmethod
+    def _approver_ids(document):
+        return [item.get('user_id') for item in (document.approvers or []) if isinstance(item, dict) and item.get('user_id')]
+
+    @staticmethod
     def _recipient_summary(document, receipts=None):
         recipients = document.recipients or []
         names = [item.get('display_name') or item.get('name') or '成员' for item in recipients if isinstance(item, dict)]
@@ -61,7 +80,7 @@ class DocumentService:
         for item in query.order_by(OfficialDocument.updated_at.desc()).all():
             is_approver = any(user_id == step.get('approver_id') for approval in Approval.query.filter_by(document_id=item.id).all() for step in (approval.steps or []))
             can_receive = user_id in self._recipient_ids(item)
-            if item.user_id == user_id or is_approver or (item.status == 'published' and can_receive):
+            if item.user_id == user_id or is_approver or can_receive:
                 visible.append(item)
         total = len(visible)
         visible = visible[(page - 1) * page_size: page * page_size]
@@ -71,6 +90,10 @@ class DocumentService:
             receipts = DocumentReceipt.query.filter_by(document_id=item.id).all() if item.status == 'published' else []
             data['recipient_summary'] = self._recipient_summary(item, receipts)
             data['reviewer_name'] = self._reviewer_name(item)
+            my_receipt = None
+            if item.status == 'published' and user_id in self._recipient_ids(item):
+                my_receipt = DocumentReceipt.query.filter_by(document_id=item.id, recipient_id=user_id).first()
+            data['my_receipt'] = my_receipt.to_dict() if my_receipt else None
             items.append(data)
         return {
             'items': items,
@@ -123,10 +146,11 @@ class DocumentService:
                 return None, 'Document template not found'
             content = template.content
         recipients = self._normalise_recipients(workspace_id, data.get('recipients') or [])
+        approvers = self._normalise_approvers(workspace_id, data.get('approvers') or [])
         document = OfficialDocument(
             workspace_id=workspace_id, user_id=user_id, meeting_id=data.get('meeting_id'),
             title=title, document_type=document_type, content=content,
-            recipients=recipients, template_id=template_id,
+            recipients=recipients, approvers=approvers, template_id=template_id,
         )
         db.session.add(document)
         db.session.commit()
@@ -153,9 +177,9 @@ class DocumentService:
             return None, 'Document not found'
         if document.status in ('published', 'archived'):
             return None, 'Published or archived documents cannot be edited'
-        for field in ('title', 'content', 'template_id', 'meeting_id', 'recipients'):
+        for field in ('title', 'content', 'template_id', 'meeting_id', 'recipients', 'approvers'):
             if field in data:
-                setattr(document, field, self._normalise_recipients(document.workspace_id, data[field] or []) if field == 'recipients' else data[field])
+                setattr(document, field, self._normalise_recipients(document.workspace_id, data[field] or []) if field == 'recipients' else self._normalise_approvers(document.workspace_id, data[field] or []) if field == 'approvers' else data[field])
         if 'document_type' in data:
             if data['document_type'] not in self.VALID_TYPES:
                 return None, 'Invalid document_type'
@@ -228,12 +252,29 @@ class DocumentService:
             return {'document_id': document.id, 'status': 'approved', 'steps': []}, None
         steps = data.get('steps') or []
         if not steps:
-            if not member or not member.manager_user_id:
+            if document.approvers:
+                # 按角色分层：直属领导（team_lead）为第一级并行审批，部门负责人（department_head）为第二级
+                leads, heads, others = [], [], []
+                for item in document.approvers:
+                    approver_member = organization_service.member(document.workspace_id, item['user_id'])
+                    role = approver_member.role if approver_member else ''
+                    if role == 'department_head':
+                        heads.append(item)
+                    elif role == 'team_lead':
+                        leads.append(item)
+                    else:
+                        others.append(item)
+                first_stage = others + leads
+                second_stage_no = 2 if first_stage else 1
+                steps = [{'step': 1, 'approver_id': item['user_id'], 'status': 'pending'} for item in first_stage]
+                steps += [{'step': second_stage_no, 'approver_id': item['user_id'], 'status': 'pending'} for item in heads]
+            elif not member or not member.manager_user_id:
                 return None, '请先在组织架构中设置直属领导后再提交审批'
-            steps = [{'step': 1, 'approver_id': member.manager_user_id, 'status': 'pending'}]
-            department = __import__('models.organization', fromlist=['OfficeDepartment']).OfficeDepartment.query.filter_by(workspace_id=document.workspace_id).first()
-            if department and department.head_user_id != member.manager_user_id:
-                steps.append({'step': 2, 'approver_id': department.head_user_id, 'status': 'pending'})
+            else:
+                steps = [{'step': 1, 'approver_id': member.manager_user_id, 'status': 'pending'}]
+                department = __import__('models.organization', fromlist=['OfficeDepartment']).OfficeDepartment.query.filter_by(workspace_id=document.workspace_id).first()
+                if department and department.head_user_id != member.manager_user_id:
+                    steps.append({'step': 2, 'approver_id': department.head_user_id, 'status': 'pending'})
         if not isinstance(steps, list) or not steps:
             return None, 'steps must be a non-empty list'
         for index, step in enumerate(steps, start=1):
@@ -248,8 +289,12 @@ class DocumentService:
         )
         document.status = 'reviewing'
         db.session.add(approval)
-        organization_service.notify(document.workspace_id, steps[0]['approver_id'], 'approval',
-            f'待审批：{document.title}', '请查看公文正文并完成审批。', 'approval', approval.id)
+        # 通知第一级的所有审批人（直属领导并行审批时人人都会收到）
+        first_step_no = min((step.get('step') or 1) for step in steps)
+        for step in steps:
+            if step.get('step') == first_step_no:
+                organization_service.notify(document.workspace_id, step['approver_id'], 'approval',
+                    f'待审批：{document.title}', '请查看公文正文并完成审批。', 'approval', approval.id)
         db.session.commit()
         return approval.to_dict(), None
 

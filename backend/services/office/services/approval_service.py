@@ -27,7 +27,7 @@ class ApprovalService:
         items = []
         for item in visible:
             data = item.to_dict()
-            data['can_handle'] = item.status == 'pending' and self._current_approver(item) == user_id
+            data['can_handle'] = item.status == 'pending' and user_id in self._current_approvers(item)
             initiator = organization_service.member(workspace_id, item.initiator_id)
             data['submitter_name'] = initiator.display_name if initiator else ''
             document = OfficialDocument.query.get(item.document_id) if item.document_id else None
@@ -46,20 +46,24 @@ class ApprovalService:
             return None, 'Approval not found'
         if not organization_service.can_access(approval.workspace_id, user_id):
             return None, 'No permission to view this approval'
-        if approval.initiator_id != user_id and self._current_approver(approval) != user_id:
+        if approval.initiator_id != user_id and user_id not in self._all_approvers(approval):
             return None, 'No permission to view this approval'
         result = approval.to_dict()
         document = OfficialDocument.query.get(approval.document_id) if approval.document_id else None
         result['document'] = document.to_dict() if document else None
-        result['can_handle'] = approval.status == 'pending' and self._current_approver(approval) == user_id
+        result['can_handle'] = approval.status == 'pending' and user_id in self._current_approvers(approval)
         return result, None
 
     @staticmethod
-    def _current_approver(approval):
-        for step in approval.steps or []:
-            if step.get('step') == approval.current_step:
-                return step.get('approver_id')
-        return None
+    def _all_approvers(approval):
+        """Everyone who appears as an approver in any step."""
+        return [step.get('approver_id') for step in (approval.steps or [])]
+
+    @staticmethod
+    def _current_approvers(approval):
+        """Unhandled approvers at the current step (parallel approval stage)."""
+        return [step.get('approver_id') for step in (approval.steps or [])
+                if step.get('step') == approval.current_step and step.get('status') != 'approved']
 
     def _get_pending(self, approval_id):
         approval = Approval.query.filter_by(id=approval_id).first()
@@ -73,18 +77,21 @@ class ApprovalService:
         approval, error = self._get_pending(approval_id)
         if error:
             return None, error
-        if self._current_approver(approval) != user_id:
+        if user_id not in self._current_approvers(approval):
             return None, 'You are not the current approver'
-        steps = list(approval.steps or [])
+        steps = [dict(step) for step in (approval.steps or [])]
         history = list(approval.history or [])
         for step in steps:
-            if step.get('step') == approval.current_step:
+            if step.get('step') == approval.current_step and step.get('approver_id') == user_id and step.get('status') != 'approved':
                 step['status'] = 'approved'
                 step['comment'] = comment
                 step['handled_at'] = datetime.utcnow().isoformat(timespec='seconds')
                 break
         history.append({'step': approval.current_step, 'action': 'approved', 'user_id': user_id, 'comment': comment})
-        if approval.current_step >= len(steps):
+        stage_done = all(step.get('status') == 'approved'
+                         for step in steps if step.get('step') == approval.current_step)
+        max_step = max((step.get('step') or 0) for step in steps) if steps else 0
+        if stage_done and approval.current_step >= max_step:
             approval.status = 'approved'
             document = OfficialDocument.query.get(approval.document_id)
             if document:
@@ -93,11 +100,11 @@ class ApprovalService:
                 document.review_comment = comment
             organization_service.notify(approval.workspace_id, approval.initiator_id, 'approval_result',
                 f'审批通过：{approval.title}', '公文已完成全部审批，可发布。', 'approval', approval.id)
-        else:
+        elif stage_done:
             approval.current_step += 1
-            next_user = self._current_approver(approval)
-            organization_service.notify(approval.workspace_id, next_user, 'approval',
-                f'待审批：{approval.title}', '上一审批节点已通过，请继续处理。', 'approval', approval.id)
+            for next_user in self._current_approvers(approval):
+                organization_service.notify(approval.workspace_id, next_user, 'approval',
+                    f'待审批：{approval.title}', '上一审批节点已通过，请继续处理。', 'approval', approval.id)
         approval.steps = steps
         approval.history = history
         db.session.commit()
@@ -107,7 +114,7 @@ class ApprovalService:
         approval, error = self._get_pending(approval_id)
         if error:
             return None, error
-        if self._current_approver(approval) != user_id:
+        if user_id not in self._current_approvers(approval):
             return None, 'You are not the current approver'
         if not (comment or '').strip():
             return None, 'A rejection comment is required'
