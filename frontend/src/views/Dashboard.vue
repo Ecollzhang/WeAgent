@@ -371,12 +371,12 @@
                 <em>EDU · 待上线</em>
               </span>
             </label>
-            <label class="service-checkbox disabled">
-              <input type="checkbox" disabled />
+            <label class="service-checkbox" :class="{ checked: newConversation.services.includes('office') }">
+              <input type="checkbox" value="office" v-model="newConversation.services" />
               <span class="svc-icon office"><i class="el-icon-s-home"></i></span>
               <span class="svc-info">
                 <strong>智慧办公</strong>
-                <em>OFFICE · 待上线</em>
+                <em>OFFICE</em>
               </span>
             </label>
           </div>
@@ -455,6 +455,9 @@
             </span>
             <span v-if="newConversation.services.includes('rag')" class="context-chip rag">
               <i class="el-icon-collection"></i> 知识库{{ newConversation.kbDomain ? ' · ' + kbDomainLabel(newConversation.kbDomain) : '' }}
+            </span>
+            <span v-if="newConversation.services.includes('office')" class="context-chip office">
+              <i class="el-icon-s-home"></i> 智慧办公
             </span>
           </div>
         </div>
