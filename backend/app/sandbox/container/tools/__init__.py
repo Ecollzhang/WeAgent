@@ -7,14 +7,17 @@ The orchestrator intercepts tool calls and executes them.
 
 import base64
 import csv
+import ipaddress
 import json
 import mimetypes
 import os
 import re
 import shlex
+import socket
 import sqlite3
 import struct
 import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,11 +34,7 @@ from ..capabilities import (
 
 
 # 无需能力绑定即可使用的工具（由运行时环境自动提供）
-_ALWAYS_ALLOWED_TOOLS = {
-    "rag_search": True,
-    "call_service_api": True,
-    "list_services": True,
-}
+_ALWAYS_ALLOWED_TOOLS = {}
 
 
 class ToolRegistry:
@@ -118,8 +117,16 @@ class ToolRegistry:
                     f"Tool {tool_name} is not bound to agent {agent_id}"
                 )
             execute_args = dict(args or {})
+            execute_args.pop("_weagent_agent_id", None)
             if tool_capability and tool_capability.get("provider_config"):
                 execute_args["_weagent_provider_config"] = tool_capability.get("provider_config")
+            if tool_name in {
+                "education_action",
+                "list_services",
+                "call_service_api",
+                "rag_search",
+            }:
+                execute_args["_weagent_agent_id"] = agent_id
             result = self.execute(tool_name, **execute_args)
             _record("completed", result=result)
             return json.dumps({"status": "ok", "result": result}, ensure_ascii=False)
@@ -172,9 +179,40 @@ def _read_file(path: str) -> str:
 
 def _write_file(path: str, content: str) -> str:
     full = _resolve_workspace_path(path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "w", encoding="utf-8") as f:
-        f.write(content)
+    directory = os.path.dirname(full)
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=directory,
+        prefix=f".{os.path.basename(full)}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        # Snapshot restore and Docker copy can preserve a root-owned artifact.
+        # Replacing it through the agent-owned directory is safe, atomic, and
+        # keeps bounded repair runs able to update the same allowlisted file.
+        try:
+            os.replace(temporary, full)
+        except PermissionError:
+            # Windows represents restored read-only files as an attribute that
+            # also blocks replace. Linux root-owned files normally take the
+            # atomic path above because the containing directory is writable.
+            try:
+                os.chmod(full, 0o600)
+            except OSError:
+                pass
+            os.replace(temporary, full)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
     return f"Written: {path}"
 
 
@@ -428,24 +466,82 @@ def _git_log(limit: int = 5) -> dict:
     return _git_command(["log", f"--max-count={safe_limit}", "--oneline"])
 
 
-def _http_fetch(url: str, max_bytes: int = 40_000) -> dict:
+def _validate_public_http_url(url: str) -> urllib.parse.ParseResult:
     parsed = urllib.parse.urlparse(str(url or ""))
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("Only http/https URLs are allowed")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("URL must contain a hostname and no embedded credentials")
+    if os.environ.get("WEAGENT_HTTP_FETCH_ALLOW_PRIVATE") == "1":
+        return parsed
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError(f"Unable to resolve URL hostname: {exc}") from exc
+    if not addresses:
+        raise ValueError("Unable to resolve URL hostname")
+    for entry in addresses:
+        address = entry[4][0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("URL resolved to an invalid IP address") from exc
+        if not ip.is_global:
+            raise ValueError(
+                "URL resolves to a private, loopback, link-local, or reserved address"
+            )
+    return parsed
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    max_redirects = 3
+
+    def __init__(self):
+        super().__init__()
+        self._redirect_count = 0
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self._redirect_count += 1
+        if self._redirect_count > self.max_redirects:
+            raise ValueError("Too many HTTP redirects")
+        _validate_public_http_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _http_fetch(url: str, max_bytes: int = 40_000) -> dict:
+    parsed = _validate_public_http_url(url)
     limit = max(100, min(int(max_bytes or 40_000), 200_000))
     request = urllib.request.Request(url, headers={"User-Agent": "WeAgent-Tool/1.0"})
+    opener = urllib.request.build_opener(_SafeRedirectHandler())
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            body = response.read(limit + 1)
-            status_code = getattr(response, "status", 200)
-            content_type = response.headers.get("content-type", "")
+        response = opener.open(request, timeout=10)
     except urllib.error.HTTPError as exc:
-        body = exc.read(limit + 1)
-        status_code = exc.code
-        content_type = exc.headers.get("content-type", "")
+        response = exc
+    with response:
+        final_url = response.geturl()
+        _validate_public_http_url(final_url)
+        content_type = response.headers.get("content-type", "")
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        allowed_types = {
+            "text/html",
+            "text/plain",
+            "text/markdown",
+            "application/json",
+            "application/xhtml+xml",
+            "application/xml",
+        }
+        if media_type not in allowed_types:
+            raise ValueError(f"Unsupported response content type: {media_type or 'missing'}")
+        body = response.read(limit + 1)
+        status_code = getattr(response, "status", getattr(response, "code", 200))
     text = body[:limit].decode("utf-8", errors="replace")
+    final_parsed = urllib.parse.urlparse(final_url)
     return {
-        "url": urllib.parse.urlunparse(parsed._replace(query="", fragment="")),
+        "url": urllib.parse.urlunparse(final_parsed._replace(query="", fragment="")),
         "status_code": status_code,
         "content_type": content_type,
         "body_preview": text,
@@ -477,6 +573,102 @@ def _api_request(url: str, method: str = "GET", headers: dict = None,
             "content_type": response.headers.get("content-type", ""),
             "body_preview": raw.decode("utf-8", errors="replace"),
         }
+
+
+_EDUCATION_ACTIONS = {
+    "edu.course.list",
+    "edu.course.members.list",
+    "edu.course.context.get",
+    "edu.question_bank.search",
+    "edu.knowledge.search",
+    "edu.web.research",
+    "edu.course.create",
+    "edu.course.members.import",
+    "edu.lesson.create",
+    "edu.lesson.update",
+    "edu.courseware.get",
+    "edu.courseware.create",
+    "edu.courseware.version.create",
+    "edu.asset.attach",
+    "edu.question_bank.upsert",
+    "edu.paper.compose",
+    "edu.knowledge.resource.adopt",
+    "edu.student_insight.refresh",
+    "edu.submission_review.context.get",
+    "edu.submission_review.analysis.create",
+    "edu.mock_exam.create",
+    "edu.weakness.analyze",
+    "edu.mind_map.create",
+}
+
+
+def _education_action(
+    action: str,
+    arguments: dict = None,
+    idempotency_key: str = "",
+    _weagent_agent_id: str = "",
+) -> dict:
+    """Call the independently deployed Education API with server-issued scope."""
+    action = str(action or "").strip()
+    if action not in _EDUCATION_ACTIONS:
+        raise ValueError("Unsupported Education action")
+    if not isinstance(arguments or {}, dict):
+        raise ValueError("Education action arguments must be an object")
+    grant = os.environ.get("EDUCATION_RUN_GRANT", "").strip()
+    if not grant:
+        raise RuntimeError("Education action requires a server-issued run grant")
+    base_url = os.environ.get(
+        "EDUCATION_SERVICE_URL",
+        "http://host.docker.internal:5102",
+    ).strip().rstrip("/")
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Education service URL is invalid")
+    payload = json.dumps(
+        {
+            "arguments": arguments or {},
+            "idempotency_key": str(idempotency_key or "")[:120],
+            "agent_id": str(_weagent_agent_id or "")[:100],
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}/api/edu/tools/{action}/invoke",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "WeAgent-Education-Tool/1.0",
+            "X-Education-Run-Grant": grant,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read(200_000)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read(20_000)
+        try:
+            error_payload = json.loads(raw.decode("utf-8", errors="replace"))
+        except (TypeError, ValueError):
+            error_payload = {}
+        message = str(
+            error_payload.get("error")
+            or error_payload.get("message")
+            or f"Education action failed with HTTP {exc.code}"
+        )[:500]
+        code = str(error_payload.get("error_code") or "education_action_failed")
+        raise RuntimeError(f"{code}: {message}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Education service is unavailable: {exc.reason}"
+        ) from exc
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError("Education service returned invalid JSON") from exc
+    if not isinstance(result, dict) or "result" not in result:
+        raise RuntimeError("Education service returned an invalid tool response")
+    return result
 
 
 def _require_provider_config(provider_config: dict | None) -> dict:
@@ -587,22 +779,60 @@ def _configured_database_query(query: str, max_rows: int = 50,
     return result
 
 
-def _list_services() -> dict:
-    """List all available microservices from the service registry.
+def _agent_allowed_service_names(agent_id: str) -> list[str]:
+    """Resolve the server-issued service view for one executing Agent."""
+    raw = os.environ.get("AGENT_SERVICE_VIEWS")
+    if raw is None:
+        # Backward compatibility for old RD sessions created before Agent
+        # service snapshots existed. New sessions always inject the variable.
+        try:
+            registry = json.loads(os.environ.get("SERVICE_REGISTRY", "{}"))
+        except json.JSONDecodeError:
+            registry = {}
+        return [
+            name
+            for name in ("edu", "rag", "rd", "office")
+            if name in registry
+        ]
+    try:
+        views = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        views = {}
+    allowed = views.get(str(agent_id or ""), [])
+    if not isinstance(allowed, list):
+        return []
+    normalized = {str(item) for item in allowed}
+    return [
+        name
+        for name in ("edu", "rag", "rd", "office")
+        if name in normalized
+    ]
 
-    Returns a dict with a 'services' key mapping service_name -> base_url.
-    """
+
+def _list_services(_weagent_agent_id: str = "") -> dict:
+    """List only services authorized for the executing Agent."""
     registry_raw = os.environ.get("SERVICE_REGISTRY", "{}")
     try:
         services = json.loads(registry_raw) if registry_raw else {}
     except json.JSONDecodeError:
         services = {}
-    return {"services": services}
+    return {
+        "services": {
+            name: {
+                "name": name,
+                "status": "available",
+                "spec_path": f"/api/{name}/spec",
+            }
+            for name in _agent_allowed_service_names(_weagent_agent_id)
+            if name in services
+        }
+    }
 
 
 def _call_service_api(service_name: str, method: str = "GET",
                       path: str = "/", body: dict = None,
-                      query_params: dict = None) -> dict:
+                      query_params: dict = None,
+                      _weagent_agent_id: str = "") -> dict:
     """Call a microservice API endpoint generically.
 
     Args:
@@ -615,6 +845,33 @@ def _call_service_api(service_name: str, method: str = "GET",
     Returns:
         The parsed JSON response from the service.
     """
+    service_name = str(service_name or "").strip().lower()
+    method = str(method or "GET").strip().upper()
+    if service_name not in _agent_allowed_service_names(_weagent_agent_id):
+        return {
+            "status": "error",
+            "error_code": "service_not_allowed",
+            "error": f"Service '{service_name}' is not available to the current Agent",
+        }
+    normalized_path = "/" + str(path or "/").lstrip("/")
+    if service_name == "edu" and method != "GET":
+        return {
+            "status": "error",
+            "error_code": "protected_action_required",
+            "error": "Education write operations require education_action",
+        }
+    if method not in {"GET", "HEAD"} and not (
+        service_name == "rag"
+        and method == "POST"
+        and normalized_path.rstrip("/")
+        in {"/api/rag/search", "/api/rag/search/hybrid"}
+    ):
+        return {
+            "status": "error",
+            "error_code": "service_method_not_allowed",
+            "error": "The requested service method is not allowlisted",
+        }
+
     registry_raw = os.environ.get("SERVICE_REGISTRY", "{}")
     try:
         services = json.loads(registry_raw) if registry_raw else {}
@@ -622,24 +879,60 @@ def _call_service_api(service_name: str, method: str = "GET",
         return {"status": "error", "error": "SERVICE_REGISTRY is not valid JSON"}
 
     base_url = services.get(service_name)
+    if not base_url and service_name == "rag":
+        base_url = os.environ.get(
+            "RAG_SERVICE_URL",
+            "http://host.docker.internal:5104",
+        )
     if not base_url:
         return {
             "status": "error",
             "error": f"Unknown service '{service_name}'. Available: {list(services.keys())}",
         }
 
-    url = f"{base_url.rstrip('/')}{path}"
+    url = f"{base_url.rstrip('/')}{normalized_path}"
     if query_params:
         url += "?" + urllib.parse.urlencode(query_params)
 
-    data = json.dumps(body).encode("utf-8") if body else None
+    request_body = dict(body or {})
+    is_scoped_rag_search = (
+        service_name == "rag"
+        and normalized_path.rstrip("/") in {"/api/rag/search", "/api/rag/search/hybrid"}
+    )
+    if is_scoped_rag_search:
+        scope_user_id = os.environ.get("RAG_SCOPE_USER_ID", "").strip()
+        scope_domain = os.environ.get("RAG_SCOPE_DOMAIN", "").strip()
+        scope_workspace_id = os.environ.get(
+            "RAG_SCOPE_WORKSPACE_ID", ""
+        ).strip()
+        scope_education_role = os.environ.get(
+            "RAG_SCOPE_EDUCATION_ROLE", ""
+        ).strip()
+        api_key = os.environ.get("RAG_INTERNAL_API_KEY", "").strip()
+        if not scope_user_id or not scope_domain or not api_key:
+            return {
+                "status": "error",
+                "error": "RAG search requires a server-issued scope",
+            }
+        request_body["domain"] = scope_domain
+        request_body["workspace_id"] = scope_workspace_id or None
+
+    data = json.dumps(request_body).encode("utf-8") if request_body else None
 
     user_auth = os.environ.get("USER_AUTH_TOKEN", "")
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "WeAgent-ServiceCall/1.0",
     }
-    if user_auth:
+    if is_scoped_rag_search:
+        headers["X-Internal-API-Key"] = api_key
+        headers["X-WeAgent-User-ID"] = scope_user_id
+        headers["X-WeAgent-Domain"] = scope_domain
+        if scope_workspace_id:
+            headers["X-WeAgent-Workspace-ID"] = scope_workspace_id
+        if scope_domain == "edu" and scope_education_role:
+            headers["X-WeAgent-Education-Role"] = scope_education_role
+    elif user_auth:
         # Primary auth: user's JWT token (all services share the same JWT secret)
         headers["Authorization"] = user_auth
     else:
@@ -677,13 +970,22 @@ def _call_service_api(service_name: str, method: str = "GET",
 # ---- Backward-compatible rag_search (delegates to call_service_api) ----
 def _rag_search(query: str, top_k: int = 5, domain: str = "",
                 workspace_id: str = "", score_threshold: float = 0.0,
-                document_ids: list = None) -> dict:
+                document_ids: list = None,
+                _weagent_agent_id: str = "") -> dict:
     """Search the RAG knowledge base (delegates to call_service_api for rag service).
 
     Kept for backward compatibility — agents can also use call_service_api directly.
     """
     if not query or not str(query).strip():
         return {"query": query, "results": [], "total": 0}
+
+    scope_user_id = os.environ.get("RAG_SCOPE_USER_ID", "").strip()
+    scope_domain = os.environ.get("RAG_SCOPE_DOMAIN", "").strip()
+    scope_workspace_id = os.environ.get("RAG_SCOPE_WORKSPACE_ID", "").strip()
+    if not scope_user_id or not scope_domain:
+        raise RuntimeError("RAG search requires a server-issued user and domain scope")
+    if "rag" not in _agent_allowed_service_names(_weagent_agent_id):
+        raise PermissionError("RAG is not available to the current Agent")
 
     # Normalize document_ids — try param first, then config file, then env var
     doc_ids = None
@@ -710,14 +1012,22 @@ def _rag_search(query: str, top_k: int = 5, domain: str = "",
             except Exception:
                 pass
 
-    result = _call_service_api("rag", "POST", "/api/rag/search", body={
-        "query": str(query or ""),
-        "top_k": max(1, min(int(top_k or 5), 20)),
-        "domain": str(domain or "").strip() or None,
-        "workspace_id": str(workspace_id or "").strip() or None,
-        "score_threshold": max(0.0, min(float(score_threshold or 0.0), 1.0)),
-        "document_ids": doc_ids,
-    })
+    result = _call_service_api(
+        "rag",
+        "POST",
+        "/api/rag/search",
+        body={
+            "query": str(query or ""),
+            "top_k": max(1, min(int(top_k or 5), 20)),
+            "domain": scope_domain,
+            "workspace_id": scope_workspace_id or None,
+            "score_threshold": max(
+                0.0, min(float(score_threshold or 0.0), 1.0)
+            ),
+            "document_ids": doc_ids,
+        },
+        _weagent_agent_id=_weagent_agent_id,
+    )
 
     if result.get("status") == "error":
         raise RuntimeError(f"知识库检索失败: {result.get('error', 'unknown')}")
@@ -755,5 +1065,10 @@ def register_builtin_tools(registry: ToolRegistry):
     registry.register("git_diff", _git_diff, "Read git diff")
     registry.register("git_log", _git_log, "Read git log")
     registry.register("rag_search", _rag_search, "Search the RAG knowledge base for relevant document chunks")
+    registry.register(
+        "education_action",
+        _education_action,
+        "Read or write Education business objects within a server-issued run scope",
+    )
     registry.register("list_services", _list_services, "List all available microservices and their base URLs")
     registry.register("call_service_api", _call_service_api, "Call a microservice API endpoint generically (discover via /api/spec)")

@@ -24,6 +24,34 @@ def load_script_module(name, relative_path):
 
 
 class SandboxServiceAgentStage6Test(unittest.TestCase):
+    def test_event_bridge_hides_transport_markers_and_tool_protocol_from_chat(self):
+        raw = (
+            "Reading additional input from stdin...我先读取课程资料。\n\n"
+            '<tool_call>{"name":"rag_search","args":{"query":"gift"}}</tool_call>\n\n'
+            "已完成核对并生成审校摘要。"
+        )
+
+        summary = SandboxEventBridge._summary_text(raw)
+
+        self.assertNotIn("Reading additional input from stdin", summary)
+        self.assertNotIn("<tool_call>", summary)
+        self.assertNotIn("rag_search", summary)
+        self.assertIn("我先读取课程资料。", summary)
+        self.assertIn("已完成核对并生成审校摘要。", summary)
+
+    def test_event_bridge_keeps_agent_summary_but_hides_controlled_file_payloads(self):
+        raw = (
+            "## /workspace/agents/课件制作师/slide_document.json\n"
+            "```text\n{\"title\":\"Deck\",\"slides\":[{\"secret\":\"large\"}]}\n```\n\n"
+            "## /workspace/agents/课件制作师/preview.html\n"
+            "```text\n<html><body><main>Rendered deck</main></body></html>\n```\n\n"
+            "已完成 8 页课件，并保存为新版本。"
+        )
+
+        summary = SandboxEventBridge._summary_text(raw)
+
+        self.assertEqual(summary, "已完成 8 页课件，并保存为新版本。")
+
     def test_weagent_report_accepts_service_payload(self):
         report = load_script_module("weagent_report_stage6", "app/sandbox/bin/weagent-report")
 

@@ -1,11 +1,16 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from flask import Flask
 
 from app.sandbox.api import routes
 from app.sandbox.host.client import OrchestratorClient
-from app.sandbox.host.manager import _default_host_callback_url, _merge_no_proxy
+from app.sandbox.host.manager import (
+    DockerContainerManager,
+    _default_host_callback_url,
+    _merge_no_proxy,
+)
 
 
 class FakeSandboxManager:
@@ -148,6 +153,41 @@ class SandboxServiceHostStage2Test(unittest.TestCase):
         self.assertIn("127.0.0.1", parts)
         self.assertIn("host.docker.internal", parts)
         self.assertIn("gateway.docker.internal", parts)
+
+    def test_send_message_self_heals_incomplete_recovered_agent(self):
+        calls = []
+
+        class FakeClient:
+            def list_agents(self):
+                return {"agents": []}
+
+            def send_to_agent(self, agent_id, message):
+                calls.append((agent_id, message))
+                return {"status": "ok", "reply": "recovered"}
+
+        agent_config = {
+            "agent_id": "agent-1",
+            "role": "Researcher",
+            "adapter_name": "codex",
+        }
+        session = SimpleNamespace(
+            host_port=50123,
+            client=FakeClient(),
+            agents_config=[agent_config],
+        )
+        manager = object.__new__(DockerContainerManager)
+        manager.get_session = lambda session_id: session
+        manager._sync_skill_drafts_from_result = lambda *args: None
+        recreated = []
+        manager._create_agent_in_container = (
+            lambda host_port, config: recreated.append((host_port, config))
+        )
+
+        result = manager.send_message("session-1", "agent-1", "continue")
+
+        self.assertEqual({"status": "ok", "reply": "recovered"}, result)
+        self.assertEqual([(50123, agent_config)], recreated)
+        self.assertEqual([("agent-1", "continue")], calls)
 
 
 if __name__ == "__main__":

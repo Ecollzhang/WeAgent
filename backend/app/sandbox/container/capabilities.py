@@ -23,6 +23,7 @@ BUILTIN_TOOL_RUNTIME_NAMES = {
     "terminal": {"run_command_safe"},
     "git_operations": {"git_status", "git_diff", "git_log"},
     "rag_search": {"rag_search"},
+    "education_actions": {"education_action"},
 }
 
 TOOL_PERMISSION_USAGE = {
@@ -48,6 +49,7 @@ TOOL_PERMISSION_USAGE = {
     "image_analysis": ["read_workspace"],
     "image_generate": ["write_workspace"],
     "rag_search": ["network"],
+    "education_action": ["network"],
 }
 
 
@@ -150,6 +152,11 @@ def agent_bootstrap_instruction(agent_id: str,
         f"- Read available skills from {base}/skill-index.json\n"
         f"- Read available tools from {base}/tool-index.json\n"
         f"- Respect permission grants in {base}/permissions.json\n"
+        "These JSON files are filesystem metadata, not MCP resources. Read them "
+        "only with an ordinary filesystem tool when one is available; never call "
+        "read_mcp_resource or invent an MCP server for their paths.\n"
+        "When bound tools are exposed by the provider, invoke bound native tools "
+        "directly from their supplied schema instead of probing for documentation.\n"
         "Only use capabilities listed in those files for this agent."
     )
 

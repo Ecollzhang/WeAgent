@@ -41,7 +41,9 @@ def create_conversation():
         owner_id=user_id,
         participant_ids=data['participant_ids'],
         workspace_id=data.get('workspace_id'),
+        workspace_context=data.get('workspace_context') or {},
         kb_domain=data.get('kb_domain') or '',
+        agent_configs=data.get('agent_configs') or {},
         kb_document_ids=data.get('kb_document_ids'),
         services=data.get('services') or [],
         project_id=data.get('project_id') or None,
@@ -58,7 +60,10 @@ def create_conversation():
 @jwt_required()
 def get_conversation(conversation_id):
     """Get conversation detail."""
-    result, error = conversation_service.get_conversation_detail(conversation_id)
+    result, error = conversation_service.get_conversation_detail(
+        conversation_id,
+        get_jwt_identity(),
+    )
 
     if error:
         return error_response(error, code=404)
@@ -163,6 +168,30 @@ def stop_agent(conversation_id, agent_id):
         return error_response(error, code=400)
 
     return success_response(result, message='Agent stopped')
+
+@conversation_bp.route('/<conversation_id>/runtime-preflight', methods=['GET'])
+@jwt_required()
+def runtime_preflight(conversation_id):
+    user_id = get_jwt_identity()
+    required_tools = [
+        item.strip()
+        for item in request.args.get('required_tools', '').split(',')
+        if item.strip()
+    ]
+    agent_ids = [
+        item.strip()
+        for item in request.args.get('agent_ids', '').split(',')
+        if item.strip()
+    ]
+    result, error = conversation_service.runtime_preflight(
+        conversation_id,
+        user_id,
+        required_tools,
+        agent_ids=agent_ids,
+    )
+    if error:
+        return error_response(error, code=400)
+    return success_response(result)
 
 
 @conversation_bp.route('/<conversation_id>/attachments', methods=['GET'])

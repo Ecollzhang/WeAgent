@@ -1,0 +1,60 @@
+# Education MVP 实施决策
+
+## DEC-001：开发阶段连续推进
+
+- 每个工作包执行自动测试、自审、回滚点和灰度验证。
+- 阶段完成后自动进入下一工作包，不设置用户审核门。
+- 产品运行时的教师发布、反馈和最终成绩审批保持不变。
+
+## DEC-002：测试 seam
+
+设计文档已经确认以下公共 seam，实施以这些 seam 做行为测试：
+
+- 核心领域代理：`/api/domain/edu/*`。
+- Education HTTP API：课程、成员、课时、发布、作业、提交、反馈、学情。
+- RAG/Search adapter 合同：SearchHit、FetchedDocument、EvidenceChunk。
+- Agent/Workflow 合同：版本化输入输出、EducationAgentRun、审批门。
+- Artifact：核心 Artifact ID、授权预览和可打开导出文件。
+- 前端：真实路由与用户可见教师/学生流程。
+
+不以私有方法、数据库副作用或内部调用次数作为主要验收 seam。
+
+## DEC-003：真实配置与密钥
+
+- 根目录 `.env` 仅通过现有配置加载器使用。
+- 不输出、复制、提交或写入 Artifact。
+- 常规自动化测试使用确定性 fixture；真实 provider 仅用于集成和最终 UAT。
+- UAT 只使用合成账号和自有/开放教学材料。
+
+## DEC-004：教师一级入口是独立业务领域
+
+- 教学空间、PPT 与课件、学生画像与评估各自拥有课程驱动的页面流程、读模型和验收标准。
+- 三个领域入口直接进入 WeAgent 最左侧全局 Sidebar，删除 Education 内侧领域栏；
+  “教学空间”只能出现一次。
+- 当前课程选择器位于 Education 页面顶部共享上下文栏。
+- 学生一级领域固定为教学空间、模拟考试、课程思维导图；课件下载、完成作业和作业弱点
+  都属于学生教学空间。
+- PPT 与课件严格从课程和课时上下文生成或编辑 SlideDocument，并管理多版本与导出。
+- 学生画像先呈现班级正式成绩统计，再下钻到学生与原始证据。
+- 客观题规则判分和教师确认后的主观题最终成绩进入正式统计；AI 建议分只作为待确认数据。
+- 单次作业/考试保留原始分和满分；跨作业/考试汇总先换算百分制，禁止直接聚合不同满分。
+- Agent 是领域内的生成、分析和校验能力，不是普通教师必须进入的一级协作台。
+- 业务页只显示最新运行和最新产物；“协作历史”回到聊天查看旧运行。Education 运行、
+  核心聊天和 canonical 产物保留双向链接。
+- 前端不显示 Conversation ID、Sandbox ID、原始思维链或底层 provider 实现细节。
+
+## DEC-005：sandbox 可丢弃，聊天和可见产物必须持久
+
+- 历史 Conversation、Message、Workflow elements 由核心数据库读取，不依赖 Docker。
+- 任何可见 Agent 产物在暴露预览前持久化为核心 Artifact 或 Education 对象/版本。
+- sandbox 终态后按可配置 TTL 回收；继续旧聊天时创建新的 runtime generation，并从数据库
+  消息、持久附件、Education 上下文和必要快照恢复。
+- 正式 Education 对象不随聊天或 sandbox 删除。
+
+## DEC-006：课件先保证可靠写入，再增强视觉质量
+
+- 课件运行启动前预检 MCP/tool catalog、授权 grant 和 `education_action` 可调用性。
+- 缺少成功 `edu.courseware.create` 时保留可恢复草稿，只定向重试课件写入节点一次；
+  第二次仍失败则保持 `partial`。
+- 当前基础可编辑 PPTX 不等同于视觉质量完成。后续阶段提供多风格选择、插图能力、逐页渲染、
+  视觉检查和问题页自动修复。

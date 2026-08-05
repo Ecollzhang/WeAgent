@@ -75,6 +75,16 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE messages ADD COLUMN meta JSON DEFAULT NULL'))
             conn.commit()
 
+    # artifacts table — owner for message-less artifacts and ACL auditing
+    if 'artifacts' in inspector.get_table_names():
+        cols = [c['name'] for c in inspector.get_columns('artifacts')]
+        with db.engine.connect() as conn:
+            if 'owner_user_id' not in cols:
+                conn.execute(text(
+                    'ALTER TABLE artifacts ADD COLUMN owner_user_id VARCHAR(36) DEFAULT NULL'
+                ))
+            conn.commit()
+
     # conversations table — sandbox lifecycle columns
     if 'conversations' in inspector.get_table_names():
         cols = [c['name'] for c in inspector.get_columns('conversations')]
@@ -93,12 +103,34 @@ def _migrate_existing_tables():
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN last_active_at DATETIME DEFAULT NULL'))
             if 'stopped_at' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN stopped_at DATETIME DEFAULT NULL'))
+            if 'sandbox_generation' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_generation INTEGER NOT NULL DEFAULT 1'))
+            if 'sandbox_expires_at' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_expires_at DATETIME DEFAULT NULL'))
+            if 'sandbox_snapshot_path' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_path VARCHAR(500) DEFAULT NULL'))
+            if 'sandbox_snapshot_sha256' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_sha256 VARCHAR(64) DEFAULT NULL'))
+            if 'sandbox_snapshot_size' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_size INTEGER DEFAULT NULL'))
+            if 'sandbox_snapshot_at' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_snapshot_at DATETIME DEFAULT NULL'))
             if 'workspace_id' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(36) DEFAULT NULL'))
             if 'kb_domain' not in cols:
-                conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_domain VARCHAR(20) DEFAULT NULL'))
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_domain VARCHAR(20) NOT NULL DEFAULT ""'))
+            if 'sandbox_server_fallback' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_server_fallback BOOLEAN NOT NULL DEFAULT 0'))
+            if 'sandbox_agent_adapters' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_agent_adapters JSON DEFAULT NULL'))
+            if 'sandbox_agent_service_views' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN sandbox_agent_service_views JSON DEFAULT NULL'))
             if 'kb_document_ids' not in cols:
                 conn.execute(text('ALTER TABLE conversations ADD COLUMN kb_document_ids JSON DEFAULT NULL'))
+            if 'services' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN services JSON DEFAULT NULL'))
+            if 'project_id' not in cols:
+                conn.execute(text('ALTER TABLE conversations ADD COLUMN project_id VARCHAR(36) DEFAULT NULL'))
             conn.commit()
 
     # workspaces table — sub_role column
@@ -200,8 +232,8 @@ def _migrate_existing_tables():
 
 
 def _migrate_grayscale_configs():
-    """Update existing grayscale configs — clean up, enable all, fix common domain."""
-    from sqlalchemy import text as _text, inspect as _inspect
+    """Update existing grayscale configs without overriding operator choices."""
+    from sqlalchemy import bindparam as _bindparam, text as _text, inspect as _inspect
     inspector = _inspect(db.engine)
     if 'grayscale_config' not in inspector.get_table_names():
         return
@@ -218,25 +250,31 @@ def _migrate_grayscale_configs():
             'ui.sidebar.projects', 'ui.sidebar.repos', 'ui.sidebar.reviews', 'ui.sidebar.builds',
             'ui.sidebar.courses', 'ui.sidebar.assignments', 'ui.sidebar.resources',
             'ui.sidebar.grades', 'ui.sidebar.students',
+            'ui.sidebar.education-help', 'ui.sidebar.mock-exams', 'ui.sidebar.mind-maps',
+            'ui.sidebar.courseware', 'ui.sidebar.insights',
             'ui.sidebar.organization',
             'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
             'ui.sidebar.reports', 'ui.sidebar.schedules',
+            'feature.education.enabled',
+            'feature.education.chat.enabled',
+            'feature.education.chat.manual_create',
+            'feature.education.chat.tools',
+            'feature.education.rag.enabled',
+            'ui.chat.header.compact_title',
+            'ui.chat.education_context_bar',
             # RD 领域卡片
             'ui.chat.card.requirement', 'ui.chat.card.bug', 'ui.chat.card.iteration', 'ui.chat.card.project', 'ui.chat.card.office',
+            'ui.chat.card.education',
             # 聊天标签页
             'ui.chat.tabs.agent_config', 'ui.chat.tabs.artifacts', 'ui.chat.tabs.logs',
             'ui.chat.tabs.workflow', 'ui.chat.tabs.knowledge_base',
         }
-        conn.execute(_text(
+        cleanup_statement = _text(
             "DELETE FROM grayscale_config WHERE config_key NOT IN :keys"
-        ), {'keys': tuple(wired_keys)})
+        ).bindparams(_bindparam("keys", expanding=True))
+        conn.execute(cleanup_statement, {'keys': sorted(wired_keys)})
 
-        # 2. Enable all configs
-        conn.execute(_text(
-            "UPDATE grayscale_config SET enabled = 1, visible = 1 WHERE enabled = 0 OR visible = 0"
-        ))
-
-        # 3. Move shared sidebar entries from rd/edu/office to common domain
+        # 2. Move shared sidebar entries from rd/edu/office to common domain
         shared_keys = ['ui.sidebar.agents', 'ui.sidebar.tools', 'ui.sidebar.favorites', 'ui.sidebar.knowledge']
         for key in shared_keys:
             # Check if common entry already exists
@@ -264,7 +302,7 @@ def _migrate_grayscale_configs():
                 "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
             ), {'key': key})
 
-        # 4. Ensure chat feature configs exist in common with domains
+        # 3. Ensure chat feature configs exist in common with domains
         chat_keys = ['ui.chat.workspace', 'ui.chat.services', 'ui.chat.attachments']
         for key in chat_keys:
             exists = conn.execute(_text(
@@ -298,6 +336,7 @@ def _migrate_grayscale_configs():
             ('ui.chat.card.project', '聊天-项目卡片'),
             ('ui.chat.card.office', '聊天-办公卡片'),
         ]
+        rd_domains_json = _json2.dumps(['rd'])
         for key, name in card_keys:
             exists = conn.execute(_text(
                 "SELECT id FROM grayscale_config WHERE config_key = :key AND domain = 'common'"
@@ -306,11 +345,64 @@ def _migrate_grayscale_configs():
                 conn.execute(_text(
                     "INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) "
                     "VALUES (:key, :name, 'ui', 'common', 1, 1, :domains)"
-                ), {'key': key, 'name': name, 'domains': all_domains_json})
+                ), {'key': key, 'name': name, 'domains': rd_domains_json})
+            conn.execute(_text(
+                "UPDATE grayscale_config SET domains = :domains "
+                "WHERE config_key = :key AND domain = 'common'"
+            ), {'key': key, 'domains': rd_domains_json})
             # Remove any per-domain duplicates
             conn.execute(_text(
                 "DELETE FROM grayscale_config WHERE config_key = :key AND domain != 'common'"
             ), {'key': key})
+
+        education_chat_flags = [
+            ('feature.education.chat.enabled', 'Education chat', 'feature'),
+            ('feature.education.chat.manual_create', 'Education manual conversation', 'feature'),
+            ('feature.education.chat.tools', 'Education chat tools', 'feature'),
+            ('feature.education.rag.enabled', 'Education course knowledge search', 'feature'),
+            ('ui.chat.header.compact_title', 'Education compact chat title', 'ui'),
+            ('ui.chat.education_context_bar', 'Education context bar', 'ui'),
+        ]
+        for key, name, config_type in education_chat_flags:
+            exists = conn.execute(_text(
+                "SELECT id FROM grayscale_config "
+                "WHERE config_key = :key AND domain = 'edu'"
+            ), {'key': key}).first()
+            if not exists:
+                conn.execute(_text(
+                    "INSERT INTO grayscale_config "
+                    "(config_key, config_name, config_type, domain, enabled, visible, domains) "
+                    "VALUES (:key, :name, :config_type, 'edu', 1, 1, NULL)"
+                ), {'key': key, 'name': name, 'config_type': config_type})
+            conn.execute(_text(
+                "DELETE FROM grayscale_config "
+                "WHERE config_key = :key AND domain != 'edu'"
+            ), {'key': key})
+
+        education_card_key = 'ui.chat.card.education'
+        education_domains_json = _json2.dumps(['edu'])
+        exists = conn.execute(_text(
+            "SELECT id FROM grayscale_config "
+            "WHERE config_key = :key AND domain = 'common'"
+        ), {'key': education_card_key}).first()
+        if not exists:
+            conn.execute(_text(
+                "INSERT INTO grayscale_config "
+                "(config_key, config_name, config_type, domain, enabled, visible, domains) "
+                "VALUES (:key, :name, 'ui', 'common', 1, 1, :domains)"
+            ), {
+                'key': education_card_key,
+                'name': 'Chat - Education card',
+                'domains': education_domains_json,
+            })
+        conn.execute(_text(
+            "UPDATE grayscale_config SET domains = :domains "
+            "WHERE config_key = :key AND domain = 'common'"
+        ), {'key': education_card_key, 'domains': education_domains_json})
+        conn.execute(_text(
+            "DELETE FROM grayscale_config "
+            "WHERE config_key = :key AND domain != 'common'"
+        ), {'key': education_card_key})
 
         # 6. Ensure chat tab configs exist in common
         chat_tab_keys = [
@@ -376,6 +468,14 @@ def _seed_grayscale_configs():
             ('ui.sidebar.resources', '侧边栏-教学资源', 'ui', 'edu', 1, 1),
             ('ui.sidebar.grades', '侧边栏-成绩管理', 'ui', 'edu', 1, 1),
             ('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.education-help', '侧边栏-帮助中心', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.mock-exams', '侧边栏-模拟考试', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.mind-maps', '侧边栏-思维导图', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.courseware', '侧边栏-PPT课件', 'ui', 'edu', 1, 1),
+            ('ui.sidebar.insights', '侧边栏-学生评估', 'ui', 'edu', 1, 1),
+            ('feature.education.enabled', 'Education feature', 'feature', 'edu', 1, 1),
+            ('ui.chat.header.compact_title', 'Education compact chat title', 'ui', 'edu', 1, 1),
+            ('ui.chat.education_context_bar', 'Education context bar', 'ui', 'edu', 1, 1),
             # ===== 智慧办公 (office) =====
             ('ui.sidebar.organization', '侧边栏-组织协同', 'ui', 'office', 1, 1),
             ('ui.sidebar.documents', '侧边栏-公文管理', 'ui', 'office', 1, 1),
@@ -450,18 +550,26 @@ def _seed_default_workspaces():
                 ), {'id': ws_id, 'uid': user_id, 'domain': domain, 'name': name, 'desc': desc, 'now': now})
                 conn.commit()
 
-    # 将 workspace_id 为空的已有会话关联到用户的研发空间（逐条处理，兼容 SQLite）
+    # 将旧会话按其可信领域回填到对应工作空间（逐条处理，兼容 SQLite）。
     with db.engine.connect() as conn:
         result = conn.execute(
-            _text("SELECT c.id, c.owner_id FROM conversations c WHERE c.workspace_id IS NULL")
+            _text(
+                "SELECT c.id, c.owner_id, c.kb_domain "
+                "FROM conversations c WHERE c.workspace_id IS NULL"
+            )
         )
-        orphan_convs = [(row[0], row[1]) for row in result]
+        orphan_convs = [(row[0], row[1], row[2]) for row in result]
 
-    for conv_id, owner_id in orphan_convs:
+    for conv_id, owner_id, kb_domain in orphan_convs:
+        target_domain = kb_domain if kb_domain in {'rd', 'edu', 'office'} else 'rd'
         with db.engine.connect() as conn:
             ws = conn.execute(
-                _text("SELECT w.id FROM workspaces w WHERE w.user_id = :uid AND w.domain = 'rd' LIMIT 1"),
-                {'uid': owner_id}
+                _text(
+                    "SELECT w.id FROM workspaces w "
+                    "WHERE w.user_id = :uid AND w.domain = :domain "
+                    "AND w.status = 'active' LIMIT 1"
+                ),
+                {'uid': owner_id, 'domain': target_domain}
             ).fetchone()
             if ws:
                 conn.execute(
@@ -478,8 +586,16 @@ def create_app(config_name=None):
 
     app = Flask(__name__)
 
-    # Load configuration
-    from config import config_by_name
+    # Load the core configuration by file path. Domain services also have
+    # top-level ``config.py`` modules and may be imported in the same process.
+    import importlib.util
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.py')
+    config_spec = importlib.util.spec_from_file_location(
+        'weagent_core_config', os.path.abspath(config_path)
+    )
+    config_module = importlib.util.module_from_spec(config_spec)
+    config_spec.loader.exec_module(config_module)
+    config_by_name = config_module.config_by_name
     app.config.from_object(config_by_name[config_name])
 
     # Initialize extensions
@@ -606,6 +722,7 @@ def create_app(config_name=None):
         try:
             from app.services.capability_service import capability_service
             capability_service.seed_builtin_tool_capabilities()
+            capability_service.seed_education_agent_tool_bindings()
         except Exception as e:
             print(f'[WeAgent] Capability seed note: {e}')
 

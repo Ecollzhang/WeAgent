@@ -1,5 +1,14 @@
-from flask import request
+import hashlib
+import os
+import re
+import uuid
+from datetime import timedelta
 
+from flask import current_app, has_request_context, request
+from flask_jwt_extended import create_access_token
+import requests
+
+from app.models.conversation import Conversation
 from app.models.message import Message
 from app.utils.timezone import format_beijing, beijing_now
 from app.models.user import User
@@ -29,6 +38,29 @@ SERVICE_DISPLAY_NAMES = {
 }
 
 
+def _current_authorization_header():
+    """Return the caller token only while handling an authenticated request."""
+    if not has_request_context():
+        return ""
+    return str(request.headers.get("Authorization", "") or "")
+
+
+def _education_runtime_authorization(actor_user_id):
+    """Return request auth or a short-lived core token for background EDU work."""
+    authorization = _current_authorization_header()
+    if authorization:
+        return authorization
+    actor_user_id = str(actor_user_id or "").strip()
+    if not actor_user_id:
+        return ""
+    token = create_access_token(
+        identity=actor_user_id,
+        additional_claims={"service": "core-sandbox-runtime"},
+        expires_delta=timedelta(minutes=15),
+    )
+    return f"Bearer {token}"
+
+
 def _fetch_service_spec_cached(name, ttl=300):
     """获取服务 spec，带内存缓存（TTL 5分钟）。"""
     import requests as _requests
@@ -40,15 +72,28 @@ def _fetch_service_spec_cached(name, ttl=300):
     base_url = SERVICE_REGISTRY_URLS.get(name, "")
     if not base_url:
         return None
-    try:
-        resp = _requests.get(f"{base_url}/api/{name}/spec", timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            spec = data.get("data", data)
-            _spec_cache[name] = (spec, now + ttl)
-            return spec
-    except Exception:
-        pass
+    discovery_urls = [base_url]
+    if "://host.docker.internal" in base_url:
+        discovery_urls.append(
+            base_url.replace(
+                "://host.docker.internal",
+                "://127.0.0.1",
+                1,
+            )
+        )
+    for discovery_url in discovery_urls:
+        try:
+            resp = _requests.get(
+                f"{discovery_url}/api/{name}/spec",
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                spec = data.get("data", data)
+                _spec_cache[name] = (spec, now + ttl)
+                return spec
+        except Exception:
+            continue
     return None
 
 
@@ -56,6 +101,24 @@ def _build_services_summary(services):
     """根据选中的服务列表，构建能力摘要文本注入 Agent prompt。"""
     if not services:
         return ""
+    if 'edu' in services:
+        labels = {
+            'edu': 'Education 课程业务',
+            'rag': '课程范围知识检索',
+        }
+        available = [
+            labels[name]
+            for name in ('edu', 'rag')
+            if name in services
+        ]
+        return (
+            "## 当前 Agent 的受控服务视角\n"
+            f"- 可用能力：{'、'.join(available)}\n"
+            "- 只使用已投影到当前 Agent 的工具；list_services 只返回"
+            "当前 Agent 自己的服务，不得借用同组其他 Agent 的能力。\n"
+            "- Education 写操作必须使用 education_action；不得使用 curl、"
+            "任意 URL 或直接 API 写入。"
+        )
     lines = ["## 可用微服务（用curl + $USER_AUTH_TOKEN直接调用）"]
     idx = 0
     for name in services:
@@ -139,7 +202,7 @@ def _build_project_context(project_id):
         import requests as _requests
         import json as _json
         from flask import current_app
-        auth_header = request.headers.get("Authorization", "")
+        auth_header = _current_authorization_header()
         headers = {"Authorization": auth_header} if auth_header else {}
         base = SERVICE_REGISTRY_URLS.get("rd", "http://host.docker.internal:5101")
         resp = _requests.get(f"{base}/api/rd/projects/{project_id}",
@@ -172,6 +235,175 @@ API返回JSON数据后，根据数据回答用户问题。"""
         from flask import current_app
         current_app.logger.warning(f"查询项目上下文失败 (project_id={project_id}): {e}")
         return f"项目 ID: {project_id}（RD 服务暂不可达，稍后可通过 API 查询）"
+
+
+def _trusted_education_runtime_env(agent_configs, kb_domain=''):
+    """Extract one opaque Education grant without exposing it to Agent prompts."""
+    if kb_domain != 'edu' or not isinstance(agent_configs, dict):
+        return {}
+    grants = set()
+    membership_roles = set()
+    for config in agent_configs.values():
+        if not isinstance(config, dict):
+            continue
+        context = config.get('education_tool_context')
+        if not isinstance(context, dict):
+            continue
+        token = str(context.get('run_grant') or '').strip()
+        if token:
+            grants.add(token)
+        membership_role = str(
+            context.get('membership_role') or ''
+        ).strip()
+        if membership_role:
+            membership_roles.add(membership_role)
+    if not grants:
+        return {}
+    if len(grants) != 1:
+        raise ValueError('conflicting Education run grants')
+    if len(membership_roles) > 1:
+        raise ValueError('conflicting Education membership roles')
+    token = grants.pop()
+    import re
+    if not re.fullmatch(r'[A-Za-z0-9._~-]{20,256}', token):
+        raise ValueError('invalid Education run grant')
+    import os
+    environment = {
+        'EDUCATION_RUN_GRANT': token,
+        'EDUCATION_SERVICE_URL': os.getenv(
+            'EDUCATION_SERVICE_URL',
+            'http://host.docker.internal:5102',
+        ).rstrip('/'),
+    }
+    if membership_roles:
+        environment['EDUCATION_MEMBERSHIP_ROLE'] = membership_roles.pop()
+    return environment
+
+
+def _validate_education_runtime_grant(token, actor_user_id):
+    """Confirm the opaque runtime grant belongs to the authenticated actor."""
+    base_url = str(
+        current_app.config.get(
+            'EDUCATION_RUNTIME_VALIDATION_URL',
+            'http://127.0.0.1:5102',
+        )
+    ).rstrip('/')
+    try:
+        response = requests.post(
+            f'{base_url}/api/edu/tool-grants/verify-runtime',
+            headers={'X-Education-Run-Grant': str(token or '')},
+            json={'actor_user_id': str(actor_user_id or '')},
+            timeout=(2, 5),
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return False
+    return response.status_code == 200 and payload.get('valid') is True
+
+
+def _request_education_runtime_context(conversation_id, actor_user_id):
+    """Exchange a core service identity for a fresh course-scoped run grant."""
+    base_url = str(
+        current_app.config.get(
+            'EDUCATION_RUNTIME_VALIDATION_URL',
+            'http://127.0.0.1:5102',
+        )
+    ).rstrip('/')
+    service_token = create_access_token(
+        identity='weagent-core-runtime',
+        additional_claims={
+            'service': 'core',
+            'actor_user_id': str(actor_user_id),
+        },
+        expires_delta=timedelta(minutes=2),
+    )
+    try:
+        response = requests.post(
+            (
+                f'{base_url}/api/edu/conversations/'
+                f'{conversation_id}/runtime-grant'
+            ),
+            headers={'Authorization': f'Bearer {service_token}'},
+            timeout=(2, 8),
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(
+            'Education runtime authorization service is unavailable'
+        ) from exc
+    if response.status_code != 201 or not isinstance(payload, dict):
+        message = (
+            payload.get('error')
+            if isinstance(payload, dict)
+            else None
+        )
+        raise RuntimeError(
+            message or 'Education runtime authorization was rejected'
+        )
+    run_grant = str(payload.get('run_grant') or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9._~-]{20,256}', run_grant):
+        raise RuntimeError('Education runtime returned an invalid grant')
+    views = payload.get('agent_service_views')
+    services = payload.get('services')
+    if (
+        not isinstance(views, dict)
+        or not views
+        or not isinstance(services, list)
+        or any(
+            not isinstance(agent_id, str)
+            or not isinstance(agent_services, list)
+            or any(
+                service not in {'edu', 'rag', 'rd', 'office'}
+                for service in agent_services
+            )
+            for agent_id, agent_services in views.items()
+        )
+    ):
+        raise RuntimeError('Education runtime returned an invalid service scope')
+    return {
+        **payload,
+        'run_grant': run_grant,
+        'agent_service_views': views,
+        'services': list(dict.fromkeys(services)),
+    }
+
+
+def _trusted_rag_scope(
+    conversation,
+    user_id,
+    kb_domain='',
+    *,
+    education_context=None,
+):
+    """Build a server-issued RAG scope; model/tool arguments cannot widen it."""
+    allowed_domains = {'rd', 'edu', 'office'}
+    scope = {
+        'RAG_SCOPE_USER_ID': str(user_id),
+        'RAG_SCOPE_DOMAIN': kb_domain if kb_domain in allowed_domains else 'rd',
+    }
+    if kb_domain == 'edu' and isinstance(education_context, dict):
+        course_id = str(education_context.get('course_id') or '').strip()
+        membership_role = str(
+            education_context.get('membership_role') or ''
+        ).strip()
+        if course_id and membership_role in {'teacher', 'student'}:
+            scope.update({
+                'RAG_SCOPE_DOMAIN': 'edu',
+                'RAG_SCOPE_WORKSPACE_ID': course_id,
+                'RAG_SCOPE_EDUCATION_ROLE': membership_role,
+            })
+            return scope
+    if conversation.workspace_id:
+        from app.models.workspace import Workspace
+
+        workspace = Workspace.query.filter_by(
+            id=conversation.workspace_id,
+            user_id=user_id,
+        ).first()
+        if workspace and workspace.domain in allowed_domains:
+            scope['RAG_SCOPE_DOMAIN'] = workspace.domain
+            scope['RAG_SCOPE_WORKSPACE_ID'] = workspace.id
+    return scope
 
 
 def _safe_workspace_name(name):
@@ -282,6 +514,18 @@ class ConversationService:
     def _conv_to_dict(self, conversation):
         """Serialize conversation with participants."""
         data = conversation.to_dict()
+        data.pop('sandbox_snapshot_path', None)
+        data.pop('sandbox_snapshot_sha256', None)
+        data.pop('sandbox_server_fallback', None)
+        data.pop('sandbox_agent_adapters', None)
+        data.pop('sandbox_agent_service_views', None)
+        data['sandbox_runtime'] = {
+            'status': conversation.sandbox_status,
+            'generation': conversation.sandbox_generation or 1,
+            'expires_at': format_beijing(conversation.sandbox_expires_at),
+            'snapshot_available': bool(conversation.sandbox_snapshot_path),
+            'snapshot_at': format_beijing(conversation.sandbox_snapshot_at),
+        }
         data['participant_ids'] = [
             f"{p.participant_type}_{p.participant_id}"
             for p in conversation.participants
@@ -289,8 +533,91 @@ class ConversationService:
         data['participants_info'] = _enrich_participants(conversation.participants)
         return data
 
-    def create_conversation(self, title, conv_type, owner_id, participant_ids, workspace_id=None, kb_domain='', kb_document_ids=None, services=None, project_id=None):
+    @staticmethod
+    def _resolve_owned_workspace(
+        owner_id,
+        workspace_id=None,
+        kb_domain='',
+        workspace_context=None,
+    ):
+        from app.models.workspace import Workspace
+
+        context = workspace_context if isinstance(workspace_context, dict) else {}
+        domain = str(context.get('domain') or kb_domain or '').strip()
+        role = str(context.get('role') or '').strip()
+        if domain not in {'rd', 'edu', 'office'}:
+            domain = ''
+        if role not in {'teacher', 'student'}:
+            role = ''
+
+        if workspace_id:
+            workspace = Workspace.query.filter_by(
+                id=workspace_id,
+                user_id=owner_id,
+                status='active',
+            ).first()
+            if not workspace:
+                raise ValueError('Workspace not found')
+            if domain and workspace.domain != domain:
+                raise ValueError('Workspace domain does not match conversation')
+            return workspace.id
+
+        if not domain:
+            return None
+        query = Workspace.query.filter_by(
+            user_id=owner_id,
+            domain=domain,
+            status='active',
+        )
+        workspace = None
+        if domain == 'edu' and role:
+            workspace = query.filter_by(sub_role=role).order_by(
+                Workspace.sort_order,
+                Workspace.created_at,
+            ).first()
+        if not workspace:
+            workspace = query.order_by(
+                Workspace.sort_order,
+                Workspace.created_at,
+            ).first()
+        if not workspace:
+            role_labels = {'teacher': '教师', 'student': '学生'}
+            workspace = Workspace(
+                id=str(uuid.uuid4()),
+                user_id=owner_id,
+                domain=domain,
+                sub_role=role if domain == 'edu' else '',
+                name=(
+                    f"{role_labels.get(role, '')}教育空间"
+                    if domain == 'edu'
+                    else f"{domain.upper()} 工作空间"
+                ),
+                description=(
+                    "由 Education 产品任务自动创建的持久会话空间"
+                    if domain == 'edu'
+                    else "系统自动创建的领域工作空间"
+                ),
+                icon='education' if domain == 'edu' else 'default',
+                status='active',
+            )
+            db.session.add(workspace)
+            db.session.flush()
+        return workspace.id if workspace else None
+
+    def create_conversation(self, title, conv_type, owner_id, participant_ids,
+                            workspace_id=None, workspace_context=None,
+                            kb_domain='', agent_configs=None,
+                            kb_document_ids=None, services=None, project_id=None):
         """Create a new conversation with participants, optionally in a workspace."""
+        try:
+            workspace_id = self._resolve_owned_workspace(
+                owner_id,
+                workspace_id=workspace_id,
+                kb_domain=kb_domain,
+                workspace_context=workspace_context,
+            )
+        except ValueError as exc:
+            return None, str(exc)
         conversation = conversation_repo.create(
             title=title,
             type=conv_type,
@@ -301,6 +628,44 @@ class ConversationService:
             services=services or None,
             project_id=project_id or None,
         )
+        conversation.kb_domain = (
+            str(kb_domain or '').strip()
+            if str(kb_domain or '').strip() in {'rd', 'edu', 'office'}
+            else ''
+        )
+        allowed_adapters = {'claude', 'codex', 'opencode'}
+        conversation.sandbox_agent_adapters = {
+            str(agent_id): adapter
+            for agent_id, config in (agent_configs or {}).items()
+            if isinstance(config, dict)
+            for adapter in [str(config.get('adapter_name') or '').strip()]
+            if adapter in allowed_adapters
+        }
+        service_union = {
+            str(name)
+            for name in (services or [])
+            if str(name) in {'rd', 'rag', 'edu', 'office'}
+        }
+        conversation.sandbox_agent_service_views = {
+            str(agent_id): [
+                name
+                for name in ('edu', 'rag', 'rd', 'office')
+                if name in service_union
+                and name in {
+                    str(item)
+                    for item in (
+                        config.get('allowed_services')
+                        if isinstance(config, dict)
+                        and isinstance(config.get('allowed_services'), list)
+                        else []
+                    )
+                }
+            ]
+            for agent_id, config in (agent_configs or {}).items()
+            if isinstance(config, dict)
+            and isinstance(config.get('allowed_services'), list)
+        }
+        db.session.commit()
 
         # Add owner as participant with display info
         info = _participant_display_info('user', owner_id)
@@ -346,7 +711,13 @@ class ConversationService:
             if p.participant_type == 'agent'
         ]
         if agent_participants:
-            error = self._create_agent_sandbox(conversation, agent_participants, owner_id, kb_domain=kb_domain)
+            error = self._create_agent_sandbox(
+                conversation,
+                agent_participants,
+                owner_id,
+                kb_domain=kb_domain,
+                agent_configs=agent_configs,
+            )
             if error:
                 conversation.delete()
                 return None, error
@@ -375,15 +746,67 @@ class ConversationService:
     def _create_single_agent_sandbox(self, conversation, participant, user_id, kb_domain=''):
         return self._create_agent_sandbox(conversation, [participant], user_id, kb_domain=kb_domain)
 
-    def _create_agent_sandbox(self, conversation, participants, user_id, kb_domain=''):
+    def _create_agent_sandbox(
+        self,
+        conversation,
+        participants,
+        user_id,
+        kb_domain='',
+        agent_configs=None,
+        allow_server_fallback=False,
+        rehydrating=False,
+    ):
+        try:
+            education_runtime_env = _trusted_education_runtime_env(
+                agent_configs,
+                kb_domain=kb_domain,
+            )
+        except ValueError as exc:
+            return str(exc)
+        if education_runtime_env:
+            valid = _validate_education_runtime_grant(
+                education_runtime_env['EDUCATION_RUN_GRANT'],
+                user_id,
+            )
+            if not valid:
+                return 'Education runtime authorization is invalid'
+            allow_server_fallback = True
+            conversation.sandbox_server_fallback = True
+        elif not rehydrating:
+            conversation.sandbox_server_fallback = False
+        env_vars, error = settings_service.get_container_env_vars(
+            user_id,
+            allow_server_fallback=bool(allow_server_fallback),
+        )
         import json as _json
-
-        env_vars, error = settings_service.get_container_env_vars(user_id)
         if error:
             return error
+        env_vars = dict(env_vars or {})
+        education_scope = None
+        if isinstance(agent_configs, dict):
+            for config in agent_configs.values():
+                context = (
+                    config.get('education_tool_context')
+                    if isinstance(config, dict)
+                    else None
+                )
+                if isinstance(context, dict) and context.get('course_id'):
+                    education_scope = context
+                    break
+        rag_scope = _trusted_rag_scope(
+            conversation,
+            user_id,
+            kb_domain,
+            education_context=education_scope,
+        )
+        env_vars.update(rag_scope)
+        env_vars.update(education_runtime_env)
 
         # Pass user's auth token so sandbox tools can call services on behalf of the user
-        auth_header = request.headers.get("Authorization", "")
+        # A newly created or rehydrated runtime always needs a usable service
+        # credential. During a request this preserves the caller token;
+        # background recovery receives a short-lived core-issued token.
+        auth_header = _education_runtime_authorization(user_id)
         if auth_header:
             env_vars["USER_AUTH_TOKEN"] = auth_header
 
@@ -394,6 +817,9 @@ class ConversationService:
         # ── [NEW] 服务 & 项目环境变量 ──────────────────────
         services_list = conversation.services or []
         env_vars["CONVERSATION_SERVICES"] = _json.dumps(services_list)
+        env_vars["AGENT_SERVICE_VIEWS"] = _json.dumps(
+            conversation.sandbox_agent_service_views or {}
+        )
         env_vars["RD_PROJECT_ID"] = conversation.project_id or ""
 
         # ── [NEW] 用户信息 ─────────────────────────────────
@@ -413,9 +839,7 @@ class ConversationService:
 
         # ── KB 上下文 ─────────────────────────────────────
         kb_context = ''
-        effective_domain = kb_domain.strip() if kb_domain and kb_domain != 'all' else ''
-        if kb_domain == 'all':
-            effective_domain = ''
+        effective_domain = rag_scope['RAG_SCOPE_DOMAIN']
         if conversation.workspace_id or kb_domain:
             try:
                 from app.models.workspace import Workspace
@@ -444,6 +868,8 @@ class ConversationService:
             except Exception:
                 pass
 
+        allowed_adapters = {'claude', 'codex', 'opencode'}
+        config_map = agent_configs if isinstance(agent_configs, dict) else {}
         agents_config = []
         for participant in participants:
             agent = Agent.query.get(participant.participant_id)
@@ -453,6 +879,17 @@ class ConversationService:
             workspace_name = _safe_workspace_name(agent.name)
             work_dir = f'/workspace/agents/{workspace_name}'
             system_prompt_parts = [agent.system_prompt or '']
+            agent_services = (
+                (conversation.sandbox_agent_service_views or {}).get(
+                    str(agent.id)
+                )
+                or services_list
+            )
+            agent_services_summary = (
+                _build_services_summary(agent_services)
+                if agent_services
+                else ""
+            )
             if participant.participant_id == MODERATOR_AGENT_ID:
                 worker_infos = []
                 for p in participants:
@@ -476,8 +913,8 @@ class ConversationService:
                 system_prompt_parts.append(f'\n\n{project_context}')
             if kb_context:
                 system_prompt_parts.append(f'\n\n{kb_context}')
-            if services_summary:
-                system_prompt_parts.append(f'\n\n{services_summary}')
+            if agent_services_summary:
+                system_prompt_parts.append(f'\n\n{agent_services_summary}')
             system_prompt_parts.append(f"""
 
 文件产物要求:
@@ -488,12 +925,22 @@ class ConversationService:
 - 如写入了可预览 HTML，请明确提到入口文件 index.html。
 """)
 
+            override = config_map.get(str(agent.id))
+            override_adapter = (
+                str(override.get('adapter_name') or '').strip()
+                if isinstance(override, dict) else ''
+            )
+            adapter_name = (
+                override_adapter
+                if override_adapter in allowed_adapters
+                else (agent.adapter_name or 'claude')
+            )
             agents_config.append({
                 'agent_id': agent.id,
                 'role': agent.name,
                 'workspace_name': workspace_name,
                 'system_prompt': '\n'.join(part for part in system_prompt_parts if part),
-                'adapter_name': agent.adapter_name or 'claude',
+                'adapter_name': adapter_name,
             })
 
         try:
@@ -511,11 +958,339 @@ class ConversationService:
         conversation.sandbox_host_port = session.host_port
         conversation.sandbox_status = 'running'
         conversation.last_active_at = beijing_now()
+        conversation.sandbox_generation = conversation.sandbox_generation or 1
+        conversation.sandbox_expires_at = (
+            beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
+        )
+        conversation.stopped_at = None
         db.session.commit()
         return None
 
+    @staticmethod
+    def _sandbox_ttl_seconds():
+        return max(300, int(current_app.config.get('SANDBOX_TTL_SECONDS', 72 * 3600)))
+
+    @staticmethod
+    def _safe_snapshot_segment(value):
+        return re.sub(r'[^A-Za-z0-9._-]', '_', str(value or 'unknown'))[:100]
+
+    def _snapshot_absolute_path(self, conversation, relative_path=None):
+        upload_root = os.path.abspath(current_app.config['UPLOAD_FOLDER'])
+        relative = relative_path or os.path.join(
+            'sandbox_snapshots',
+            self._safe_snapshot_segment(conversation.owner_id),
+            self._safe_snapshot_segment(conversation.id),
+            f'generation-{int(conversation.sandbox_generation or 1)}.zip',
+        )
+        absolute = os.path.abspath(os.path.join(upload_root, relative))
+        if absolute != upload_root and not absolute.startswith(upload_root + os.sep):
+            raise ValueError('Invalid sandbox snapshot path')
+        return upload_root, relative.replace('\\', '/'), absolute
+
+    def snapshot_sandbox(self, conversation, manager=None):
+        """Persist the visible workspace outside Docker before it can expire."""
+        if not conversation or not conversation.sandbox_session_id:
+            return {'status': 'skipped', 'reason': 'no sandbox session'}
+        if manager is None:
+            from app.sandbox import get_manager
+            manager = get_manager()
+        archive_bytes, _, _ = manager.export_zip(
+            conversation.sandbox_session_id,
+            '/workspace',
+        )
+        max_bytes = int(
+            current_app.config.get('SANDBOX_SNAPSHOT_MAX_BYTES', 50 * 1024 * 1024)
+        )
+        if len(archive_bytes) > max_bytes:
+            raise ValueError('Sandbox snapshot exceeds the configured size limit')
+
+        _, relative, absolute = self._snapshot_absolute_path(conversation)
+        os.makedirs(os.path.dirname(absolute), exist_ok=True)
+        temporary = f'{absolute}.tmp-{uuid.uuid4().hex}'
+        try:
+            with open(temporary, 'wb') as stream:
+                stream.write(archive_bytes)
+            os.replace(temporary, absolute)
+        finally:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+
+        conversation.sandbox_snapshot_path = relative
+        conversation.sandbox_snapshot_sha256 = hashlib.sha256(archive_bytes).hexdigest()
+        conversation.sandbox_snapshot_size = len(archive_bytes)
+        conversation.sandbox_snapshot_at = beijing_now()
+        db.session.commit()
+        return {
+            'status': 'snapshotted',
+            'runtime_generation': conversation.sandbox_generation or 1,
+            'size': len(archive_bytes),
+            'sha256': conversation.sandbox_snapshot_sha256,
+        }
+
+    def _restore_sandbox_snapshot(self, conversation, manager):
+        if not conversation.sandbox_snapshot_path:
+            return {'status': 'skipped', 'restored_files': 0}
+        _, _, absolute = self._snapshot_absolute_path(
+            conversation,
+            conversation.sandbox_snapshot_path,
+        )
+        if not os.path.isfile(absolute):
+            raise FileNotFoundError('Durable sandbox snapshot is missing')
+        with open(absolute, 'rb') as stream:
+            archive_bytes = stream.read()
+        digest = hashlib.sha256(archive_bytes).hexdigest()
+        if digest != conversation.sandbox_snapshot_sha256:
+            raise ValueError('Durable sandbox snapshot integrity check failed')
+        return manager.restore_zip(conversation.sandbox_session_id, archive_bytes)
+
+    def ensure_sandbox_runtime(self, conversation, user_id, manager=None):
+        """Return a live runtime, rehydrating a new generation when required."""
+        if manager is None:
+            from app.sandbox import get_manager
+            manager = get_manager()
+        education_context = None
+        if (conversation.kb_domain or '') == 'edu':
+            try:
+                education_context = _request_education_runtime_context(
+                    conversation.id,
+                    user_id,
+                )
+            except RuntimeError as exc:
+                return None, str(exc)
+            conversation.sandbox_agent_service_views = (
+                education_context['agent_service_views']
+            )
+            conversation.services = education_context['services']
+        session = (
+            manager.get_session(conversation.sandbox_session_id)
+            if conversation.sandbox_session_id
+            else None
+        )
+        if session and getattr(session, '_check_alive', lambda: True)():
+            authorization = _education_runtime_authorization(user_id)
+            legacy_runtime_requires_rehydrate = False
+            if education_context:
+                refresh_context = getattr(
+                    manager,
+                    'update_education_runtime_context',
+                    None,
+                )
+                if not authorization or not callable(refresh_context):
+                    return None, (
+                        'Education runtime cannot refresh its authenticated '
+                        'course scope'
+                    )
+                try:
+                    refresh_kwargs = {
+                        'authorization': authorization,
+                        'run_grant': education_context['run_grant'],
+                        'service_url': current_app.config.get(
+                            'EDUCATION_SERVICE_URL',
+                            'http://host.docker.internal:5102',
+                        ).rstrip('/'),
+                        'agent_service_views': education_context[
+                            'agent_service_views'
+                        ],
+                        'services': education_context['services'],
+                        'membership_role': education_context.get(
+                            'membership_role'
+                        ),
+                    }
+                    if education_context.get('course_id'):
+                        refresh_kwargs.update({
+                            'course_id': education_context['course_id'],
+                            'actor_user_id': user_id,
+                        })
+                    refresh_result = refresh_context(
+                        conversation.sandbox_session_id,
+                        **refresh_kwargs,
+                    )
+                    if (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('optional_route_missing')
+                    ):
+                        legacy_runtime_requires_rehydrate = True
+                    elif (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('status') == 'error'
+                    ):
+                        return None, (
+                            'Failed to refresh the Education sandbox scope: '
+                            f"{refresh_result.get('error') or 'unknown error'}"
+                        )
+                except Exception as exc:
+                    return None, (
+                        'Failed to refresh the Education sandbox scope: '
+                        f'{exc}'
+                    )
+            refresh_auth = getattr(manager, 'update_runtime_auth', None)
+            if (
+                not education_context
+                and authorization
+                and callable(refresh_auth)
+            ):
+                try:
+                    refresh_result = refresh_auth(
+                        conversation.sandbox_session_id,
+                        authorization,
+                    )
+                    if (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('optional_route_missing')
+                    ):
+                        legacy_runtime_requires_rehydrate = True
+                    elif (
+                        isinstance(refresh_result, dict)
+                        and refresh_result.get('status') == 'error'
+                    ):
+                        return None, (
+                            '刷新沙箱领域服务授权失败：'
+                            f"{refresh_result.get('error') or 'unknown error'}"
+                        )
+                except Exception as exc:
+                    return None, f'刷新沙箱领域服务授权失败：{exc}'
+            if legacy_runtime_requires_rehydrate:
+                try:
+                    self.snapshot_sandbox(conversation, manager=manager)
+                except Exception as exc:
+                    return None, f'升级历史沙箱前保存工作区失败：{exc}'
+            else:
+                conversation.sandbox_status = 'running'
+                conversation.last_active_at = beijing_now()
+                conversation.sandbox_expires_at = (
+                    beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
+                )
+                db.session.commit()
+                return {
+                    'rehydrated': False,
+                    'runtime_generation': conversation.sandbox_generation or 1,
+                }, None
+
+        if conversation.sandbox_session_id:
+            manager.destroy_session(conversation.sandbox_session_id)
+        previous_generation = int(conversation.sandbox_generation or 1)
+        participants = [
+            item for item in conversation.participants
+            if item.participant_type == 'agent'
+        ]
+        saved_adapters = {
+            str(agent_id): {
+                'adapter_name': adapter,
+                'allowed_services': (
+                    conversation.sandbox_agent_service_views or {}
+                ).get(str(agent_id), []),
+            }
+            for agent_id, adapter in (
+                conversation.sandbox_agent_adapters or {}
+            ).items()
+        }
+        if education_context:
+            for agent_id, services in education_context[
+                'agent_service_views'
+            ].items():
+                config = saved_adapters.setdefault(
+                    str(agent_id),
+                    {
+                        'adapter_name': 'codex',
+                        'allowed_services': services,
+                    },
+                )
+                config['allowed_services'] = services
+                config['education_tool_context'] = {
+                    'run_grant': education_context['run_grant'],
+                }
+                if education_context.get('course_id'):
+                    config['education_tool_context'].update({
+                        'course_id': education_context['course_id'],
+                        'membership_role': education_context.get(
+                            'membership_role'
+                        ),
+                    })
+        error = self._create_agent_sandbox(
+            conversation,
+            participants,
+            user_id,
+            kb_domain=conversation.kb_domain or '',
+            agent_configs=saved_adapters,
+            allow_server_fallback=bool(
+                conversation.sandbox_server_fallback
+            ),
+            rehydrating=True,
+        )
+        if error:
+            conversation.sandbox_status = 'error'
+            db.session.commit()
+            return None, error
+        conversation.sandbox_generation = previous_generation + 1
+        try:
+            restored = self._restore_sandbox_snapshot(conversation, manager)
+        except Exception as exc:
+            manager.destroy_session(conversation.sandbox_session_id)
+            conversation.sandbox_status = 'error'
+            conversation.stopped_at = beijing_now()
+            db.session.commit()
+            return None, f'恢复持久工作区失败：{exc}'
+        conversation.sandbox_status = 'running'
+        conversation.stopped_at = None
+        conversation.last_active_at = beijing_now()
+        conversation.sandbox_expires_at = (
+            beijing_now() + timedelta(seconds=self._sandbox_ttl_seconds())
+        )
+        db.session.commit()
+        return {
+            'rehydrated': True,
+            'runtime_generation': conversation.sandbox_generation,
+            'restored_files': restored.get('restored_files', 0),
+        }, None
+
+    def expire_idle_sandboxes(self, now=None, manager=None, owner_id=None):
+        """Snapshot and stop expired runtimes without deleting durable chat data."""
+        now = now or beijing_now()
+        uninitialized = Conversation.query.filter(
+            Conversation.sandbox_status == 'running',
+            Conversation.sandbox_expires_at.is_(None),
+        )
+        if owner_id:
+            uninitialized = uninitialized.filter(Conversation.owner_id == owner_id)
+        for conversation in uninitialized.all():
+            anchor = conversation.last_active_at or now
+            conversation.sandbox_expires_at = (
+                anchor + timedelta(seconds=self._sandbox_ttl_seconds())
+            )
+        db.session.commit()
+        query = Conversation.query.filter(
+            Conversation.sandbox_status == 'running',
+            Conversation.sandbox_expires_at.isnot(None),
+            Conversation.sandbox_expires_at <= now,
+        )
+        if owner_id:
+            query = query.filter(Conversation.owner_id == owner_id)
+        if manager is None:
+            from app.sandbox import get_manager
+            manager = get_manager()
+        stopped = 0
+        errors = []
+        for conversation in query.all():
+            try:
+                self.snapshot_sandbox(conversation, manager=manager)
+                manager.destroy_session(conversation.sandbox_session_id)
+                conversation.sandbox_status = 'stopped'
+                conversation.sandbox_container_id = None
+                conversation.sandbox_host_port = None
+                conversation.stopped_at = now
+                db.session.commit()
+                stopped += 1
+            except Exception as exc:
+                db.session.rollback()
+                errors.append({'conversation_id': conversation.id, 'error': str(exc)})
+        return {'stopped': stopped, 'errors': errors}
+
     def get_user_conversations(self, user_id, workspace_id=None):
         """Get all conversations for a user with last message, optionally filtered by workspace."""
+        try:
+            self.expire_idle_sandboxes(owner_id=user_id)
+        except Exception:
+            db.session.rollback()
         conversations = conversation_repo.get_user_conversations(user_id, workspace_id=workspace_id)
         result = []
         for conv in conversations:
@@ -532,12 +1307,25 @@ class ConversationService:
             result.append(conv_data)
         return result, None
 
-    def get_conversation_detail(self, conversation_id):
+    def get_conversation_detail(self, conversation_id, user_id):
         """Get conversation detail."""
         conversation = conversation_repo.get_by_id(conversation_id)
-        if not conversation:
+        if not conversation or not self.user_can_access(conversation, user_id):
             return None, 'Conversation not found'
         return self._conv_to_dict(conversation), None
+
+    @staticmethod
+    def user_can_access(conversation, user_id):
+        """Return whether a user is an explicit participant of a conversation."""
+        if not conversation or not user_id:
+            return False
+        if conversation.owner_id == user_id:
+            return True
+        return any(
+            participant.participant_type == 'user'
+            and participant.participant_id == user_id
+            for participant in conversation.participants
+        )
 
     def update_conversation_kb(self, conversation_id, user_id, kb_domain=None, kb_document_ids=None):
         """Update KB settings for a conversation (can be called mid-conversation)."""
@@ -675,6 +1463,39 @@ class ConversationService:
 
         from app.services.sandbox_event_bridge import sandbox_event_bridge
         sandbox_event_bridge.mark_agent_stopped(conversation.id, agent_id)
+        return result, None
+
+    def runtime_preflight(
+        self,
+        conversation_id,
+        user_id,
+        required_tools,
+        agent_ids=None,
+    ):
+        conversation, error = self.get_owned_conversation_or_error(
+            conversation_id,
+            user_id,
+        )
+        if error:
+            return None, error
+        required = sorted({
+            str(item or '').strip()
+            for item in (required_tools or [])
+            if str(item or '').strip()
+        })
+        _, error = self.ensure_sandbox_runtime(conversation, user_id)
+        if error:
+            return None, error
+        try:
+            from app.sandbox import get_manager
+            result = get_manager().preflight_tools(
+                conversation.sandbox_session_id,
+                required,
+                agent_ids=agent_ids or None,
+            )
+        except Exception as exc:
+            return None, str(exc)
+        result['runtime_generation'] = conversation.sandbox_generation or 1
         return result, None
 
     def _get_conversation_agent(self, conversation, agent_id=None):

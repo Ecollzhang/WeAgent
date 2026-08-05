@@ -92,6 +92,31 @@ class SandboxStage0BaselineTest(unittest.TestCase):
         self.db.session.commit()
         return conversation, message, run
 
+    def test_message_projection_sanitizes_private_ids_inside_progress_elements(self):
+        from app.models.message import Message
+        from app.services.message_service import _message_dict
+
+        conversation, message, _ = self._create_active_run()
+        conversation.kb_domain = "edu"
+        message.elements = [{
+            "type": "progress",
+            "content": "前置任务未成功完成：edu-intent-courseware_create-2",
+            "status": "failed",
+            "data": {
+                "content": (
+                    "前置任务未成功完成：edu-intent-courseware_create-2"
+                ),
+            },
+        }]
+        self.db.session.commit()
+
+        projected = _message_dict(Message.query.get("message-1"))
+
+        progress = projected["elements"][0]
+        self.assertNotIn("edu-intent-courseware_create-2", progress["content"])
+        self.assertEqual("前置任务未成功完成：前置步骤", progress["content"])
+        self.assertEqual(progress["content"], progress["data"]["content"])
+
     def test_sandbox_events_persist_raw_output_elements_and_meta_events(self):
         from app.models.message import Message
         from app.services.sandbox_event_bridge import sandbox_event_bridge
@@ -144,6 +169,110 @@ class SandboxStage0BaselineTest(unittest.TestCase):
 
         events = (message.meta or {}).get("events") or []
         self.assertEqual(["agent_report_element", "file_write"], [event["type"] for event in events])
+
+    def test_fallback_finalization_recovers_report_elements_from_committed_events(self):
+        from app.models.message import Message
+        from app.services.message_service import message_service
+
+        self._create_active_run()
+        message = Message.query.get("message-1")
+        message.meta = {
+            "events": [
+                {
+                    "type": "agent_report_element",
+                    "seq": 2,
+                    "data": {
+                        "type": "table",
+                        "content": "Knowledge search results",
+                        "status": "done",
+                        "data": {
+                            "title": "Knowledge search results (3)",
+                            "headers": ["Source", "Excerpt"],
+                            "rows": [["lesson.pdf", "Della counted the money."]],
+                        },
+                    },
+                }
+            ]
+        }
+        message.elements = [
+            {"type": "progress", "content": "Working", "status": "running"}
+        ]
+        self.db.session.commit()
+
+        with patch("app.services.message_service.socketio.emit"):
+            message_service._mark_agent_message_done_if_active(
+                "message-1",
+                "run-1",
+                "agent-1",
+                "Research completed",
+            )
+
+        self.db.session.expire_all()
+        persisted = Message.query.get("message-1")
+        self.assertTrue(
+            any(element.get("type") == "table" for element in persisted.elements),
+            persisted.elements,
+        )
+
+    def test_finalizer_merges_business_card_after_completion_callback_wins_race(self):
+        from app.models.agent_run import AgentRun
+        from app.models.message import Message
+        from app.services.message_service import message_service
+
+        self._create_active_run()
+        message = Message.query.get("message-1")
+        run = AgentRun.query.get("run-1")
+        message.meta = {
+            "events": [
+                {
+                    "type": "agent_report_element",
+                    "seq": 2,
+                    "data": {
+                        "type": "table",
+                        "content": "Knowledge search results",
+                        "status": "done",
+                        "data": {
+                            "title": "Knowledge search results (3)",
+                            "headers": ["Source", "Excerpt"],
+                            "rows": [["lesson.pdf", "Della counted the money."]],
+                        },
+                    },
+                }
+            ]
+        }
+        message.elements = [
+            {"type": "progress", "content": "Completed", "status": "done"},
+            {"type": "text", "content": "Research completed"},
+        ]
+        message.status = "done"
+        run.status = "done"
+        self.db.session.commit()
+
+        education_card = {
+            "type": "education_card",
+            "content": "Courseware draft created",
+            "data": {
+                "canonical_ref": {
+                    "object_type": "lesson_content",
+                    "object_id": "content-1",
+                    "version_id": "version-1",
+                }
+            },
+        }
+        with patch("app.services.message_service.socketio.emit"):
+            message_service._mark_agent_message_done_if_active(
+                "message-1",
+                "run-1",
+                "agent-1",
+                "Research completed",
+                extra_elements=[education_card],
+            )
+
+        self.db.session.expire_all()
+        persisted = Message.query.get("message-1")
+        types = [element.get("type") for element in persisted.elements]
+        self.assertIn("table", types, persisted.elements)
+        self.assertIn("education_card", types, persisted.elements)
 
     def test_dependency_file_write_events_do_not_hide_progress_history(self):
         from app.models.message import Message
@@ -353,7 +482,10 @@ class SandboxStage0BaselineTest(unittest.TestCase):
         self.db.session.add_all([user, conversation, message])
         self.db.session.commit()
 
-        result, error = message_service.get_conversation_messages("conversation-1")
+        result, error = message_service.get_conversation_messages(
+            "conversation-1",
+            user.id,
+        )
 
         self.assertIsNone(error)
         elements = result["items"][0]["elements"]

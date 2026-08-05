@@ -110,8 +110,33 @@ class ProviderRunner:
     def runnable(self) -> bool:
         return True
 
+    @property
+    def supports_native_shell(self) -> bool:
+        """Whether the provider exposes an executable shell to the model."""
+        return True
+
+    @property
+    def requires_literal_tool_calls(self) -> bool:
+        """Whether projected WeAgent tools must use the audited text loop."""
+        return True
+
     def unavailable_message(self) -> str:
         return f"Provider {self.provider_name} is not available."
+
+    def tool_preflight(self, required_tools: list[str]) -> dict:
+        """Verify provider-neutral text tool-loop availability."""
+        available = self.runtime.bound_tool_names()
+        required = sorted(set(str(item) for item in required_tools if item))
+        missing = sorted(set(required) - set(available))
+        return {
+            "ready": self.runnable and not missing,
+            "provider": self.provider_name,
+            "transport": "text_tool_loop",
+            "required_tools": required,
+            "available_tools": available,
+            "missing_tools": missing,
+            "error": self.unavailable_message() if not self.runnable else "",
+        }
 
 
 class UnsupportedProviderRunner(ProviderRunner):

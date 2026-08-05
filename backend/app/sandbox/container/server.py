@@ -379,6 +379,15 @@ def remove_agent(agent_id: str):
     result = orchestrator.remove_agent(agent_id)
     return jsonify(result)
 
+@app.route("/api/agents/<agent_id>/tools/preflight", methods=["POST"])
+def preflight_agent_tools(agent_id: str):
+    data = request.get_json(silent=True) or {}
+    required_tools = data.get("required_tools") or []
+    if not isinstance(required_tools, list):
+        return jsonify({"status": "error", "error": "required_tools must be a list"}), 400
+    result = orchestrator.preflight_agent_tools(agent_id, required_tools)
+    return jsonify(result), 200 if result.get("ready") else 400
+
 
 @app.route("/api/agents/<agent_id>/stop", methods=["POST"])
 def stop_agent(agent_id: str):
@@ -428,6 +437,20 @@ def update_model_config():
         has_api_key=bool(data.get("ANTHROPIC_API_KEY") or data.get("apiKey")),
     )
     result = orchestrator.update_model_config(data)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/config/runtime", methods=["POST"])
+def update_runtime_config():
+    """Refresh allowlisted per-request runtime values without logging secrets."""
+    data = request.get_json(force=True) or {}
+    log_event(
+        "api_update_runtime_config",
+        has_user_auth=bool(data.get("USER_AUTH_TOKEN")),
+    )
+    result = orchestrator.update_runtime_config(data)
     if "error" in result:
         return jsonify(result), 400
     return jsonify(result)

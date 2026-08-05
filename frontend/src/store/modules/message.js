@@ -111,11 +111,15 @@ function mergeMeta(existing, incoming) {
   return Object.keys(next).length ? next : incoming
 }
 
-const state = {
-  messages: {},
-  pinnedMessages: [],
-  loading: false,
+function initialState() {
+  return {
+    messages: {},
+    pinnedMessages: [],
+    loading: false,
+  }
 }
+
+const state = initialState()
 
 const getters = {
   getMessagesByConversation: state => conversationId => {
@@ -126,6 +130,9 @@ const getters = {
 }
 
 const mutations = {
+  RESET_STATE(state) {
+    Object.assign(state, initialState())
+  },
   SET_MESSAGES(state, { conversationId, messages }) {
     const existing = state.messages[conversationId] || []
     const existingById = {}

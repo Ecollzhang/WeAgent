@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.sandbox.container.agent import AgentRuntime
@@ -33,6 +34,48 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn("--skip-git-repo-check", command)
         self.assertIn("--dangerously-bypass-approvals-and-sandbox", command)
         self.assertNotIn("--ephemeral", command)
+
+    def test_deepseek_command_disables_incompatible_native_codex_tools(self):
+        runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
+
+        with patch.dict("os.environ", {
+            "DEEPSEEK_BASE_URL": "https://api.deepseek.com/anthropic",
+        }, clear=True), patch("app.sandbox.container.providers.codex.os.path.exists", return_value=False):
+            command, _ = runtime.provider_runner.build_command("hello")
+
+        disabled = [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--disable"]
+        self.assertIn("shell_tool", disabled)
+        self.assertIn("unified_exec", disabled)
+        self.assertIn("apps", disabled)
+        self.assertIn("computer_use", disabled)
+        self.assertIn("multi_agent", disabled)
+
+    def test_deepseek_runtime_instruction_does_not_require_unavailable_shell_tools(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"DEEPSEEK_BASE_URL": "https://api.deepseek.com/v1"},
+            clear=True,
+        ):
+            instruction = runtime._runtime_instruction()
+
+        self.assertNotIn("必须先用 Bash", instruction)
+        self.assertNotIn("weagent-report 调用示例", instruction)
+        self.assertIn("Do not call bash, run_command, run_command_safe", instruction)
+        self.assertIn("controlled file", instruction)
+
+    def test_codex_stdin_notice_is_not_streamed_as_an_agent_error(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+
+        notice = "Reading additional input from stdin...\n"
+
+        self.assertEqual("", runtime.provider_runner.stream_chunk(notice, "stderr"))
+        self.assertEqual("", runtime.provider_runner.clean_error_output(notice))
 
     def test_resume_command_uses_codex_exec_resume_last(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
@@ -153,6 +196,217 @@ class CodexRunnerStage4Test(unittest.TestCase):
         self.assertIn('command = "npx"', config)
         self.assertIn('args = ["--yes", "@modelcontextprotocol/server-memory"]', config)
 
+    def test_setup_registers_bound_builtin_tools_through_mcp_bridge(self):
+        runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
+        projection = {
+            "schema_version": "weagent.capability_projection/v1",
+            "session_id": "session-1",
+            "capabilities": {},
+            "skills": {},
+            "mcp": {},
+            "plugins": {},
+            "tools": {},
+            "agents": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "capabilities": [
+                        {
+                            "runtime_id": "builtin-education-actions",
+                            "capability_id": "builtin-education-actions",
+                            "capability_version_id": "version-1",
+                            "type": "tool",
+                            "name": "Education actions",
+                            "description": "Scoped Education business operations",
+                            "tool_names": ["education_action"],
+                            "granted_permissions": ["network"],
+                            "status": "implemented",
+                            "manifest": {
+                                "input_schema": {
+                                    "type": "object",
+                                    "required": ["action", "arguments"],
+                                    "properties": {
+                                        "action": {"type": "string"},
+                                        "arguments": {"type": "object"},
+                                    },
+                                    "additionalProperties": False,
+                                },
+                            },
+                        }
+                    ],
+                    "skill_index": [],
+                    "tool_index": [],
+                    "permissions": {"agent_id": "agent-1", "grants": []},
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "coder")
+            write_projection(projection, workspace_root=tmpdir)
+            with patch("app.sandbox.container.providers.codex.log_agent"), patch.dict(
+                "os.environ",
+                {
+                    "CODEX_API_KEY": "sk-test",
+                    "CODEX_BASE_URL": "https://api.openai.com/v1",
+                    "CODEX_MODEL": "gpt-5.1-codex",
+                    "WEAGENT_WORKSPACE_ROOT": tmpdir,
+                },
+                clear=True,
+            ):
+                runtime.provider_runner.setup()
+
+            with open(
+                os.path.join(runtime.provider_runner.home_dir, "config.toml"),
+                "r",
+                encoding="utf-8",
+            ) as handle:
+                config = handle.read()
+
+        self.assertIn("[mcp_servers.weagent_tools]", config)
+        self.assertIn('command = "weagent-tools-mcp"', config)
+        self.assertIn("startup_timeout_sec = 10", config)
+        self.assertIn("tool_timeout_sec = 120", config)
+
+    def test_deepseek_uses_audited_text_tool_loop_without_native_mcp(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+        projection = {
+            "schema_version": "weagent.capability_projection/v1",
+            "session_id": "session-1",
+            "capabilities": {},
+            "skills": {},
+            "mcp": {},
+            "plugins": {},
+            "tools": {},
+            "agents": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "capabilities": [
+                        {
+                            "type": "tool",
+                            "status": "implemented",
+                            "name": "Education actions",
+                            "tool_names": ["education_action"],
+                            "manifest": {"tool_names": ["education_action"]},
+                        }
+                    ],
+                    "skill_index": [],
+                    "tool_index": [],
+                    "permissions": {"agent_id": "agent-1", "grants": []},
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "courseware")
+            write_projection(projection, workspace_root=tmpdir)
+            with patch("app.sandbox.container.providers.codex.log_agent"), patch.dict(
+                "os.environ",
+                {
+                    "DEEPSEEK_API_KEY": "sk-test",
+                    "DEEPSEEK_BASE_URL": "https://api.deepseek.com/v1",
+                    "DEEPSEEK_MODEL": "deepseek-chat",
+                    "WEAGENT_WORKSPACE_ROOT": tmpdir,
+                },
+                clear=True,
+            ), patch.object(
+                runtime.provider_runner,
+                "_ensure_relay",
+                return_value="http://127.0.0.1:4446/v1",
+            ):
+                runtime.provider_runner.setup()
+                preflight = runtime.tool_preflight(["education_action"])
+
+            with open(
+                os.path.join(runtime.provider_runner.home_dir, "config.toml"),
+                "r",
+                encoding="utf-8",
+            ) as handle:
+                config = handle.read()
+
+        self.assertNotIn("weagent-tools-mcp", config)
+        self.assertTrue(preflight["ready"], preflight)
+        self.assertEqual("text_tool_loop", preflight["transport"])
+        self.assertEqual(["education_action"], preflight["available_tools"])
+        self.assertEqual([], preflight["missing_tools"])
+
+    def test_courseware_tool_preflight_proves_bridge_catalog_before_model_run(self):
+        runtime = AgentRuntime(
+            "agent-1", "Courseware", "system", "courseware", provider_name="codex"
+        )
+        projection = {
+            "schema_version": "weagent.capability_projection/v1",
+            "session_id": "session-1",
+            "capabilities": {},
+            "skills": {},
+            "mcp": {},
+            "plugins": {},
+            "tools": {},
+            "agents": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "capabilities": [
+                        {
+                            "type": "tool",
+                            "status": "implemented",
+                            "name": "Education actions",
+                            "tool_names": ["education_action"],
+                            "manifest": {"tool_names": ["education_action"]},
+                        }
+                    ],
+                    "skill_index": [],
+                    "tool_index": [],
+                    "permissions": {"agent_id": "agent-1", "grants": []},
+                }
+            },
+        }
+        bridge_response = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "education_action",
+                            "inputSchema": {"type": "object"},
+                        }
+                    ]
+                },
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "courseware")
+            write_projection(projection, workspace_root=tmpdir)
+            with patch("app.sandbox.container.providers.codex.log_agent"), patch.dict(
+                "os.environ",
+                {
+                    "CODEX_API_KEY": "sk-test",
+                    "CODEX_BASE_URL": "https://api.openai.com/v1",
+                    "CODEX_MODEL": "gpt-5.1-codex",
+                    "WEAGENT_WORKSPACE_ROOT": tmpdir,
+                },
+                clear=True,
+            ), patch(
+                "app.sandbox.container.providers.codex.shutil.which",
+                return_value="/usr/local/bin/weagent-tools-mcp",
+            ), patch(
+                "app.sandbox.container.providers.codex.subprocess.run",
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=bridge_response + "\n",
+                    stderr="",
+                ),
+            ):
+                runtime.provider_runner.setup()
+                result = runtime.tool_preflight(["education_action"])
+
+        self.assertTrue(result["ready"])
+        self.assertEqual("mcp", result["transport"])
+        self.assertEqual(["education_action"], result["available_tools"])
+        self.assertEqual([], result["missing_tools"])
+
     def test_setup_fails_fast_without_codex_credentials(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -250,6 +504,37 @@ class CodexRunnerStage4Test(unittest.TestCase):
         ensure_relay.assert_called_once_with("https://api.deepseek.com/v1")
         self.assertEqual("http://127.0.0.1:4446/v1", env["CODEX_BASE_URL"])
 
+    def test_relay_bind_is_an_ip_and_port_is_configured_separately(self):
+        with patch.dict("os.environ", {"CODEX_USE_RELAY": "0"}, clear=True):
+            runtime = AgentRuntime(
+                "agent-1", "Coder", "system", "coder", provider_name="codex"
+            )
+        runner = runtime.provider_runner
+        runner._relay_base_url = ""
+        runner._relay_upstream = ""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime._agent_dir = os.path.join(tmpdir, "coder")
+            with patch.dict(
+                "os.environ",
+                {"DEEPSEEK_API_KEY": "sk-test", "CODEX_USE_RELAY": "1"},
+                clear=True,
+            ), patch.object(runner, "_first_free_port", return_value=4446), patch(
+                "app.sandbox.container.providers.codex.subprocess.Popen"
+            ) as popen, patch(
+                "app.sandbox.container.providers.codex.log_agent"
+            ):
+                popen.return_value = SimpleNamespace(pid=321)
+                runner._ensure_relay("https://api.deepseek.com/v1")
+
+        relay_env = popen.call_args.kwargs["env"]
+        self.assertEqual("127.0.0.1", relay_env["CODEX_RELAY_BIND"])
+        self.assertEqual("4446", relay_env["CODEX_RELAY_PORT"])
+        self.assertEqual(
+            '["tools","tool_choice","parallel_tool_calls"]',
+            relay_env["CODEX_RELAY_DROP_PARAMS"],
+        )
+
     def test_codex_uses_provider_specific_timeout(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")
 
@@ -267,6 +552,38 @@ class CodexRunnerStage4Test(unittest.TestCase):
         output = runtime.provider_runner.clean_output(raw)
 
         self.assertEqual("hello\nworld\nplain text", output)
+
+    def test_clean_output_hides_reasoning_todos_and_mcp_probe_failures(self):
+        runtime = AgentRuntime(
+            "agent-1", "Coder", "system", "coder", provider_name="codex"
+        )
+        raw = "\n".join([
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "reasoning", "text": "private chain"},
+            }),
+            json.dumps({
+                "type": "item.updated",
+                "item": {"type": "todo_list", "items": [{"text": "probe"}]},
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "error": {"message": "server was not ready"},
+                },
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "error", "message": "metadata fallback"},
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "final answer"},
+            }),
+        ])
+
+        self.assertEqual("final answer", runtime.provider_runner.clean_output(raw))
 
     def test_codex_filters_pretty_json_control_events_and_reconnect_errors(self):
         runtime = AgentRuntime("agent-1", "Coder", "system", "coder", provider_name="codex")

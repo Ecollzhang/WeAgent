@@ -18,12 +18,26 @@ class Conversation(BaseModel):
                                nullable=False, default='pending')
     workspace_id = db.Column(db.String(36), db.ForeignKey('workspaces.id',
                                 ondelete='SET NULL'), nullable=True)
-    kb_domain = db.Column(db.String(20), nullable=True, comment='KB scope: rd/edu/office/all')
+    kb_domain = db.Column(db.String(20), nullable=False, default='')
+    sandbox_server_fallback = db.Column(db.Boolean, nullable=False, default=False)
+    sandbox_agent_adapters = db.Column(db.JSON, nullable=False, default=dict)
+    sandbox_agent_service_views = db.Column(
+        db.JSON,
+        nullable=False,
+        default=dict,
+        comment="Server-issued per-Agent microservice snapshots",
+    )
     kb_document_ids = db.Column(db.JSON, nullable=True, comment='Selected KB document IDs for filtering')
     services = db.Column(db.JSON, nullable=True, comment='启用的领域服务列表, e.g. ["rd","rag"]')
     project_id = db.Column(db.String(36), nullable=True, comment='关联的RD项目ID，NULL=全局视角')
     last_active_at = db.Column(db.DateTime, nullable=True)
     stopped_at = db.Column(db.DateTime, nullable=True)
+    sandbox_generation = db.Column(db.Integer, nullable=False, default=1)
+    sandbox_expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    sandbox_snapshot_path = db.Column(db.String(500), nullable=True)
+    sandbox_snapshot_sha256 = db.Column(db.String(64), nullable=True)
+    sandbox_snapshot_size = db.Column(db.Integer, nullable=True)
+    sandbox_snapshot_at = db.Column(db.DateTime, nullable=True)
 
     # Relationships
     participants = db.relationship('ConversationParticipant', backref='conversation',

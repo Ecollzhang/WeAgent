@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import time
@@ -61,7 +62,6 @@ class CodexRunner(ProviderRunner):
                 "--json",
                 "--skip-git-repo-check",
                 "--dangerously-bypass-approvals-and-sandbox",
-                full_message,
             ]
         else:
             cmd = [
@@ -74,9 +74,40 @@ class CodexRunner(ProviderRunner):
                 "workspace-write",
                 "--skip-git-repo-check",
                 "--dangerously-bypass-approvals-and-sandbox",
-                full_message,
             ]
+        cmd.extend(self._compatibility_feature_args())
+        cmd.append(full_message)
         return cmd, use_resume
+
+    def _compatibility_feature_args(self) -> list[str]:
+        """Disable redundant Codex-native tools rejected by DeepSeek."""
+        base_url = self._codex_base_url()
+        if self._provider_name(base_url) != "deepseek":
+            return []
+        # WeAgent provides its own audited XML tool loop inside the sandbox.
+        features = (
+            "unified_exec",
+            "shell_tool",
+            "apps",
+            "browser_use",
+            "browser_use_external",
+            "computer_use",
+            "goals",
+            "image_generation",
+            "tool_suggest",
+            "multi_agent",
+            "workspace_dependencies",
+        )
+        return [item for feature in features for item in ("--disable", feature)]
+
+    @property
+    def supports_native_shell(self) -> bool:
+        """DeepSeek's compatible Responses API cannot execute Codex shell tools."""
+        return self._provider_name(self._codex_base_url()) != "deepseek"
+
+    @property
+    def requires_literal_tool_calls(self) -> bool:
+        return self._provider_name(self._codex_base_url()) == "deepseek"
 
     def environment(self) -> dict:
         runtime = self.runtime
@@ -123,8 +154,19 @@ class CodexRunner(ProviderRunner):
 
     def stream_chunk(self, chunk: str, stream_name: str) -> str:
         if stream_name != "stdout":
-            return chunk
+            return self._clean_stderr_notice(chunk)
         return self._parse_stream_chunk(chunk)
+
+    def clean_error_output(self, stderr: str) -> str:
+        return self._clean_stderr_notice(stderr).strip()
+
+    @staticmethod
+    def _clean_stderr_notice(value: str) -> str:
+        return "\n".join(
+            line
+            for line in str(value or "").splitlines()
+            if line.strip() != "Reading additional input from stdin..."
+        )
 
     def _parse_output(self, text: str, final: bool = False) -> str:
         parser = JsonObjectStream()
@@ -285,14 +327,166 @@ class CodexRunner(ProviderRunner):
                 "requires_openai_auth = true",
                 f"base_url = {self._toml_string(base_url)}",
             ])
-        for server in self._bound_mcp_servers():
+        servers = self._bound_mcp_servers()
+        # DeepSeek runs through the audited literal tool loop below. Codex's
+        # MCP transport remains available for native Responses providers.
+        if self._has_bound_tools() and provider_name != "deepseek":
+            used_names = {server["config_name"] for server in servers}
+            config_name = "weagent_tools"
+            suffix = 2
+            while config_name in used_names:
+                config_name = f"weagent_tools_{suffix}"
+                suffix += 1
+            servers.append(
+                {
+                    "config_name": config_name,
+                    "command": "weagent-tools-mcp",
+                    "args": [],
+                    "startup_timeout_sec": 10,
+                    "tool_timeout_sec": 120,
+                }
+            )
+        for server in servers:
             lines.extend([
                 "",
                 f"[mcp_servers.{server['config_name']}]",
                 f"command = {self._toml_string(server['command'])}",
                 f"args = {json.dumps(server['args'], ensure_ascii=False)}",
             ])
+            if server.get("startup_timeout_sec"):
+                lines.append(
+                    f"startup_timeout_sec = {int(server['startup_timeout_sec'])}"
+                )
+            if server.get("tool_timeout_sec"):
+                lines.append(
+                    f"tool_timeout_sec = {int(server['tool_timeout_sec'])}"
+                )
         return "\n".join(lines).strip() + "\n"
+
+    def tool_preflight(self, required_tools: list[str]) -> dict:
+        """Prove that projected tools are visible through Codex's MCP bridge."""
+        if self._provider_name(self._codex_base_url()) == "deepseek":
+            return super().tool_preflight(required_tools)
+        required = sorted(set(str(item) for item in required_tools if item))
+        config_path = os.path.join(self.home_dir, "config.toml")
+        try:
+            with open(config_path, encoding="utf-8") as stream:
+                config_text = stream.read()
+        except OSError as exc:
+            return {
+                "ready": False,
+                "provider": self.provider_name,
+                "transport": "mcp",
+                "required_tools": required,
+                "available_tools": [],
+                "missing_tools": required,
+                "error": f"Codex MCP config is unavailable: {exc}",
+            }
+        configured = bool(
+            re.search(
+                r"(?ms)^\[mcp_servers\.[^\]]+\].*?^command\s*=\s*"
+                r"[\"']weagent-tools-mcp[\"']",
+                config_text,
+            )
+        )
+        bridge = shutil.which("weagent-tools-mcp")
+        if not configured or not bridge:
+            reason = (
+                "Codex MCP bridge is not registered"
+                if not configured
+                else "weagent-tools-mcp is not installed"
+            )
+            return {
+                "ready": False,
+                "provider": self.provider_name,
+                "transport": "mcp",
+                "required_tools": required,
+                "available_tools": [],
+                "missing_tools": required,
+                "error": reason,
+            }
+
+        env = os.environ.copy()
+        env.update({
+            "WEAGENT_AGENT_ID": self.runtime.agent_id,
+            "WEAGENT_WORKSPACE_ROOT": self._workspace_root(),
+        })
+        request_line = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            separators=(",", ":"),
+        ) + "\n"
+        try:
+            completed = subprocess.run(
+                [bridge],
+                input=request_line,
+                text=True,
+                capture_output=True,
+                timeout=5,
+                cwd=self.runtime._agent_dir,
+                env=env,
+                check=False,
+            )
+            response_lines = [
+                line for line in str(completed.stdout or "").splitlines()
+                if line.strip()
+            ]
+            response = json.loads(response_lines[-1]) if response_lines else {}
+            tools = (response.get("result") or {}).get("tools") or []
+            available = sorted({
+                str(item.get("name") or "").strip()
+                for item in tools
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            })
+            bridge_error = (
+                (response.get("error") or {}).get("message")
+                if isinstance(response.get("error"), dict)
+                else ""
+            )
+            if completed.returncode != 0 and not bridge_error:
+                bridge_error = str(completed.stderr or "").strip()
+        except Exception as exc:
+            available = []
+            bridge_error = str(exc)
+        missing = sorted(set(required) - set(available))
+        return {
+            "ready": self.runnable and not missing and not bridge_error,
+            "provider": self.provider_name,
+            "transport": "mcp",
+            "required_tools": required,
+            "available_tools": available,
+            "missing_tools": missing,
+            "error": (
+                self.unavailable_message()
+                if not self.runnable
+                else bridge_error
+            ),
+        }
+
+    def _has_bound_tools(self) -> bool:
+        capabilities_path = os.path.join(
+            self._workspace_root(),
+            ".weagent",
+            "agents",
+            _safe_segment(self.runtime.agent_id),
+            "capabilities.json",
+        )
+        try:
+            with open(capabilities_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            return False
+        for capability in payload.get("capabilities") or []:
+            if capability.get("type") != "tool":
+                continue
+            if (capability.get("status") or "implemented") not in {
+                "implemented",
+                "partial",
+            }:
+                continue
+            manifest = capability.get("manifest") or {}
+            if capability.get("tool_names") or manifest.get("tool_names"):
+                return True
+        return False
 
     def _bound_mcp_servers(self) -> list[dict]:
         capabilities_path = os.path.join(
@@ -426,8 +620,18 @@ class CodexRunner(ProviderRunner):
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
             ),
-            "CODEX_RELAY_BIND": f"127.0.0.1:{port}",
+            "CODEX_RELAY_BIND": "127.0.0.1",
             "CODEX_RELAY_ADDR": f"127.0.0.1:{port}",
+            # DeepSeek may emit arbitrary function calls for names mentioned
+            # in the prompt. Codex then rejects those calls before WeAgent's
+            # audited XML tool loop can execute them. Strip upstream function
+            # schemas so tools remain plain text and flow through the bounded
+            # server-side executor.
+            "CODEX_RELAY_DROP_PARAMS": json.dumps([
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
+            ], separators=(",", ":")),
             "NO_COLOR": "1",
         })
         log_file = open(log_path, "a", encoding="utf-8")
@@ -531,6 +735,7 @@ class CodexRunner(ProviderRunner):
             "tool_use",
             "function_call",
             "function_call_output",
+            "reasoning",
         }:
             return ""
         message = event.get("message")
@@ -550,6 +755,17 @@ class CodexRunner(ProviderRunner):
         ]
         item = event.get("item")
         if isinstance(item, dict):
+            item_type = str(item.get("type") or "").lower()
+            if item_type in {
+                "reasoning",
+                "todo_list",
+                "mcp_tool_call",
+                "function_call",
+                "function_call_output",
+                "command_execution",
+                "error",
+            }:
+                return ""
             candidates.extend([
                 item.get("text"),
                 item.get("content"),

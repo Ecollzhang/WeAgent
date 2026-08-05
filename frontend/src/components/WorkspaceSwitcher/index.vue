@@ -68,10 +68,24 @@
           </el-select>
         </el-form-item>
         <el-form-item v-if="newWs.domain === 'edu'" label="角色身份">
-          <el-radio-group v-model="newWs.sub_role">
-            <el-radio-button value="teacher">教师端</el-radio-button>
-            <el-radio-button value="student">学生端</el-radio-button>
-          </el-radio-group>
+          <div class="role-toggle-group">
+            <div
+              class="role-toggle-btn"
+              :class="{ active: newWs.sub_role === 'teacher' }"
+              @click="newWs.sub_role = 'teacher'"
+            >
+              <i class="el-icon-user-solid"></i>
+              <span>教师端</span>
+            </div>
+            <div
+              class="role-toggle-btn"
+              :class="{ active: newWs.sub_role === 'student' }"
+              @click="newWs.sub_role = 'student'"
+            >
+              <i class="el-icon-user"></i>
+              <span>学生端</span>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="描述（可选）">
           <el-input v-model="newWs.description" type="textarea" :rows="3" placeholder="空间用途说明" />
@@ -153,10 +167,42 @@ export default {
       })
     },
 
-    switchWorkspace(ws) {
-    console.log('[WorkspaceSwitcher] switchWorkspace:', ws)
-      this.$store.dispatch('workspace/selectWorkspace', ws)
+    async switchWorkspace(ws) {
+      await this.$store.dispatch('workspace/selectWorkspace', ws)
       this.$store.dispatch('grayscale/loadDomainConfig', ws.domain)
+      if (ws.domain === 'edu') {
+        await this.syncEducationContext(ws)
+      } else {
+        this.$store.commit('education/SET_ACTIVE_COURSE', null)
+      }
+    },
+
+    workspaceIconClass(value) {
+      const icons = {
+        default: 'el-icon-folder',
+        education: 'el-icon-reading',
+        edu: 'el-icon-reading',
+        research: 'el-icon-monitor',
+        office: 'el-icon-s-home',
+      }
+      return icons[value] || 'el-icon-folder'
+    },
+
+    async syncEducationContext(ws) {
+      try {
+        const courses = await this.$store.dispatch('education/fetchCourses')
+        const requestedRole = ws.sub_role || ''
+        const candidate = requestedRole
+          ? courses.find(course => course.membership_role === requestedRole)
+          : courses[0]
+        if (candidate) {
+          await this.$store.dispatch('education/selectCourse', candidate.id)
+        } else {
+          this.$store.commit('education/SET_ACTIVE_COURSE', null)
+        }
+      } catch (error) {
+        this.$store.commit('education/SET_ACTIVE_COURSE', null)
+      }
     },
 
     async handleCreate() {
@@ -298,6 +344,54 @@ export default {
 /* 创建弹窗 */
 .ws-create-form {
   padding: 0 6px;
+}
+
+/* 角色身份切换按钮组 */
+.role-toggle-group {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #dcdfe6;
+}
+
+.role-toggle-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: #606266;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  user-select: none;
+}
+
+.role-toggle-btn:first-child {
+  border-right: 1px solid #dcdfe6;
+}
+
+.role-toggle-btn:hover:not(.active) {
+  color: #4080ff;
+  background: rgba(64,128,255,0.05);
+}
+
+.role-toggle-btn.active {
+  background: linear-gradient(135deg, #4080ff 0%, #5b8cff 100%);
+  color: #fff;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
+}
+
+.role-toggle-btn.active i,
+.role-toggle-btn.active span {
+  color: #fff;
+}
+
+.role-toggle-btn i {
+  font-size: 14px;
 }
 </style>
 

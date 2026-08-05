@@ -4,7 +4,14 @@ from datetime import timedelta
 from dotenv import load_dotenv
 
 _RD_DIR = os.path.abspath(os.path.dirname(__file__))
-load_dotenv(os.path.join(_RD_DIR, '.env'))
+_BACKEND_DIR = os.path.abspath(os.path.join(_RD_DIR, os.pardir, os.pardir))
+_REPOSITORY_DIR = os.path.dirname(_BACKEND_DIR)
+for _env_path in (
+    os.path.join(_RD_DIR, '.env'),
+    os.path.join(_BACKEND_DIR, '.env'),
+    os.path.join(_REPOSITORY_DIR, '.env'),
+):
+    load_dotenv(_env_path, override=False)
 
 
 class Config:

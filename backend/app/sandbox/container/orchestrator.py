@@ -27,6 +27,7 @@ from .mcp_runtime import McpRuntime
 from .tools import ToolRegistry, register_builtin_tools
 from . import session as session_store
 from .events import push_event
+from .education_cards import education_card_from_tool_result
 from .logging_utils import log_agent, log_event, shorten
 from .providers import ProviderRunnerFactory
 from .service_manager import ServiceManager
@@ -157,6 +158,22 @@ class Orchestrator:
     def list_agents(self) -> list[dict]:
         return [a.to_dict() for a in self.agents.values()]
 
+    def preflight_agent_tools(self, agent_id: str, required_tools=None) -> dict:
+        agent = self._get_or_recreate_agent(agent_id)
+        if isinstance(agent, dict):
+            return {
+                "ready": False,
+                "agent_id": agent_id,
+                "required_tools": required_tools or [],
+                "available_tools": [],
+                "missing_tools": required_tools or [],
+                "error": agent.get("error") or "Agent not found",
+            }
+        return {
+            "agent_id": agent_id,
+            **agent.tool_preflight(required_tools or []),
+        }
+
     # ---- Message handling ----
 
     def send_to_agent(self, agent_id: str, message: str) -> dict:
@@ -194,113 +211,108 @@ class Orchestrator:
         fs_baseline = self._snapshot_workspace()
 
         try:
-            # ── Multi-turn loop: feed tool results back to the agent ──
-            MAX_TOOL_TURNS = 5
-            all_tool_results = []
-            final_reply = None
-            current_message = message
-            current_context = context
-            first_turn = True
+            prompt = self._with_tool_instructions(agent_id, message)
+            reply = agent.send_with_context(prompt, context=context)
+            log_agent(
+                agent_id,
+                "task_reply_received",
+                role=role,
+                reply_len=len(reply or ""),
+                reply_preview=shorten(reply, 300),
+            )
 
-            for _turn in range(MAX_TOOL_TURNS):
-                prompt = self._with_tool_instructions(agent_id, current_message)
-                reply = agent.send_with_context(prompt, context=current_context)
+            if self._is_agent_runtime_error(reply):
+                session_store.save_message(agent_id, "assistant", reply)
+                log_agent(agent_id, "task_runtime_error", level="error", role=role, error=shorten(reply, 500))
+                push_event(agent_id, "error", {
+                    "agent_id": agent_id,
+                    "error": reply,
+                })
+                return {"status": "error", "agent_id": agent_id, "error": reply, "reply": reply}
+
+            reply, tool_results, loop_error = self._complete_tool_calls(
+                agent,
+                agent_id,
+                reply,
+                context=context,
+                run_id=capability_run_id,
+            )
+            session_store.save_message(agent_id, "assistant", reply)
+            if loop_error:
+                log_agent(agent_id, "tool_loop_limit_reached", level="error", role=role)
+                push_event(agent_id, "error", {
+                    "agent_id": agent_id,
+                    "error": loop_error,
+                })
+                return {
+                    "status": "error",
+                    "agent_id": agent_id,
+                    "error": loop_error,
+                    "reply": reply,
+                    "tool_results": tool_results,
+                }
+
+            # Parse code blocks and collect files from the final response.
+            # Read-tool results and controlled file artifacts are independent:
+            # fetching context must not suppress the large-artifact finalizer.
+            start_parse = time.time()
+            artifact_results = []
+            if self._should_collect_agent_files(agent_id):
+                log_agent(agent_id, "artifact_collection_start", role=role)
+                artifact_results = self._parse_and_write_code_blocks(agent_id, reply)
+
+                # If no files found by pattern matching, check filesystem for
+                # files written by Claude's native Write tool (now that --print
+                # is removed, Claude can execute tools directly)
+                if not artifact_results:
+                    artifact_results = self._detect_written_files(
+                        agent_id,
+                        reply,
+                        baseline=fs_baseline,
+                    )
+
+                # If still nothing, try a second pass (ask Claude to output files)
+                if not artifact_results and self._reply_mentions_files(reply):
+                    log_agent(agent_id, "artifact_second_pass_start", role=role)
+                    artifact_results = self._second_pass_extract_files(agent_id, message, reply)
+                if artifact_results:
+                    tool_results = [*(tool_results or []), *artifact_results]
                 log_agent(
                     agent_id,
-                    "task_reply_received",
+                    "artifact_collection_done",
                     role=role,
-                    reply_len=len(reply or ""),
-                    reply_preview=shorten(reply, 300),
+                    file_count=len(artifact_results),
+                    files=[t.get("file", "") for t in artifact_results],
                 )
-
-                # Save assistant reply
-                session_store.save_message(agent_id, "assistant", reply)
-                final_reply = reply
-
-                if self._is_agent_runtime_error(reply):
-                    log_agent(agent_id, "task_runtime_error", level="error", role=role, error=shorten(reply, 500))
-                    push_event(agent_id, "error", {
-                        "agent_id": agent_id,
-                        "error": reply,
-                    })
-                    return {"status": "error", "agent_id": agent_id, "error": reply, "reply": reply}
-
-                # Parse <tool_call> XML blocks and execute them
-                start_parse = time.time()
-                turn_tool_results = []
-                if self._should_collect_agent_files(agent_id):
-                    turn_tool_results = self._execute_tool_calls(
-                        agent_id, reply, run_id=capability_run_id
-                    )
-                all_tool_results.extend(turn_tool_results)
-
-                if turn_tool_results:
-                    # Feed tool results back to agent for the next turn
-                    fb_parts = ["工具执行结果："]
-                    for tr in turn_tool_results:
-                        fb_parts.append(
-                            f"\n[{tr.get('tool', 'unknown')}]: {tr.get('result', '')}"
-                        )
-                    current_message = "\n".join(fb_parts)
-                    current_context = ""
-                    first_turn = False
-                    continue  # Next turn with tool feedback
-
-                # No tool calls — extract file artifacts (final turn)
-                if self._should_collect_agent_files(agent_id):
-                    log_agent(agent_id, "artifact_collection_start", role=role)
-                    code_blocks = self._parse_and_write_code_blocks(agent_id, reply)
-                    if code_blocks:
-                        all_tool_results.extend(code_blocks)
-                    else:
-                        detected = self._detect_written_files(agent_id, reply, baseline=fs_baseline)
-                        if detected:
-                            all_tool_results.extend(detected)
-                        elif self._reply_mentions_files(reply):
-                            log_agent(agent_id, "artifact_second_pass_start", role=role)
-                            second_pass = self._second_pass_extract_files(
-                                agent_id,
-                                message if first_turn else current_message,
-                                reply,
-                            )
-                            if second_pass:
-                                all_tool_results.extend(second_pass)
-                    log_agent(
-                        agent_id,
-                        "artifact_collection_done",
-                        role=role,
-                        file_count=len(all_tool_results or []),
-                        files=[t.get("file", "") for t in (all_tool_results or [])],
-                    )
-                break  # Agent is done
 
             parse_elapsed = time.time() - start_parse
 
-            # Strip <tool_call> blocks from the final reply for clean display
-            clean_reply = self._strip_tool_calls(final_reply or "")
-
-            result = {"status": "ok", "agent_id": agent_id, "reply": clean_reply}
+            result = {
+                "status": "ok",
+                "agent_id": agent_id,
+                "reply": self._strip_tool_calls(reply),
+            }
             if capability_run_id:
                 result["capability_run_id"] = capability_run_id
             skill_drafts = self.collect_skill_drafts(agent_id)
             if skill_drafts:
                 result["skill_drafts"] = skill_drafts
-            if all_tool_results:
-                result["tool_results"] = all_tool_results
+            if tool_results:
+                result["tool_results"] = tool_results
 
             push_event(agent_id, "agent_task_completed", {
                 "agent_id": agent_id,
                 "role": role,
                 "message": f"{role} 任务完成",
-                "file_count": len(all_tool_results) if all_tool_results else 0,
-                "files": [t.get("file", "") for t in (all_tool_results or [])],
+                "file_count": len(artifact_results),
+                "files": [t.get("file", "") for t in artifact_results],
                 "parse_time": round(parse_elapsed, 1),
             })
             log_agent(
                 agent_id,
                 "task_completed",
                 role=role,
-                file_count=len(all_tool_results) if all_tool_results else 0,
+                file_count=len(artifact_results),
                 parse_time=round(parse_elapsed, 2),
             )
             return result
@@ -799,6 +811,52 @@ class Orchestrator:
         r"<tool_call>\s*({.*?})\s*</tool_call>", re.DOTALL
     )
 
+    def _complete_tool_calls(self, agent: AgentRuntime, agent_id: str,
+                             initial_reply: str, context: str = "",
+                             run_id: str = None) -> tuple[str, list[dict], Optional[str]]:
+        """Execute registered tools and return their results to the provider.
+
+        A bounded loop prevents a provider from issuing tool calls forever. The
+        provider receives structured results as a new user turn and must return
+        either a final answer or another tool call.
+        """
+        try:
+            max_rounds = max(
+                1,
+                min(int(os.environ.get("WEAGENT_TOOL_LOOP_MAX_ROUNDS", "8")), 10),
+            )
+        except ValueError:
+            max_rounds = 8
+
+        reply = initial_reply
+        all_results = []
+        for round_number in range(1, max_rounds + 1):
+            if not self.TOOL_CALL_PATTERN.search(reply or ""):
+                return reply, all_results, None
+            results = self._execute_tool_calls(agent_id, reply, run_id=run_id)
+            all_results.extend(results)
+            follow_up = (
+                "The requested tools have finished. Use these results to answer "
+                "the original request. If another tool is essential, emit a new "
+                "<tool_call>; otherwise return the final answer.\n\n"
+                f"<tool_results round=\"{round_number}\">\n"
+                f"{json.dumps(results, ensure_ascii=False)}\n"
+                "</tool_results>"
+            )
+            session_store.save_message(agent_id, "assistant", reply)
+            session_store.save_message(agent_id, "user", follow_up)
+            reply = agent.send_with_context(follow_up, context=context)
+            if self._is_agent_runtime_error(reply):
+                return reply, all_results, reply
+
+        if self.TOOL_CALL_PATTERN.search(reply or ""):
+            return (
+                reply,
+                all_results,
+                f"Maximum tool rounds reached ({max_rounds}); execution stopped.",
+            )
+        return reply, all_results, None
+
     @staticmethod
     def _strip_tool_calls(text: str) -> str:
         """Remove <tool_call> XML blocks from agent reply for clean display."""
@@ -825,6 +883,12 @@ class Orchestrator:
                 if not tool_name:
                     results.append({"error": "Missing 'name' in tool_call"})
                     continue
+                if not isinstance(args, dict):
+                    results.append({
+                        "tool": tool_name,
+                        "error": "Tool arguments must be a JSON object",
+                    })
+                    continue
                 result = self.tools.call_from_agent(
                     agent_id,
                     tool_name,
@@ -833,18 +897,52 @@ class Orchestrator:
                     session_id=session_id,
                 )
                 results.append({"tool": tool_name, "result": result})
-                # Push RAG search results as a structured card element (both old and new tool names)
-                if tool_name in ("rag_search", "call_service_api") and isinstance(result, dict):
-                    if tool_name == "call_service_api":
-                        # Check if this is a rag search call
-                        if args.get("service_name") == "rag" and "/api/rag/search" in str(args.get("path", "")):
-                            body = args.get("body") or {}
-                            self._push_rag_result_card(agent_id, body.get("query", ""), result)
-                    else:
-                        self._push_rag_result_card(agent_id, args.get("query", ""), result)
+                # Push RAG search results as a structured card element
+                card_result = result
+                if isinstance(result, str):
+                    try:
+                        envelope = json.loads(result)
+                        if envelope.get("status") == "ok":
+                            card_result = envelope.get("result")
+                    except (json.JSONDecodeError, AttributeError):
+                        card_result = None
+                if tool_name == "rag_search" and isinstance(card_result, dict):
+                    self._push_rag_result_card(agent_id, args.get("query", ""), card_result)
+                elif tool_name == "education_action" and isinstance(card_result, dict):
+                    self._push_education_result_card(
+                        agent_id,
+                        str(args.get("action") or ""),
+                        card_result,
+                    )
+                elif (
+                    tool_name == "call_service_api"
+                    and args.get("service_name") == "rag"
+                    and "/api/rag/search" in str(args.get("path", ""))
+                    and isinstance(card_result, dict)
+                ):
+                    body = args.get("body") or {}
+                    self._push_rag_result_card(
+                        agent_id,
+                        body.get("query", ""),
+                        card_result.get("data", card_result),
+                    )
             except json.JSONDecodeError as e:
                 results.append({"error": f"Invalid JSON in tool_call: {e}"})
         return results
+
+    @staticmethod
+    def _push_education_result_card(agent_id: str, action: str, envelope: dict):
+        """Project a verified Education tool response into one unified card.
+
+        Models cannot submit ``education_card`` through ``weagent-report``.
+        This adapter runs only after the scoped Education service has accepted
+        the action and returned a canonical business object.  Keep this
+        projection self-contained: the Docker runtime intentionally does not
+        ship the host Flask ``app`` package.
+        """
+        trusted_card = education_card_from_tool_result(action, envelope)
+        if trusted_card:
+            push_event(agent_id, "agent_report_element", trusted_card)
 
     @staticmethod
     def _push_rag_result_card(agent_id: str, query: str, result: dict):
@@ -883,8 +981,102 @@ class Orchestrator:
             },
         })
 
+    def _literal_tool_contract_hint(self, agent_id: str) -> str:
+        """Return exact call shapes for literal-tool providers.
+
+        These providers cannot read the projected ``TOOL.md`` files through a
+        native filesystem tool, so names without schemas invite costly guesses.
+        """
+        tool_index = self._agent_tool_index(agent_id)
+        if tool_index:
+            names = {
+                str(name)
+                for item in tool_index
+                for name in (item.get("tool_names") or [])
+            }
+        else:
+            names = {
+                str(item.get("name") or "")
+                for item in self.tools.list_tools()
+            }
+        contracts = []
+        if "education_action" in names:
+            if os.environ.get("EDUCATION_MEMBERSHIP_ROLE") == "course_creator":
+                contracts.append(
+                    '- course bootstrap has exactly one write action: '
+                    'edu.course.create. Do not call edu.course.context.get, '
+                    'rag_search, list_services, or call_service_api first. '
+                    'Call it once with this exact shape: '
+                    '<tool_call>{"name":"education_action","args":'
+                    '{"action":"edu.course.create","arguments":'
+                    '{"title":"...","subject_code":"high_school_english",'
+                    '"grade_band":"senior_high","description":"..."},'
+                    '"idempotency_key":"..."}}</tool_call>. '
+                    'The only other supported subject pair is '
+                    'subject_code "primary_chinese" with grade_band "primary". '
+                    'Use one stable unique idempotency_key and never reuse it '
+                    'with different arguments. Return the trusted tool result; '
+                    'do not create a substitute HTML or file card.'
+                )
+            else:
+                contracts.append(
+                    '- education_action read example: '
+                    '<tool_call>{"name":"education_action","args":'
+                    '{"action":"edu.course.context.get"}}</tool_call>. '
+                    'For writes, args may additionally contain "arguments":{} '
+                    'and a stable unique "idempotency_key". Trusted course, '
+                    'lesson, user, role and authorization scope is server-injected.'
+                )
+        if "rag_search" in names:
+            contracts.append(
+                '- rag_search exact shape: '
+                '<tool_call>{"name":"rag_search","args":'
+                '{"query":"...","top_k":5}}</tool_call>. '
+                'Omit domain and workspace_id because course scope is injected.'
+            )
+        if "list_services" in names:
+            contracts.append(
+                '- list_services exact shape: '
+                '<tool_call>{"name":"list_services","args":{}}</tool_call>.'
+            )
+        if "call_service_api" in names:
+            contracts.append(
+                '- call_service_api exact keys: service_name, method, path, '
+                'body, query_params. Example: '
+                '<tool_call>{"name":"call_service_api","args":'
+                '{"service_name":"edu","method":"GET",'
+                '"path":"/api/edu/spec","query_params":{}}}</tool_call>.'
+            )
+        if not contracts:
+            return ""
+        return (
+            "Exact audited tool contracts (only for authorized tools listed "
+            "above):\n"
+            + "\n".join(contracts)
+            + "\nNever invent payload, params, service, workspaceId, userId, "
+            "courseId, authorization, or token argument keys.\n"
+        )
+
     def _tool_instructions(self, agent_id: str) -> str:
         """Generate tool usage instructions for the system prompt."""
+        agent = self.agents.get(agent_id)
+        requires_literal_tools = bool(
+            agent and getattr(
+                getattr(agent, "provider_runner", None),
+                "requires_literal_tool_calls",
+                False,
+            )
+        )
+        literal_tool_hint = ""
+        if requires_literal_tools:
+            literal_tool_hint = (
+                "For the WeAgent tools listed below, do not issue provider-native "
+                "function calls and do not probe MCP servers or resources. Emit "
+                "one literal <tool_call> JSON block in your final answer using "
+                "the exact English tool name and an object-valued args field. "
+                "The audited server loop will execute it and return the result.\n"
+            )
+            literal_tool_hint += self._literal_tool_contract_hint(agent_id)
         tool_index = self._agent_tool_index(agent_id)
         if tool_index:
             tool_lines = []
@@ -901,12 +1093,12 @@ class Orchestrator:
                 for n in (item.get("tool_names") or []):
                     seen_tools.add(n)
             # 始终包含微服务调用工具（list_services / call_service_api）
-            if "list_services" not in seen_tools and "list_services" in self.tools._tools:
+            if not self.capability_projection and "list_services" not in seen_tools and "list_services" in self.tools._tools:
                 tool_lines.append(
                     "  - 列出微服务: 列出所有可用的后端微服务及其访问地址\n"
                     "    (status: implemented; tools: list_services)"
                 )
-            if "call_service_api" not in seen_tools and "call_service_api" in self.tools._tools:
+            if not self.capability_projection and "call_service_api" not in seen_tools and "call_service_api" in self.tools._tools:
                 tool_lines.append(
                     "  - 调用服务API: 通用微服务API调用工具，可调用任何已注册服务的接口\n"
                     "    参数: service_name(必填,服务名如rag/rd), method(默认GET), path(必填,如/api/rag/search),\n"
@@ -919,10 +1111,19 @@ class Orchestrator:
                 "只调用上面列出的 Tool。需要更多说明时，先读取对应 doc 路径中的 TOOL.md。\n"
                 "微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
             )
+            if not {
+                "list_services",
+                "call_service_api",
+            }.intersection(seen_tools):
+                tool_hint = (
+                    "Only call the tools listed above. Unlisted service "
+                    "discovery or service-call tools are not authorized.\n"
+                )
         else:
             tools = self.tools.list_tools()
             if not tools:
                 return ""
+            seen_tools = {str(item.get("name") or "") for item in tools}
             tool_list = "\n".join(f"  - {t['name']}: {t['description']}" for t in tools)
             tool_hint = "当前是 legacy 工具模式；优先遵守主持 Agent 的授权范围。\n微服务调用提示：先用 list_services 查看服务，再用 call_service_api 访问 /api/{service}/spec 了解接口，最后调用具体接口。\n"
         work_dir = self._agent_work_dir(agent_id)
@@ -935,6 +1136,7 @@ class Orchestrator:
             "可用工具：\n"
             f"{tool_list}\n"
             f"{tool_hint}\n"
+            f"{literal_tool_hint}"
             "如需调用系统注册工具，输出如下格式，系统会在回复后执行：\n"
             "<tool_call>{\"name\":\"工具名\",\"args\":{\"参数名\":\"参数值\"}}</tool_call>\n\n"
             "如需输出文件内容，使用如下格式，系统会自动写入：\n"
@@ -947,7 +1149,25 @@ class Orchestrator:
         )
 
     def _with_tool_instructions(self, agent_id: str, message: str) -> str:
-        return f"{message}\n\n{self._role_boundary_prompt(agent_id, self.agents.get(agent_id).role if agent_id in self.agents else agent_id)}" + self._tool_instructions(agent_id)
+        role = (
+            self.agents.get(agent_id).role
+            if agent_id in self.agents
+            else agent_id
+        )
+        base = f"{message}\n\n{self._role_boundary_prompt(agent_id, role)}"
+        if "[Education large-artifact finalizer protocol]" in str(message or ""):
+            return (
+                base
+                + "\n\n===== TRUSTED LARGE-ARTIFACT HANDOFF =====\n"
+                "Do not emit tool calls and do not invoke MCP or shell tools. "
+                "The task-specific finalizer protocol overrides generic tool "
+                "instructions for this turn. Produce only your assigned role "
+                "output. The courseware maker must write complete "
+                "slide_document.json and preview.html files in its private "
+                "workspace; the server performs validation and business adoption.\n"
+                "=============================================="
+            )
+        return base + self._tool_instructions(agent_id)
 
     # ---- Session ----
 
@@ -1932,6 +2152,130 @@ class Orchestrator:
             "codex_base_url": os.environ.get("CODEX_BASE_URL", ""),
             "agents": list(self.agents.keys()),
         }
+
+    def update_runtime_config(self, config: dict) -> dict:
+        """Refresh narrowly allowlisted runtime values for a live session."""
+        import json
+        import re
+
+        updated = []
+        if "USER_AUTH_TOKEN" in config:
+            authorization = str(config.get("USER_AUTH_TOKEN") or "").strip()
+            if (
+                not authorization.startswith("Bearer ")
+                or len(authorization) > 8192
+                or "\r" in authorization
+                or "\n" in authorization
+            ):
+                return {"error": "valid USER_AUTH_TOKEN required"}
+            os.environ["USER_AUTH_TOKEN"] = authorization
+            updated.append("USER_AUTH_TOKEN")
+
+        education_keys = {
+            "EDUCATION_RUN_GRANT",
+            "EDUCATION_SERVICE_URL",
+            "AGENT_SERVICE_VIEWS",
+            "CONVERSATION_SERVICES",
+        }
+        education_role_keys = {"EDUCATION_MEMBERSHIP_ROLE"}
+        education_rag_keys = {
+            "RAG_SCOPE_USER_ID",
+            "RAG_SCOPE_DOMAIN",
+            "RAG_SCOPE_WORKSPACE_ID",
+            "RAG_SCOPE_EDUCATION_ROLE",
+        }
+        if (
+            education_keys.intersection(config)
+            or education_role_keys.intersection(config)
+            or education_rag_keys.intersection(config)
+        ):
+            if not education_keys.issubset(config):
+                return {"error": "complete Education runtime scope required"}
+            if (
+                education_rag_keys.intersection(config)
+                and not education_rag_keys.issubset(config)
+            ):
+                return {"error": "complete Education RAG scope required"}
+            grant = str(config.get("EDUCATION_RUN_GRANT") or "").strip()
+            service_url = str(
+                config.get("EDUCATION_SERVICE_URL") or ""
+            ).strip().rstrip("/")
+            if not re.fullmatch(r"[A-Za-z0-9._~-]{20,256}", grant):
+                return {"error": "valid EDUCATION_RUN_GRANT required"}
+            if (
+                not service_url.startswith(("http://", "https://"))
+                or len(service_url) > 500
+                or "\r" in service_url
+                or "\n" in service_url
+            ):
+                return {"error": "valid EDUCATION_SERVICE_URL required"}
+            membership_role = str(
+                config.get("EDUCATION_MEMBERSHIP_ROLE") or ""
+            ).strip()
+            if (
+                education_role_keys.intersection(config)
+                and membership_role
+                not in {"teacher", "student", "course_creator"}
+            ):
+                return {"error": "valid Education membership role required"}
+            try:
+                views = json.loads(str(config["AGENT_SERVICE_VIEWS"]))
+                services = json.loads(str(config["CONVERSATION_SERVICES"]))
+            except (TypeError, ValueError):
+                return {"error": "valid Education service scope required"}
+            if (
+                not isinstance(views, dict)
+                or not isinstance(services, list)
+                or any(
+                    not isinstance(agent_id, str)
+                    or not isinstance(agent_services, list)
+                    or any(
+                        item not in {"edu", "rag", "rd", "office"}
+                        for item in agent_services
+                    )
+                    for agent_id, agent_services in views.items()
+                )
+                or any(
+                    item not in {"edu", "rag", "rd", "office"}
+                    for item in services
+                )
+                or (
+                    "rag" in services
+                    and (
+                        not education_rag_keys.issubset(config)
+                        or str(config.get("RAG_SCOPE_DOMAIN") or "") != "edu"
+                        or not str(
+                            config.get("RAG_SCOPE_USER_ID") or ""
+                        ).strip()
+                        or not str(
+                            config.get("RAG_SCOPE_WORKSPACE_ID") or ""
+                        ).strip()
+                        or str(
+                            config.get("RAG_SCOPE_EDUCATION_ROLE") or ""
+                        )
+                        not in {"teacher", "student"}
+                    )
+                )
+            ):
+                return {"error": "valid Education service scope required"}
+            for key in (
+                education_keys
+                | (
+                    education_role_keys
+                    if education_role_keys.issubset(config)
+                    else set()
+                )
+                | (
+                    education_rag_keys
+                    if education_rag_keys.issubset(config)
+                    else set()
+                )
+            ):
+                os.environ[key] = str(config[key])
+                updated.append(key)
+        if not updated:
+            return {"error": "no supported runtime values provided"}
+        return {"status": "ok", "updated": sorted(updated)}
 
     # ---- Internal ----
 

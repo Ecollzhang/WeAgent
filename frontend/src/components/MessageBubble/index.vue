@@ -103,6 +103,11 @@
               <div class="error-content" v-html="renderText(elementContent(el))"></div>
             </div>
 
+            <EducationCard
+              v-else-if="el.type === 'education_card'"
+              :element="el"
+            />
+
             <!-- Requirement Card -->
             <div v-else-if="el.type === 'requirement_card'" class="domain-card requirement-card" @click="navigateToDomain(el)">
               <div class="dc-row dc-main-row">
@@ -342,7 +347,12 @@
             <div v-else-if="group.type === 'code' || group.type === 'text'" class="artifact-block artifact-detail-card code-card detail-card">
               <div v-if="isArtifactGroupPreviewLoading(group)" class="artifact-inline-loading"><i class="el-icon-loading"></i> 加载中...</div>
               <template v-else>
-                <pre class="code-body"><code>{{ artifactGroupCodeContent(group) }}</code></pre>
+                <div v-if="isJsonArtifactGroup(group)" class="artifact-json-summary">
+                  <b>JSON 数据摘要</b>
+                  <span>{{ artifactJsonSummary(group) }}</span>
+                  <small>点击“编辑”可在统一工作台查看格式化原始数据。</small>
+                </div>
+                <pre v-else class="code-body code-body-soft"><code>{{ artifactGroupCodeContent(group) }}</code></pre>
               </template>
                 <div v-if="supportsInlineArtifactDiff(group) && artifactGroupResolvedDiff(group) && isArtifactDiffVisible(group.key)" class="artifact-attached-diff">
                   <DiffViewCard
@@ -357,13 +367,23 @@
             <div v-else-if="group.type === 'webpage'" class="artifact-block artifact-detail-card webpage-card detail-card">
               <div v-if="artifactGroupPath(group)" class="file-path webpage-path">{{ artifactGroupPath(group) }}</div>
               <div class="webpage-preview">
+                <div v-if="isArtifactGroupPreviewLoading(group)" class="artifact-inline-loading">
+                  <i class="el-icon-loading"></i> 正在通过安全通道读取网页产物...
+                </div>
                 <iframe
-                  v-if="!isWorkbenchPreviewingPath(artifactGroupPath(group))"
+                  v-else-if="!isWorkbenchPreviewingPath(artifactGroupPath(group)) && webpagePreviewSrc(group)"
                   class="webpage-frame"
                   :src="webpagePreviewSrc(group)"
                   title="webpage-preview"
+                  sandbox="allow-scripts"
                 ></iframe>
-                <div v-else class="webpage-preview-paused">已在统一编辑平台中打开</div>
+                <div
+                  v-else-if="artifactGroupPreviewError(group)"
+                  class="artifact-preview-unavailable"
+                >{{ artifactGroupPreviewError(group) }}</div>
+                <div v-else class="webpage-preview-paused">
+                  {{ isWorkbenchPreviewingPath(artifactGroupPath(group)) ? '已在统一编辑平台中打开' : '正在准备预览...' }}
+                </div>
               </div>
             </div>
 
@@ -528,14 +548,15 @@
 
 <script>
 import { formatTime } from '../../utils/format'
-import { getFileTree, getSessionRawFileUrl, getWorkspaceFileUrl, getServiceLogs, restartService, stopService, writeFile } from '@/api/sandbox'
+import { getFileTree, getServiceLogs, readSessionRawFile, restartService, stopService, writeFile } from '@/api/sandbox'
 import ArtifactWorkbench from '@/components/ArtifactWorkbench/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
+import EducationCard from '@/components/education/EducationCard.vue'
 import { checkVisible } from '../../store/modules/grayscale'
 
 export default {
   name: 'MessageBubble',
-  components: { ArtifactWorkbench, DiffViewCard },
+  components: { ArtifactWorkbench, DiffViewCard, EducationCard },
   props: {
     message: Object,
     isOwn: Boolean,
@@ -549,7 +570,9 @@ export default {
       artifactDiffExpanded: {},
       showAllPreviews: true,
       artifactPreviewCache: {},
+      artifactPreviewObjectUrls: {},
       artifactPreviewLoading: {},
+      artifactPreviewErrors: {},
       artifactMetaLoading: {},
       diffBusyKey: '',
 
@@ -593,6 +616,7 @@ export default {
       if (checkVisible(s, domain, 'ui.chat.card.iteration')) visible.add('iteration_card')
       if (checkVisible(s, domain, 'ui.chat.card.project')) visible.add('project_card')
       if (checkVisible(s, domain, 'ui.chat.card.office')) visible.add('office_card')
+      if (checkVisible(s, domain, 'ui.chat.card.education')) visible.add('education_card')
       return visible
     },
     cardGroupedElements() {
@@ -664,7 +688,7 @@ export default {
       return merged
     },
     contentElements() {
-      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card', 'office_card']
+      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card', 'office_card', 'education_card']
       const allowedCards = this.visibleDomainCards
       const isDomainCard = type => domainCardTypes.includes(type)
 
@@ -1149,6 +1173,27 @@ export default {
       const cached = path ? this.artifactPreviewCache[path]?.text : ''
       return cached || this.elementContent(group.codeElement || group.webpageElement || group.primaryElement)
     },
+    isJsonArtifactGroup(group) {
+      return /\.json$/i.test(this.artifactGroupPath(group) || this.artifactGroupName(group) || '')
+    },
+    artifactJsonSummary(group) {
+      try {
+        const value = JSON.parse(this.artifactGroupCodeContent(group) || 'null')
+        if (Array.isArray(value)) return `数组，共 ${value.length} 项`
+        if (!value || typeof value !== 'object') return `标量值：${String(value)}`
+        const keys = Object.keys(value)
+        const details = keys.slice(0, 4).map(key => {
+          const item = value[key]
+          if (Array.isArray(item)) return `${key} ${item.length} 项`
+          if (item && typeof item === 'object') return `${key} 对象`
+          const text = String(item == null ? '' : item)
+          return text.length <= 36 ? `${key}：${text}` : `${key}：${text.slice(0, 36)}…`
+        })
+        return `对象，共 ${keys.length} 个字段${details.length ? `；${details.join('；')}` : ''}`
+      } catch (error) {
+        return '当前 JSON 无法解析；可打开工作台查看原始文本并修复。'
+      }
+    },
     isArtifactPlaceholderText(group, text) {
       const trimmed = String(text || '').trim()
       if (!trimmed) return true
@@ -1203,6 +1248,8 @@ export default {
         return this.artifactGroupTableHeaders(group).length > 0
       }
       if (group.type === 'webpage') {
+        const path = this.artifactGroupPath(group)
+        if (path && this.sessionId) return Boolean(this.artifactPreviewCache[path]?.previewUrl)
         return Boolean(this.webpagePreviewSrc(group))
       }
       if (!['code', 'text'].includes(group.type)) return true
@@ -1211,17 +1258,18 @@ export default {
     },
     webpagePreviewSrc(group) {
       const path = this.artifactGroupPath(group)
-      if (path && this.sessionId) {
-        return this.appendVersionQuery(
-          getWorkspaceFileUrl(this.sessionId, path),
-          this.elementData(group.webpageElement || group.primaryElement)._htmlVersion,
-        )
-      }
+      const cached = path ? this.artifactPreviewCache[path] : null
+      if (cached?.previewUrl) return cached.previewUrl
+      if (path && this.sessionId) return ''
       return this.webpageSrc(group.webpageElement || group.primaryElement)
     },
     isArtifactGroupPreviewLoading(group) {
       const path = this.artifactGroupPath(group)
       return Boolean(path && this.artifactPreviewLoading[path])
+    },
+    artifactGroupPreviewError(group) {
+      const path = this.artifactGroupPath(group)
+      return path ? (this.artifactPreviewErrors[path] || '') : ''
     },
     ensureVisibleArtifactPreviews() {
       this.artifactGroups.forEach(group => {
@@ -1237,14 +1285,26 @@ export default {
       if (!['code', 'text', 'table', 'webpage'].includes(group.type)) return
       if (this.hasUsefulArtifactPreview(group)) return
       if (this.artifactPreviewLoading[path]) return
+      if (this.artifactPreviewErrors[path]) return
       this.$set(this.artifactPreviewLoading, path, true)
+      this.$delete(this.artifactPreviewErrors, path)
       try {
-        const response = await fetch(getSessionRawFileUrl(this.sessionId, path), { credentials: 'same-origin' })
-        if (!response.ok) throw new Error(`Failed to load preview: ${response.status}`)
-        const text = await response.text()
-        this.$set(this.artifactPreviewCache, path, { text })
+        const text = await readSessionRawFile(this.sessionId, path, 'text')
+        let previewUrl = ''
+        if (group.type === 'webpage' && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+          const previous = this.artifactPreviewObjectUrls[path]
+          if (previous) URL.revokeObjectURL(previous)
+          previewUrl = URL.createObjectURL(new Blob([text], { type: 'text/html;charset=utf-8' }))
+          this.$set(this.artifactPreviewObjectUrls, path, previewUrl)
+        }
+        this.$set(this.artifactPreviewCache, path, { text, previewUrl })
       } catch (error) {
         console.warn('[ArtifactPreview] failed to load raw preview', { path, error })
+        this.$set(
+          this.artifactPreviewErrors,
+          path,
+          '无法读取该临时产物；文件可能不存在，或对应 Sandbox 已被回收。请打开正式业务产物继续查看。',
+        )
       } finally {
         this.$delete(this.artifactPreviewLoading, path)
       }
@@ -1601,9 +1661,7 @@ export default {
     },
     webpageSrc(el) {
       const path = this.webpagePath(el)
-      if (path && this.sessionId) {
-        return getWorkspaceFileUrl(this.sessionId, this.normalizeWorkspacePath(path))
-      }
+      if (path && this.sessionId) return ''
       return this.resolveFileUrl(path)
     },
     isWorkbenchPreviewingPath(path) {
@@ -2164,6 +2222,13 @@ export default {
       if (text.startsWith('/workspace/') || text.startsWith('workspace/')) return text
       return ''
     },
+    releaseArtifactPreviewUrls() {
+      if (typeof URL === 'undefined') return
+      Object.values(this.artifactPreviewObjectUrls || {}).forEach(url => {
+        if (url) URL.revokeObjectURL(url)
+      })
+      this.artifactPreviewObjectUrls = {}
+    },
 
     // ── Domain Card Helpers ──
     cardData(el) {
@@ -2291,6 +2356,9 @@ export default {
         this.$router.push(route).catch(() => {})
       }
     },
+  },
+  beforeDestroy() {
+    this.releaseArtifactPreviewUrls()
   },
 }
 </script>
@@ -2976,6 +3044,18 @@ export default {
 }
 
 
+.artifact-json-summary {
+  display: grid;
+  gap: 5px;
+  padding: 13px 14px;
+  border: 1px solid #dce8e5;
+  border-radius: 10px;
+  background: #f5faf8;
+}
+.artifact-json-summary b { color: #2f6f66; font-size: 12px; }
+.artifact-json-summary span { color: #415b56; font-size: 11px; line-height: 1.6; }
+.artifact-json-summary small { color: #85948f; font-size: 9px; }
+
 .code-body code {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   text-align: left;
@@ -3307,6 +3387,21 @@ export default {
   background: #f8fafc;
   color: #6b7280;
   font-size: 13px;
+}
+
+.artifact-preview-unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  padding: 24px;
+  border: 1px solid #f0d6bd;
+  border-radius: 8px;
+  color: #8a6547;
+  background: #fff8f1;
+  font-size: 13px;
+  line-height: 1.7;
+  text-align: center;
 }
 
 .artifact-image {

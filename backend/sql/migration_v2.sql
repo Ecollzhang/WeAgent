@@ -55,10 +55,13 @@ ALTER TABLE `workspaces` ADD COLUMN IF NOT EXISTS `sub_role` VARCHAR(20) DEFAULT
 -- users 角色
 ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `role` VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'admin / user';
 -- conversations 关联工作空间
-ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `workspace_id` VARCHAR(36) DEFAULT NULL AFTER `user_id`;
+ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `workspace_id` VARCHAR(36) DEFAULT NULL;
+-- conversations 知识库范围
+ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `kb_domain` VARCHAR(20) NOT NULL DEFAULT '';
+ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `kb_document_ids` JSON DEFAULT NULL;
 -- conversations 领域服务 & 项目关联
-ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `services` JSON DEFAULT NULL COMMENT '启用的领域服务列表' AFTER `kb_document_ids`;
-ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `project_id` VARCHAR(36) DEFAULT NULL COMMENT '关联的RD项目ID' AFTER `services`;
+ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `services` JSON DEFAULT NULL COMMENT '启用的领域服务列表';
+ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `project_id` VARCHAR(36) DEFAULT NULL COMMENT '关联的RD项目ID';
 
 -- ========================================
 -- 4. 灰度配置种子数据

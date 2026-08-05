@@ -40,6 +40,12 @@ export default {
   },
 
   mutations: {
+    RESET_STATE(state) {
+      state.workspaces = []
+      state.activeWorkspace = null
+      state.loading = false
+      saveActiveWs(null)
+    },
     SET_WORKSPACES(state, workspaces) {
       state.workspaces = workspaces
     },

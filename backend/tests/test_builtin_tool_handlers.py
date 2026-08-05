@@ -4,6 +4,7 @@ import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.sandbox.container import tools as container_tools
 
@@ -87,10 +88,14 @@ def test_http_fetch_uses_network_tool_without_external_internet():
         thread.start()
         try:
             registry = _registry(root)
-            result = registry.execute(
-                "http_fetch",
-                url=f"http://127.0.0.1:{server.server_port}/index.txt",
-            )
+            with patch.dict(
+                os.environ,
+                {"WEAGENT_HTTP_FETCH_ALLOW_PRIVATE": "1"},
+            ):
+                result = registry.execute(
+                    "http_fetch",
+                    url=f"http://127.0.0.1:{server.server_port}/index.txt",
+                )
             assert result["status_code"] == 200
             assert result["body_preview"] == "hello web"
         finally:

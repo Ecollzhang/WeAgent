@@ -1,5 +1,5 @@
 from flask import Blueprint, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from app.utils.response import success_response, error_response
 from app.schemas.artifact_schema import CreateArtifactSchema
 from app.services.artifact_service import artifact_service
@@ -19,6 +19,7 @@ def create_artifact():
         return error_response(str(e.messages), code=400)
 
     result, error = artifact_service.create_artifact(
+        user_id=get_jwt_identity(),
         message_id=data.get('message_id'),
         artifact_type=data['artifact_type'],
         title=data['title'],
@@ -29,7 +30,7 @@ def create_artifact():
     )
 
     if error:
-        return error_response(error, code=400)
+        return error_response(error, code=404)
 
     return success_response(result, message='Artifact created', code=201)
 
@@ -38,7 +39,7 @@ def create_artifact():
 @jwt_required()
 def get_artifact(artifact_id):
     """Get artifact detail."""
-    result, error = artifact_service.get_artifact(artifact_id)
+    result, error = artifact_service.get_artifact(artifact_id, get_jwt_identity())
 
     if error:
         return error_response(error, code=404)
@@ -50,10 +51,12 @@ def get_artifact(artifact_id):
 @jwt_required()
 def get_artifacts_by_message(message_id):
     """Get artifacts for a message."""
-    result, error = artifact_service.get_artifacts_by_message(message_id)
+    result, error = artifact_service.get_artifacts_by_message(
+        message_id, get_jwt_identity()
+    )
 
     if error:
-        return error_response(error, code=400)
+        return error_response(error, code=404)
 
     return success_response(result)
 
@@ -64,9 +67,11 @@ def update_artifact(artifact_id):
     """Update an artifact."""
     data = request.json or {}
 
-    result, error = artifact_service.update_artifact(artifact_id, **data)
+    result, error = artifact_service.update_artifact(
+        artifact_id, get_jwt_identity(), **data
+    )
 
     if error:
-        return error_response(error, code=400)
+        return error_response(error, code=404)
 
     return success_response(result, message='Artifact updated')

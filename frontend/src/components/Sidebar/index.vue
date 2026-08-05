@@ -15,7 +15,7 @@
         :key="item.key"
         :to="item.route"
         class="nav-item"
-        :class="{ active: $route.path === item.activePath }"
+        :class="{ active: $route.path.startsWith(item.activePath) }"
         :title="item.label"
       >
         <i v-if="item.iconClass" :class="item.iconClass"></i>
@@ -27,13 +27,13 @@
       <div class="nav-divider"></div>
 
       <!-- 领域功能 -->
-      <div v-if="!collapsed" class="nav-section-label">领域</div>
+      <div v-if="!collapsed" class="nav-section-label">{{ domainSectionLabel }}</div>
       <router-link
         v-for="item in domainNavItems"
         :key="item.key"
         :to="item.route"
         class="nav-item"
-        :class="{ active: $route.path === item.activePath }"
+        :class="{ active: isNavActive(item) }"
         :title="item.label"
       >
         <i v-if="item.iconClass" :class="item.iconClass"></i>
@@ -76,7 +76,6 @@ const COMMON_NAV = [
 ]
 
 // 领域专属导航项（按 grayscale config_key 控制可见性）
-// edu 按 sub_role 区分教师端和学生端
 const DOMAIN_NAV = {
   rd: [
     { key: 'ui.sidebar.projects', label: '项目管理', route: '/projects', activePath: '/projects', iconClass: 'el-icon-s-grid' },
@@ -84,21 +83,7 @@ const DOMAIN_NAV = {
     { key: 'ui.sidebar.reviews', label: '代码审查', route: '/reviews', activePath: '/reviews', iconClass: 'el-icon-view' },
     { key: 'ui.sidebar.builds', label: '构建管理', route: '/builds', activePath: '/builds', iconClass: 'el-icon-s-tools' },
   ],
-  edu: {
-    teacher: [
-      { key: 'ui.sidebar.courses', label: '课程管理', route: '/courses', activePath: '/courses', iconClass: 'el-icon-document' },
-      { key: 'ui.sidebar.assignments', label: '作业系统', route: '/assignments', activePath: '/assignments', iconClass: 'el-icon-edit-outline' },
-      { key: 'ui.sidebar.students', label: '学生画像', route: '/students', activePath: '/students', iconClass: 'el-icon-user' },
-      { key: 'ui.sidebar.grades', label: '成绩管理', route: '/grades', activePath: '/grades', iconClass: 'el-icon-data-line' },
-      { key: 'ui.sidebar.resources', label: '教学资源', route: '/resources', activePath: '/resources', iconClass: 'el-icon-folder-opened' },
-    ],
-    student: [
-      { key: 'ui.sidebar.courses', label: '我的课程', route: '/courses', activePath: '/courses', iconClass: 'el-icon-document' },
-      { key: 'ui.sidebar.assignments', label: '我的作业', route: '/assignments', activePath: '/assignments', iconClass: 'el-icon-edit-outline' },
-      { key: 'ui.sidebar.grades', label: '我的成绩', route: '/grades', activePath: '/grades', iconClass: 'el-icon-data-line' },
-      { key: 'ui.sidebar.resources', label: '学习资源', route: '/resources', activePath: '/resources', iconClass: 'el-icon-folder-opened' },
-    ],
-  },
+  edu: [],
   office: [
     { key: 'ui.sidebar.organization', label: '组织协同', route: '/organization', activePath: '/organization', iconClass: 'el-icon-s-custom' },
     { key: 'ui.sidebar.meetings', label: '\u4f1a\u8bae\u4efb\u52a1', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
@@ -112,7 +97,16 @@ export default {
   data() {
     return {
       collapsed: localStorage.getItem('sidebar_collapsed') === '1',
+      educationContextHydrating: false,
     }
+  },
+  watch: {
+    activeDomain: {
+      immediate: true,
+      handler(value) {
+        if (value === 'edu') this.hydrateEducationContext()
+      },
+    },
   },
   computed: {
     currentUser() {
@@ -124,8 +118,25 @@ export default {
     activeDomain() {
       return this.$store.getters['workspace/activeDomain']
     },
+    activeCourse() {
+      return this.$store.getters['education/activeCourse']
+    },
+    membershipRole() {
+      return this.activeCourse && this.activeCourse.membership_role
+        ? this.activeCourse.membership_role
+        : ''
+    },
     activeSubRole() {
-      return this.$store.getters['workspace/activeSubRole']
+      return this.$store.getters['workspace/activeSubRole'] || ''
+    },
+    educationRole() {
+      return this.membershipRole || this.activeSubRole
+    },
+    domainSectionLabel() {
+      if (this.activeDomain !== 'edu') return '领域'
+      if (this.educationRole === 'student') return '学习领域'
+      if (this.educationRole === 'teacher') return '教师领域'
+      return '教育领域'
     },
     commonNavItems() {
       const domain = this.activeDomain || 'rd'
@@ -137,20 +148,98 @@ export default {
     },
     domainNavItems() {
       const domain = this.activeDomain || 'rd'
+      if (domain === 'edu') return this.educationDomainNavItems
       const raw = DOMAIN_NAV[domain] || []
-      let items
-      if (domain === 'edu') {
-        const sub = this.activeSubRole || 'teacher'
-        items = (raw[sub] || raw.teacher || [])
-      } else {
-        items = raw
-      }
+      const items = raw
       return items.filter(item => {
         return checkVisible(this.$store.state.grayscale, domain, item.key)
       })
     },
+    educationDomainNavItems() {
+      const course = this.activeCourse
+      const courseQuery = course ? { courseId: course.id } : {}
+      const teachingRoute = course ? `/education/courses/${course.id}` : '/education'
+      const teachingSpace = {
+        key: 'ui.sidebar.courses',
+        module: 'teaching-space',
+        label: '教学空间',
+        route: { path: teachingRoute, query: courseQuery },
+        activePath: '/education/courses',
+        iconClass: 'el-icon-reading',
+      }
+      const helpCenter = {
+        key: 'ui.sidebar.education-help',
+        module: 'help',
+        label: '帮助中心',
+        route: { path: '/education/help', query: courseQuery },
+        iconClass: 'el-icon-question',
+      }
+      if (this.educationRole === 'student') {
+        return [
+          teachingSpace,
+          {
+            key: 'ui.sidebar.mock-exams',
+            module: 'mock-exams',
+            label: '模拟考试',
+            route: { path: '/education/student/mock-exams', query: courseQuery },
+            iconClass: 'el-icon-document-checked',
+          },
+          {
+            key: 'ui.sidebar.mind-maps',
+            module: 'mind-maps',
+            label: '课程思维导图',
+            route: { path: '/education/student/mind-maps', query: courseQuery },
+            iconClass: 'el-icon-share',
+          },
+          helpCenter,
+        ]
+      }
+      if (this.educationRole === 'teacher') {
+        return [
+          teachingSpace,
+          {
+            key: 'ui.sidebar.courseware',
+            module: 'courseware',
+            label: 'PPT 与课件',
+            route: { path: '/education/teacher/courseware', query: courseQuery },
+            iconClass: 'el-icon-picture-outline',
+          },
+          {
+            key: 'ui.sidebar.insights',
+            module: 'insights',
+            label: '学生画像与评估',
+            route: { path: '/education/teacher/insights', query: courseQuery },
+            iconClass: 'el-icon-pie-chart',
+          },
+          helpCenter,
+        ]
+      }
+      return [teachingSpace, helpCenter]
+    },
   },
   methods: {
+    async hydrateEducationContext() {
+      if (this.activeCourse || this.educationContextHydrating) return
+      this.educationContextHydrating = true
+      try {
+        const courses = await this.$store.dispatch('education/fetchCourses')
+        const requestedRole = this.activeSubRole
+        const candidate = requestedRole
+          ? courses.find(course => course.membership_role === requestedRole)
+          : courses[0]
+        if (candidate) await this.$store.dispatch('education/selectCourse', candidate.id)
+      } catch (error) {
+        // Keep the generic Education entry usable when the account has no course yet.
+      } finally {
+        this.educationContextHydrating = false
+      }
+    },
+    isNavActive(item) {
+      if (item.module) {
+        return this.$route.meta && this.$route.meta.educationModule === item.module
+      }
+      return Boolean(item.activePath && this.$route.path.startsWith(item.activePath))
+    },
     toggleCollapse() {
       this.collapsed = !this.collapsed
       localStorage.setItem('sidebar_collapsed', this.collapsed ? '1' : '0')

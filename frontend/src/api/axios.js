@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { Message } from 'element-ui'
+import { clearUserSessionStorage } from '../utils/session-storage'
 
 const service = axios.create({
   baseURL: '/api',
@@ -36,7 +37,6 @@ service.interceptors.response.use(
 
     if (response) {
       const { status, data } = response
-      console.log('[axios-res]', status, config.url, 'body:', data?.message || data)
 
       switch (status) {
         case 401:

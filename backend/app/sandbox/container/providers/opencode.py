@@ -44,10 +44,12 @@ class OpenCodeRunner(ProviderRunner):
         parts.append(message)
         full_message = "\n\n".join(parts)
         final_rule = (
-            "How to query microservices: Use bash curl with $USER_AUTH_TOKEN.\n"
-            "Example: curl -s -H \"Authorization: $USER_AUTH_TOKEN\" \"http://host.docker.internal:5101/api/rd/projects/xxx\"\n"
-            "The project context above has the exact curl commands you need. Run them directly via bash.\n"
-            "Do NOT search /workspace for API data. Do NOT overthink — just run the curl commands.\n"
+            "OpenCode final response rule:\n"
+            "- weagent-report is only for progress/artifact cards; it is not the final chat reply.\n"
+            "- Before finishing, call weagent-report with type=summary and a concise user-facing summary.\n"
+            "- After all tool calls and reports, continue with a normal assistant text reply for the user.\n"
+            "- The final assistant text must answer the user's request directly and must not be JSON or a weagent-report payload.\n"
+            "- Do not end with placeholder text such as 'ready to reply', 'done', or 'task complete'.\n"
         )
         full_message = f"{full_message}\n\n{final_rule}"
         use_continue = retry_with_resume and os.path.exists(self.resume_marker)
@@ -148,13 +150,9 @@ class OpenCodeRunner(ProviderRunner):
         return parts
 
     def fallback_output(self, stdout: str, stderr: str = "") -> str:
-        reported = [
-            text
-            for text in self._reported_element_texts(stdout)
-            if text and not self._is_placeholder_report(text)
-        ]
-        if reported:
-            return reported[-1]
+        # Progress/result cards are structured UI events, not an assistant reply.
+        # Returning one here makes an unfinished run look complete and leaks
+        # internal report wording into the conversation.
         return ""
 
     def should_retry_without_resume(self, stderr: str) -> bool:

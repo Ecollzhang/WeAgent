@@ -2,7 +2,10 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+REPOSITORY_DIR = os.path.dirname(BACKEND_DIR)
+load_dotenv(os.path.join(BACKEND_DIR, '.env'), override=False)
+load_dotenv(os.path.join(REPOSITORY_DIR, '.env'), override=False)
 
 
 class Config:
@@ -38,9 +41,23 @@ class Config:
     # Upload
     UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', os.path.join(os.path.dirname(__file__), 'uploads'))
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
+    SANDBOX_TTL_SECONDS = int(os.getenv('SANDBOX_TTL_SECONDS', str(72 * 3600)))
+    SANDBOX_SNAPSHOT_MAX_BYTES = int(
+        os.getenv('SANDBOX_SNAPSHOT_MAX_BYTES', str(50 * 1024 * 1024))
+    )
 
     # SocketIO
     SOCKETIO_CORS_ALLOWED_ORIGINS = os.getenv('SOCKETIO_CORS_ALLOWED_ORIGINS', '*').split(',')
+
+    # Independent Education service as seen from sandbox containers.
+    EDUCATION_SERVICE_URL = os.getenv(
+        'EDUCATION_SERVICE_URL',
+        'http://host.docker.internal:5102',
+    )
+    EDUCATION_RUNTIME_VALIDATION_URL = os.getenv(
+        'EDUCATION_RUNTIME_VALIDATION_URL',
+        'http://127.0.0.1:5102',
+    )
 
 
 class DevelopmentConfig(Config):

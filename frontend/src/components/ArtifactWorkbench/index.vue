@@ -54,7 +54,7 @@
         </aside>
 
         <div class="awb-main">
-          <div v-if="isEditing && currentKind === 'code'" class="awb-editor-wrap">
+          <div v-if="isEditing && ['code', 'markdown', 'json'].includes(currentKind)" class="awb-editor-wrap">
             <CodeEditor
               embedded
               :visible="true"
@@ -87,7 +87,7 @@
               :key="htmlPreviewNodeKey"
               :src="htmlPreviewUrl"
               class="awb-iframe"
-              sandbox="allow-scripts allow-same-origin"
+              sandbox="allow-scripts"
               @load="onHtmlLoaded"
             ></iframe>
             <div v-else class="awb-empty">无法预览该网页文件</div>
@@ -192,6 +192,19 @@
             <pre v-else class="awb-code"><code>{{ textContent }}</code></pre>
           </div>
 
+          <div v-else-if="currentKind === 'markdown'" class="awb-document-wrap">
+            <div v-if="loading" class="awb-loading"><i class="el-icon-loading" /> 加载中...</div>
+            <article v-else class="awb-markdown" v-html="renderMarkdownDocument(textContent)"></article>
+          </div>
+
+          <div v-else-if="currentKind === 'json'" class="awb-document-wrap">
+            <div v-if="loading" class="awb-loading"><i class="el-icon-loading" /> 加载中...</div>
+            <template v-else>
+              <div class="awb-json-summary">{{ jsonSummary }}</div>
+              <pre class="awb-code"><code>{{ formattedJson }}</code></pre>
+            </template>
+          </div>
+
           <div v-else-if="currentKind === 'diff'" class="awb-diff-wrap">
             <DiffViewCard
               v-if="currentDiffElement"
@@ -261,13 +274,13 @@
 </template>
 
 <script>
-import { getFileTree, getSessionRawFileUrl, getSessionZipExportUrl, getWorkspaceFileUrl, getSessionDownloadUrl, writeFile } from '@/api/sandbox'
+import { getFileTree, getSessionRawFileUrl, getSessionZipExportUrl, getSessionDownloadUrl, readSessionRawFile, writeFile } from '@/api/sandbox'
 import CodeEditor from '@/components/CodeEditor/index.vue'
 import DiffViewCard from '@/components/DiffViewCard/index.vue'
 import HtmlPageEditor from '@/components/HtmlPageEditor/index.vue'
 import ImageCropper from '@/components/ImageCropper/index.vue'
 
-const CODE_FILE_RE = /\.(css|scss|less|js|jsx|ts|tsx|py|md|sql|json|xml|yaml|yml|toml|vue|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart)$/i
+const CODE_FILE_RE = /\.(css|scss|less|js|jsx|ts|tsx|py|sql|xml|yaml|yml|toml|vue|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|rb|sh|bat|ps1|kt|swift|dart)$/i
 const TEXT_FILE_RE = /\.(txt|log)$/i
 const IMAGE_FILE_RE = /\.(png|jpe?g|gif|webp|svg|bmp)$/i
 const RASTER_IMAGE_FILE_RE = /\.(png|jpe?g|gif|webp|bmp)$/i
@@ -324,6 +337,8 @@ export default {
       if (this.currentKind === 'image') return '图片'
       if (this.currentKind === 'table') return '表格'
       if (this.currentKind === 'code') return '代码'
+      if (this.currentKind === 'markdown') return 'Markdown 文档'
+      if (this.currentKind === 'json') return 'JSON 摘要'
       if (this.currentKind === 'text') return '文本'
       if (this.currentKind === 'diff') return 'Diff'
       if (this.currentKind === 'binary') return '文件'
@@ -336,7 +351,7 @@ export default {
       return !!this.currentRoot
     },
     canEdit() {
-      return this.currentKind === 'code' || this.currentKind === 'html' || this.currentKind === 'table'
+      return ['code', 'markdown', 'json', 'html', 'table'].includes(this.currentKind)
     },
     canCrop() {
       return this.currentKind === 'image' && !this.isSvg && RASTER_IMAGE_FILE_RE.test((this.currentPath || '').toLowerCase())
@@ -353,7 +368,7 @@ export default {
     showWorkbenchPlaceholder() {
       return !this.isEditing
         && !this.isCropping
-        && !['html', 'image', 'table', 'code', 'text', 'diff', 'binary'].includes(this.currentKind)
+        && !['html', 'image', 'table', 'code', 'markdown', 'json', 'text', 'diff', 'binary'].includes(this.currentKind)
     },
     currentDiffElement() {
       const normalizedPath = String(this.currentPath || '')
@@ -377,12 +392,30 @@ export default {
     htmlPreviewUrl() {
       const cached = this.pathCache[this.currentPath]
       if (cached?.htmlPreviewUrl) return cached.htmlPreviewUrl
-      if (this.artifact?.path === this.currentPath && this.artifact?.previewUrl) {
+      if (
+        this.artifact?.path === this.currentPath
+        && /^(blob:|data:)/.test(this.artifact?.previewUrl || '')
+      ) {
         return this.artifact.previewUrl
       }
-      if (!this.currentPath || !this.sessionId) return ''
-      const baseUrl = getWorkspaceFileUrl(this.sessionId, this.currentPath)
-      return this.htmlVersion ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}ts=${this.htmlVersion}` : baseUrl
+      return ''
+    },
+    formattedJson() {
+      try {
+        return JSON.stringify(JSON.parse(this.textContent || 'null'), null, 2)
+      } catch (error) {
+        return this.textContent
+      }
+    },
+    jsonSummary() {
+      try {
+        const value = JSON.parse(this.textContent || 'null')
+        if (Array.isArray(value)) return `数组 · ${value.length} 项`
+        if (value && typeof value === 'object') return `对象 · ${Object.keys(value).length} 个字段`
+        return `标量 · ${typeof value}`
+      } catch (error) {
+        return 'JSON 无法解析，以下为原始文本'
+      }
     },
     htmlPreviewNodeKey() {
       return `html:${this.activePreviewKey}:${this.currentPath}:${this.htmlVersion}`
@@ -594,6 +627,22 @@ export default {
         this.loadText(path, previewKey)
         return
       }
+      if (ext === 'md' || ext === 'markdown') {
+        this.currentKind = 'markdown'
+        this.currentLanguage = 'markdown'
+        this.currentMeta = 'MARKDOWN'
+        if (this.hydrateFromCacheOrArtifact(path)) return
+        await this.loadText(path, previewKey)
+        return
+      }
+      if (ext === 'json') {
+        this.currentKind = 'json'
+        this.currentLanguage = 'json'
+        this.currentMeta = 'JSON'
+        if (this.hydrateFromCacheOrArtifact(path)) return
+        await this.loadText(path, previewKey)
+        return
+      }
       if (CODE_FILE_RE.test(`.${ext}`)) {
         this.currentKind = 'code'
         this.currentLanguage = ext
@@ -631,12 +680,12 @@ export default {
       const seed = this.getArtifactSeed(path)
       const source = cached || seed
       if (!source) return false
-      if ((this.currentKind === 'code' || this.currentKind === 'text') && typeof source.textContent === 'string') {
+      if (['code', 'markdown', 'json', 'text'].includes(this.currentKind) && typeof source.textContent === 'string') {
         this.textContent = source.textContent
         this.loading = false
         return true
       }
-      if ((this.currentKind === 'code' || this.currentKind === 'text') && typeof source.codeContent === 'string') {
+      if (['code', 'markdown', 'json', 'text'].includes(this.currentKind) && typeof source.codeContent === 'string') {
         this.textContent = source.codeContent
         this.setPathCache(path, { textContent: source.codeContent })
         this.loading = false
@@ -697,10 +746,8 @@ export default {
         this.loading = true
       }
       try {
-        const response = await fetch(getSessionRawFileUrl(this.sessionId, path))
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const text = await readSessionRawFile(this.sessionId, path, 'text')
         if (previewKey !== this.activePreviewKey || path !== this.currentPath) return
-        const text = await response.text()
         this.textContent = text
         if (this.currentKind === 'html') {
           const htmlPreviewUrl = this.createHtmlPreviewUrl(path, text)
@@ -712,14 +759,13 @@ export default {
           path,
           kind: this.currentKind,
           elapsedMs: this.perfElapsed(startedAt),
-          routeMs: response.headers.get('X-WeAgent-Elapsed-Ms') || '',
         })
         if (shouldControlLoading) {
           this.loading = false
         }
       } catch (error) {
         if (previewKey !== this.activePreviewKey || path !== this.currentPath) return
-        this.textContent = `鍔犺浇澶辫触锛?{error.message || error}`
+        this.textContent = `加载失败：${error.message || error}`
         if (shouldControlLoading) {
           this.loading = false
         }
@@ -729,9 +775,7 @@ export default {
       const startedAt = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()
       this.loading = true
       try {
-        const response = await fetch(getSessionRawFileUrl(this.sessionId, path))
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const text = await response.text()
+        const text = await readSessionRawFile(this.sessionId, path, 'text')
         const rows = this.parseCsv(text)
         const headers = (rows[0] || []).map((header, index) => {
           const normalized = String(header || '').replace(/^\uFEFF/, '')
@@ -754,7 +798,6 @@ export default {
         this.logPerf('table:loaded', {
           path,
           elapsedMs: this.perfElapsed(startedAt),
-          routeMs: response.headers.get('X-WeAgent-Elapsed-Ms') || '',
         })
       } catch (error) {
         this.tableHeaders = []
@@ -805,6 +848,39 @@ export default {
         rows.push(row)
       }
       return rows
+    },
+    escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+    },
+    renderMarkdownDocument(value) {
+      const escaped = this.escapeHtml(value)
+      const lines = escaped.split(/\r?\n/)
+      const html = []
+      let inList = false
+      lines.forEach(line => {
+        const heading = line.match(/^(#{1,6})\s+(.+)$/)
+        const bullet = line.match(/^\s*[-*+]\s+(.+)$/)
+        if (heading) {
+          if (inList) { html.push('</ul>'); inList = false }
+          const level = heading[1].length
+          html.push(`<h${level}>${heading[2]}</h${level}>`)
+        } else if (bullet) {
+          if (!inList) { html.push('<ul>'); inList = true }
+          html.push(`<li>${bullet[1]}</li>`)
+        } else if (!line.trim()) {
+          if (inList) { html.push('</ul>'); inList = false }
+        } else {
+          if (inList) { html.push('</ul>'); inList = false }
+          html.push(`<p>${line}</p>`)
+        }
+      })
+      if (inList) html.push('</ul>')
+      return html.join('')
     },
     async enterEditMode() {
       this.isCropping = false
@@ -1396,6 +1472,43 @@ export default {
   white-space: pre-wrap;
   word-break: break-word;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.awb-document-wrap {
+  min-height: calc(100vh - 110px);
+  padding: 22px;
+  overflow: auto;
+  background: #f4f7fb;
+}
+
+.awb-markdown,
+.awb-json-summary {
+  max-width: 920px;
+  margin: 0 auto;
+  border: 1px solid #dbe3f0;
+  border-radius: 14px;
+  background: #fff;
+  color: #243447;
+}
+
+.awb-markdown {
+  min-height: calc(100vh - 180px);
+  padding: 34px 42px;
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.awb-markdown :deep(h1),
+.awb-markdown :deep(h2),
+.awb-markdown :deep(h3) { color: #163f3a; }
+.awb-markdown :deep(li) { margin: 6px 0; }
+
+.awb-json-summary {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  color: #2e746b;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .awb-loading,

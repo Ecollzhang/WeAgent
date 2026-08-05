@@ -264,7 +264,11 @@ class DockerContainerManager:
             "CODEX_EXEC_TIMEOUT_SECONDS", "OPENCODE_EXEC_TIMEOUT_SECONDS",
             "AGENT_EXEC_TIMEOUT_SECONDS",
             "RAG_INTERNAL_API_KEY", "RAG_SERVICE_URL",
+            "RAG_SCOPE_USER_ID", "RAG_SCOPE_DOMAIN", "RAG_SCOPE_WORKSPACE_ID",
+            "RAG_SCOPE_EDUCATION_ROLE",
+            "EDUCATION_RUN_GRANT", "EDUCATION_SERVICE_URL",
             "KB_DOCUMENT_IDS",
+            "CONVERSATION_SERVICES", "RD_PROJECT_ID",
             "SERVICE_REGISTRY",
             "USER_AUTH_TOKEN",
             "HTTP_PROXY", "HTTPS_PROXY",
@@ -280,6 +284,7 @@ class DockerContainerManager:
                         "OPENAI_API_KEY", "OPENAI_MODEL",
                         "CODEX_API_KEY", "CODEX_MODEL",
                         "OPENCODE_API_KEY", "OPENCODE_MODEL",
+                        "EDUCATION_RUN_GRANT",
                     }:
                         container_env[key] = _clean_config_value(env_vars[key])
                     else:
@@ -459,13 +464,74 @@ class DockerContainerManager:
         session = self.get_session(session_id)
         if not session:
             raise KeyError(f"Session '{session_id}' not found")
+        try:
+            runtime_agents = session.client.list_agents()
+            runtime_ids = {
+                str(item.get("agent_id") or item.get("id") or "")
+                for item in (
+                    runtime_agents.get("agents", [])
+                    if isinstance(runtime_agents, dict)
+                    else []
+                )
+                if isinstance(item, dict)
+            }
+            saved_config = next(
+                (
+                    config
+                    for config in (session.agents_config or [])
+                    if str(config.get("agent_id")) == str(agent_id)
+                ),
+                None,
+            )
+            if saved_config and str(agent_id) not in runtime_ids:
+                self._create_agent_in_container(session.host_port, saved_config)
+        except Exception:
+            # Older healthy runtimes may not provide agent introspection.
+            # Preserve their existing send behavior and rely on the precise
+            # partial-initialization fallback below if needed.
+            pass
         print(
             f"[SandboxManager] send_message session_id={session_id} "
             f"agent_id={agent_id} message_len={len(message or '')}"
         )
         result = session.client.send_to_agent(agent_id, message)
+        error = str(result.get("error") or "") if isinstance(result, dict) else ""
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "error"
+            and "not found and no saved config" in error
+        ):
+            # A host interruption can leave a newly started container between
+            # Docker creation and Agent initialization.  The immutable Agent
+            # configuration is retained in the trusted container labels and
+            # recovered into ``agents_config``. Repair only this exact partial
+            # initialization state, then retry the original message once.
+            saved_config = next(
+                (
+                    config
+                    for config in (session.agents_config or [])
+                    if str(config.get("agent_id")) == str(agent_id)
+                ),
+                None,
+            )
+            if saved_config:
+                self._create_agent_in_container(session.host_port, saved_config)
+                result = session.client.send_to_agent(agent_id, message)
         self._sync_skill_drafts_from_result(session_id, result)
         return result
+
+    def execute_tool(
+        self,
+        session_id: str,
+        agent_id: str,
+        tool_name: str,
+        args: dict,
+    ) -> dict:
+        """Execute one projected tool as the designated sandbox Agent."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        return session.client.execute_tool(agent_id, tool_name, args)
 
     def send_chain(self, session_id: str, messages: list[dict]) -> list[dict]:
         """Chain messages across agents."""
@@ -545,6 +611,62 @@ class DockerContainerManager:
             raise KeyError(f"Session '{session_id}' not found")
         return session.client.restart_agent(agent_id)
 
+    def preflight_tools(
+        self,
+        session_id: str,
+        required_tools: list[str],
+        agent_ids: Optional[list[str]] = None,
+    ) -> dict:
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        requested_agent_ids = {
+            str(agent_id or "").strip()
+            for agent_id in (agent_ids or [])
+            if str(agent_id or "").strip()
+        }
+        results = []
+        checked_agent_ids = []
+        for config in session.agents_config or []:
+            agent_id = str(config.get("agent_id") or "").strip()
+            if not agent_id:
+                continue
+            if requested_agent_ids and agent_id not in requested_agent_ids:
+                continue
+            checked_agent_ids.append(agent_id)
+            try:
+                result = session.client.preflight_agent_tools(
+                    agent_id,
+                    required_tools,
+                )
+            except Exception as exc:
+                result = {
+                    "ready": False,
+                    "agent_id": agent_id,
+                    "missing_tools": list(required_tools),
+                    "error": str(exc),
+                }
+            results.append(result)
+        missing_agent_ids = sorted(
+            requested_agent_ids - set(checked_agent_ids)
+        )
+        return {
+            "ready": (
+                bool(results)
+                and not missing_agent_ids
+                and all(item.get("ready") for item in results)
+            ),
+            "required_tools": sorted(set(required_tools)),
+            "checked_agent_ids": checked_agent_ids,
+            "missing_agent_ids": missing_agent_ids,
+            "agents": results,
+            "missing_tools": sorted({
+                tool
+                for item in results
+                for tool in (item.get("missing_tools") or [])
+            }),
+        }
+
     def update_model_config(self, session_id: str, env_vars: dict) -> dict:
         """Hot-update model configuration in a running session container."""
         session = self.get_session(session_id)
@@ -583,6 +705,59 @@ class DockerContainerManager:
             else:
                 config[key] = value
         return session.client.update_model_config(config)
+
+    def update_runtime_auth(self, session_id: str, authorization: str) -> dict:
+        """Refresh the user authorization inherited by new Agent processes."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        authorization = str(authorization or "").strip()
+        if (
+            not authorization.startswith("Bearer ")
+            or len(authorization) > 8192
+            or "\r" in authorization
+            or "\n" in authorization
+        ):
+            raise ValueError("valid user authorization required")
+        return session.client.update_runtime_config({
+            "USER_AUTH_TOKEN": authorization,
+        })
+
+    def update_education_runtime_context(
+        self,
+        session_id: str,
+        *,
+        authorization: str,
+        run_grant: str,
+        service_url: str,
+        agent_service_views: dict,
+        services: list,
+        course_id: str | None = None,
+        membership_role: str | None = None,
+        actor_user_id: str | None = None,
+    ) -> dict:
+        """Atomically refresh the live container's user and EDU scopes."""
+        import json
+
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        config = {
+                "USER_AUTH_TOKEN": authorization,
+                "EDUCATION_RUN_GRANT": run_grant,
+                "EDUCATION_SERVICE_URL": service_url,
+                "EDUCATION_MEMBERSHIP_ROLE": str(membership_role or ""),
+                "AGENT_SERVICE_VIEWS": json.dumps(agent_service_views),
+                "CONVERSATION_SERVICES": json.dumps(services),
+        }
+        if course_id:
+            config.update({
+                "RAG_SCOPE_USER_ID": str(actor_user_id or ""),
+                "RAG_SCOPE_DOMAIN": "edu",
+                "RAG_SCOPE_WORKSPACE_ID": str(course_id),
+                "RAG_SCOPE_EDUCATION_ROLE": str(membership_role or ""),
+            })
+        return session.client.update_runtime_config(config)
 
     def update_model_config_for_user_sessions(self, user_id: str, env_vars: dict) -> dict:
         """Hot-update model configuration for all running containers owned by a user."""
@@ -850,6 +1025,45 @@ class DockerContainerManager:
         encoded_name = quote(zip_name)
         disposition = f"attachment; filename=\"export.zip\"; filename*=UTF-8''{encoded_name}"
         return zip_bytes, "application/zip", disposition
+
+    def restore_zip(self, session_id: str, archive_bytes: bytes) -> dict:
+        """Restore a trusted durable workspace snapshot into a fresh runtime."""
+        session = self.get_session(session_id)
+        if not session:
+            raise KeyError(f"Session '{session_id}' not found")
+        if not isinstance(archive_bytes, (bytes, bytearray)):
+            raise ValueError("Snapshot archive must be bytes")
+
+        restored = []
+        total_size = 0
+        with zipfile.ZipFile(io.BytesIO(bytes(archive_bytes)), "r") as archive:
+            members = archive.infolist()
+            if len(members) > 5000:
+                raise ValueError("Snapshot archive contains too many files")
+            for member in members:
+                if member.is_dir():
+                    continue
+                raw_name = str(member.filename or "").replace("\\", "/").lstrip("/")
+                normalized = posixpath.normpath(raw_name)
+                if normalized in {"", ".", ".."} or normalized.startswith("../"):
+                    raise ValueError("Snapshot archive contains an unsafe path")
+                parts = [part for part in normalized.split("/") if part]
+                if parts and parts[0] == "workspace":
+                    parts = parts[1:]
+                if not parts or any(part in {".", ".."} for part in parts):
+                    continue
+                target_path = "/workspace/" + "/".join(parts)
+                content = archive.read(member)
+                total_size += len(content)
+                if total_size > 200 * 1024 * 1024:
+                    raise ValueError("Snapshot expands beyond the restore limit")
+                result = self.write_workspace_file(session_id, target_path, content)
+                if result.get("status") != "ok":
+                    raise RuntimeError(
+                        result.get("error") or f"Failed to restore {target_path}"
+                    )
+                restored.append(target_path)
+        return {"status": "ok", "restored_files": len(restored), "paths": restored}
 
     def write_workspace_file(self, session_id: str, file_path: str,
                              content_bytes: bytes) -> dict:
@@ -1522,8 +1736,11 @@ print(json.dumps({"root": root, "tree": build_node(real_root, 0)}, ensure_ascii=
                                         workspace_name: str = "") -> str:
         workspace_name = workspace_name or agent_id
         root = posixpath.normpath(f"/workspace/agents/{workspace_name}")
-        normalized = "/" + str(path or "").replace("\\", "/").lstrip("/")
-        normalized = posixpath.normpath(normalized)
+        raw_path = str(path or "").replace("\\", "/")
+        if raw_path.startswith("/"):
+            normalized = posixpath.normpath(raw_path)
+        else:
+            normalized = posixpath.normpath(posixpath.join(root, raw_path))
         if normalized == root or normalized.startswith(root + "/"):
             return normalized
         raise ValueError("Path must stay inside the agent workspace directory")

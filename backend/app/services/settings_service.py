@@ -1,3 +1,5 @@
+import os
+
 from app.models.user_model_config import UserModelConfig
 from urllib.parse import urlparse
 from app import db as app_db
@@ -36,6 +38,43 @@ def _openai_compatible_base_url(base_url):
 def _codex_should_use_relay(base_url):
     host = urlparse(_clean_config_value(base_url).rstrip('/')).netloc.lower()
     return any(marker in host for marker in ('deepseek', 'xiaomimimo'))
+
+
+def _server_managed_container_env_vars():
+    api_key = _clean_config_value(
+        os.getenv("DEEPSEEK_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("CODEX_API_KEY")
+    )
+    if not api_key:
+        return None
+    base_url = _clean_config_value(
+        os.getenv("OPENAI_BASE_URL")
+        or os.getenv("DEEPSEEK_BASE_URL")
+        or os.getenv("CODEX_BASE_URL")
+    ).rstrip("/")
+    model_name = _clean_config_value(
+        os.getenv("TEXT2IFC_DEEPSEEK_MODEL")
+        or os.getenv("DEEPSEEK_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or os.getenv("CODEX_MODEL")
+    )
+    codex_base_url = _openai_compatible_base_url(base_url)
+    env = {
+        "ANTHROPIC_API_KEY": api_key,
+        "CODEX_API_KEY": api_key,
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+    if base_url:
+        env["ANTHROPIC_BASE_URL"] = base_url
+    if codex_base_url:
+        env["CODEX_BASE_URL"] = codex_base_url
+    if _codex_should_use_relay(codex_base_url or base_url):
+        env["CODEX_USE_RELAY"] = "1"
+    if model_name:
+        env["ANTHROPIC_MODEL"] = model_name
+        env["CODEX_MODEL"] = model_name
+    return env
 
 
 class SettingsService:
@@ -100,9 +139,13 @@ class SettingsService:
             }
         return result, None
 
-    def get_container_env_vars(self, user_id):
+    def get_container_env_vars(self, user_id, allow_server_fallback=False):
         config = UserModelConfig.query.filter_by(user_id=user_id).first()
         if not config or not config.api_key:
+            if allow_server_fallback:
+                server_env = _server_managed_container_env_vars()
+                if server_env:
+                    return server_env, None
             return None, '请先在设置中配置模型 API Key'
 
         env = {

@@ -1,0 +1,155 @@
+<template>
+  <div class="education-page">
+    <AppSidebar />
+    <main class="education-main">
+      <header class="education-header">
+        <div class="title-block">
+          <button
+            v-if="backTo"
+            type="button"
+            class="back-button"
+            aria-label="返回"
+            @click="$router.push(backTo)"
+          >
+            <i class="el-icon-arrow-left"></i>
+          </button>
+          <h1>{{ title }}</h1>
+          <p v-if="subtitle">{{ subtitle }}</p>
+        </div>
+        <EducationCourseContext />
+        <div class="header-actions">
+          <slot name="actions"></slot>
+        </div>
+      </header>
+      <section class="education-content">
+        <slot></slot>
+      </section>
+    </main>
+  </div>
+</template>
+
+<script>
+import AppSidebar from '../Sidebar/index.vue'
+import EducationCourseContext from './EducationCourseContext.vue'
+
+export default {
+  name: 'EducationShell',
+  components: { AppSidebar, EducationCourseContext },
+  props: {
+    title: { type: String, required: true },
+    subtitle: { type: String, default: '' },
+    backTo: { type: [String, Object], default: '' },
+  },
+}
+</script>
+
+<style scoped>
+.education-page {
+  display: flex;
+  gap: 12px;
+  height: 100vh;
+  padding: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 78% 5%, rgba(45, 166, 153, 0.13), transparent 31%),
+    linear-gradient(135deg, #edf5ff 0%, #f8fafc 44%, #eef8f4 100%);
+}
+
+.education-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 45px rgba(31, 41, 55, 0.08);
+}
+
+.education-header {
+  min-height: 92px;
+  padding: 18px 26px;
+  display: grid;
+  grid-template-areas: "title context actions";
+  grid-template-columns: minmax(260px, 1fr) minmax(360px, 520px) auto;
+  align-items: center;
+  gap: 24px;
+  border-bottom: 1px solid #e8edf3;
+}
+
+.title-block {
+  grid-area: title;
+  min-width: 0;
+}
+
+.education-header > :deep(.course-context) { grid-area: context; }
+
+h1 {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  vertical-align: top;
+  margin: 0;
+  color: #18212f;
+  font-size: 23px;
+}
+
+p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.education-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 26px 30px;
+}
+
+.header-actions {
+  grid-area: actions;
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  align-items: center;
+  justify-content: end;
+  gap: 8px;
+}
+
+.back-button {
+  width: 31px;
+  height: 31px;
+  margin-right: 10px;
+  border: 1px solid #dce4ec;
+  border-radius: 9px;
+  background: #fff;
+  color: #526070;
+  cursor: pointer;
+}
+
+@media (max-width: 1280px) {
+  .education-header {
+    grid-template-areas:
+      "title context"
+      "title actions";
+    grid-template-columns: minmax(280px, 1fr) minmax(360px, auto);
+  }
+}
+
+@media (max-width: 900px) {
+  .education-page { padding: 0; gap: 0; }
+  .education-main { border-radius: 0; }
+  .education-header {
+    padding: 15px 18px;
+    align-items: stretch;
+    grid-template-areas: "title" "context" "actions";
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .header-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .header-actions :deep(.el-button), .header-actions :deep(.el-tag) { margin: 0; }
+  .education-content { padding: 18px; }
+}
+</style>

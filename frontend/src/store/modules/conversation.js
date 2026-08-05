@@ -1,11 +1,15 @@
 import Vue from 'vue'
 import { getConversations, createConversation, deleteConversation, updateConversationFavorite } from '../../api/conversation'
 
-const state = {
-  conversations: [],
-  currentConversation: null,
-  loading: false,
+function initialState() {
+  return {
+    conversations: [],
+    currentConversation: null,
+    loading: false,
+  }
 }
+
+const state = initialState()
 
 const getters = {
   allConversations: state => state.conversations,
@@ -14,6 +18,9 @@ const getters = {
 }
 
 const mutations = {
+  RESET_STATE(state) {
+    Object.assign(state, initialState())
+  },
   SET_CONVERSATIONS(state, conversations) {
     state.conversations = conversations
   },

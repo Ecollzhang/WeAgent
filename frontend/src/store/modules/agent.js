@@ -1,9 +1,13 @@
 import { getAgents, createAgent, updateAgent as apiUpdateAgent, deleteAgent } from '../../api/agent'
 
-const state = {
-  agents: [],
-  loading: false,
+function initialState() {
+  return {
+    agents: [],
+    loading: false,
+  }
 }
+
+const state = initialState()
 
 const getters = {
   allAgents: state => state.agents,
@@ -12,6 +16,9 @@ const getters = {
 }
 
 const mutations = {
+  RESET_STATE(state) {
+    Object.assign(state, initialState())
+  },
   SET_AGENTS(state, agents) {
     state.agents = agents
   },

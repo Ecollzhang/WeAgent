@@ -122,6 +122,11 @@ class OrchestratorClient:
     def remove_agent(self, agent_id: str) -> dict:
         return self._request("DELETE", f"/api/agents/{agent_id}")
 
+    def preflight_agent_tools(self, agent_id: str, required_tools: list[str]) -> dict:
+        return self._request("POST", f"/api/agents/{agent_id}/tools/preflight", {
+            "required_tools": required_tools,
+        })
+
     def list_agents(self) -> dict:
         return self._request("GET", "/api/agents")
 
@@ -277,6 +282,27 @@ class OrchestratorClient:
             config,
             timeout=_timeout_from_env("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", 5),
         )
+
+    def update_runtime_config(self, config: dict) -> dict:
+        """Hot-update allowlisted request-scoped runtime configuration."""
+        result = self._request(
+            "POST",
+            "/api/config/runtime",
+            config,
+            timeout=_timeout_from_env("SANDBOX_CONFIG_UPDATE_TIMEOUT_SECONDS", 5),
+        )
+        error = str(result.get("error") or "") if isinstance(result, dict) else ""
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "error"
+            and "HTTP 404" in error
+            and "Not Found" in error
+        ):
+            # Images built before runtime-scoped auth refresh do not expose
+            # this optional route. The host uses this marker to snapshot and
+            # rehydrate the conversation on the current image.
+            result["optional_route_missing"] = True
+        return result
 
     # ---- Progress ----
 

@@ -4,6 +4,9 @@ backend/.env
 frontend/.env
 frontend/.env.local
 frontend/.env.*.local
+backend/services/edu/data/uploads/
+backend/services/rag/uploads/
+backend/instance/
 
 # ===== Python 依赖 =====
 backend/venv/
@@ -65,6 +68,8 @@ docs/archive-registry.md
 
 # ===== AI runtime logs =====
 .claude/logs/
+.runtime/
+tmp/
 
 # ===== Multi-platform clients =====
 clients/**/node_modules/

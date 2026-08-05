@@ -9,6 +9,10 @@ const getters = {
 }
 
 const mutations = {
+  RESET_STATE(state) {
+    state.modelConfig = null
+    localStorage.removeItem('model_config')
+  },
   SET_MODEL_CONFIG(state, config) {
     state.modelConfig = config
     localStorage.setItem('model_config', JSON.stringify(config))

@@ -5,6 +5,7 @@ Each agent runs in its own workspace directory with its own .claude/agent.md
 for role definition. Uses subprocess to invoke `claude -p` non-interactively.
 """
 
+import json
 import os
 import queue
 import re
@@ -62,6 +63,40 @@ class AgentRuntime:
             work_dir=agent_dir,
             provider=self.provider_runner.provider_name,
         )
+
+    def bound_tool_names(self) -> list[str]:
+        """Read the server-projected tool catalog for this Agent."""
+        safe_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(self.agent_id or "").strip())
+        path = os.path.join(
+            os.environ.get("WEAGENT_WORKSPACE_ROOT", "/workspace"),
+            ".weagent",
+            "agents",
+            safe_id.strip(".-") or "item",
+            "capabilities.json",
+        )
+        try:
+            with open(path, encoding="utf-8") as stream:
+                payload = json.load(stream)
+        except (OSError, ValueError):
+            return []
+        names = set()
+        for capability in payload.get("capabilities") or []:
+            if capability.get("type") != "tool":
+                continue
+            if (capability.get("status") or "implemented") not in {
+                "implemented",
+                "partial",
+            }:
+                continue
+            manifest = capability.get("manifest") or {}
+            for name in capability.get("tool_names") or manifest.get("tool_names") or []:
+                clean = str(name or "").strip()
+                if clean:
+                    names.add(clean)
+        return sorted(names)
+
+    def tool_preflight(self, required_tools=None) -> dict:
+        return self.provider_runner.tool_preflight(required_tools or [])
 
     def _format_agent_md(self) -> str:
         """Format the agent.md file from the system prompt."""
@@ -180,6 +215,36 @@ weagent-report '{{"type":"office_card","data":{{"id":"<id>","kind":"meeting/acti
         return msg
 
     def _runtime_instruction(self) -> str:
+        if not self.provider_runner.supports_native_shell:
+            capability_note = self._capability_instruction()
+            moderator_rule = ""
+            if self.agent_id == "moderator":
+                moderator_rule = (
+                    "\nAs the moderator, coordinate the assigned roles in plain text. "
+                    "Do not invent tool calls or executable commands.\n"
+                )
+            return f"""
+You are the WeAgent conversation Agent {self.role} (agent_id={self.agent_id}).
+
+This provider has no executable shell or native progress tools. The runtime reports
+heartbeats automatically. Do not call bash, run_command, run_command_safe,
+weagent-report, update_plan, request_user_input, or any invented tool.
+
+When the task requires files, return each complete artifact as one controlled file
+block using this exact format:
+
+## /workspace/agents/{self.workspace_name}/actual-filename.ext
+```text
+complete file content
+```
+
+The trusted runtime writes controlled file blocks into the private workspace and
+reports them to the product. Never claim that you executed or persisted a file
+yourself. Finish with a short user-facing summary after all required file blocks.
+{moderator_rule}
+{capability_note}
+The user task follows below.
+""".strip()
         capability_note = self._capability_instruction()
         moderator_rule = ""
         if self.agent_id == "moderator":

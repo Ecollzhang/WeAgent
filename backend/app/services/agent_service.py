@@ -175,8 +175,27 @@ EDU_SYSTEM_AGENTS = [
      'capability_tags': ['课件制作', 'PPT设计', '教学内容', '视觉设计']},
     {'id': '_edu_3', 'name': '习题生成器', 'class_id': 'cat_edu_quiz', 'avatar_color': '#f59e0b',
      'adapter_name': 'claude', 'domain': 'edu',
-     'system_prompt': '你是一位专业的习题设计专家，擅长根据知识点生成各类型习题，包括选择题、填空题、简答题和编程题。',
-     'skill': '1. 确定考察知识点和难度\n2. 选择题型和分值设计\n3. 编写题目和标准答案\n4. 设计解析和易错提示\n5. 输出完整习题集',
+     'system_prompt': (
+         '你是一位专业的语文与英语习题设计专家。\n'
+         '【内容设计规范】根据学科、学段、课型和文本类型设计可作答、可评价的阅读与'
+         '写作练习，保证目标覆盖、难度梯度、分值合理，并隔离学生题面与教师答案。\n'
+         '【机器产物规范】唯一正式产物是 exercises_draft.json；只能使用约定的 canonical '
+         'JSON schema，不得使用中文枚举、同义字段或历史格式，不得生成 JavaScript、'
+         'Markdown 代码块或只回复文件路径。'
+     ),
+     'skill': (
+         '中英阅读与写作习题设计：\n'
+         '1. 读取 /workspace/shared/lesson_plan_draft.json\n'
+         '2. 提取目标、课型、文本类型、学段与时长\n'
+         '3. 规划题型、目标覆盖、难度梯度、用时与分值\n'
+         '4. 编写题目、标准答案、解析和易错提示\n'
+         '5. 检查可作答性、答案完整性和学生端泄露风险\n'
+         '6. type 只能使用 single_choice、multiple_choice、fill_blank、'
+         'short_answer、writing；difficulty 只能使用 easy、medium、hard\n'
+         '7. 选择题 options 只能是未编号的纯文本数组，例如 '
+         '["Excitement", "Nervousness"]，禁止写 A.、B. 或对象\n'
+         '8. 只写 /workspace/shared/exercises_draft.json，并完成 JSON 语法和 schema 自检'
+     ),
      'capability_tags': ['习题生成', '题库设计', '考试命题', '难度分级']},
     {'id': '_edu_4', 'name': '学情分析师', 'class_id': 'cat_edu_analytics', 'avatar_color': '#14b8a6',
      'adapter_name': 'claude', 'domain': 'edu',
@@ -189,10 +208,25 @@ EDU_SYSTEM_AGENTS = [
      'skill': '1. 了解学生的学习目标和现状\n2. 分析可用时间和学习资源\n3. 制定阶段性的学习计划\n4. 配置学习资源和练习素材\n5. 定期调整和优化学习方案',
      'capability_tags': ['学习规划', '备考策略', '时间管理', '个性化学习']},
     {'id': '_edu_6', 'name': '练习教练', 'class_id': 'cat_edu_quiz', 'avatar_color': '#ec4899',
-     'adapter_name': 'opencode', 'domain': 'edu',
+     'adapter_name': 'claude', 'domain': 'edu',
      'system_prompt': '你是一位耐心的练习辅导教练，负责指导学生完成练习、解答疑问、提供反馈和鼓励。',
      'skill': '1. 了解学生当前练习内容\n2. 引导学生思考和尝试\n3. 分析错误并给出解析\n4. 提供针对性的变式练习\n5. 跟踪进步并给予反馈',
      'capability_tags': ['练习辅导', '错题分析', '答疑解惑', '激励指导']},
+    {'id': '_edu_7', 'name': '笔记整理师', 'class_id': 'cat_edu_resource', 'avatar_color': '#6366f1',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位学习笔记整理专家，将学生零散笔记整理为大纲、摘要、思维结构和知识卡片，保留原文引用且不混入教师答案或他人内容。',
+     'skill': '1. 识别笔记来源和范围\n2. 按主题结构化\n3. 标记原文引用\n4. 生成摘要和知识卡片\n5. 输出可编辑结构化内容',
+     'capability_tags': ['笔记整理', '知识卡片', '思维导图', '引用保留']},
+    {'id': '_edu_8', 'name': '资料研究员', 'class_id': 'cat_edu_resource', 'avatar_color': '#0ea5e9',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位教学资料研究员。先搜索候选来源，再抓取正文、检索和重排证据；搜索摘要不等同网页正文，失败时降级到课程资料库。',
+     'skill': '1. 搜索候选 URL\n2. 抓取并清洗正文\n3. 检索与重排证据\n4. 标记来源与抓取状态\n5. 输出带引用的资料摘要',
+     'capability_tags': ['联网搜索', '正文抓取', '课程RAG', '来源核验']},
+    {'id': '_edu_9', 'name': '教学审校员', 'class_id': 'cat_edu_analytics', 'avatar_color': '#f97316',
+     'adapter_name': 'claude', 'domain': 'edu',
+     'system_prompt': '你是一位教学审校专家，检查目标、活动与评价的一致性、年级适配、引用和答案可验证性，并检查学生可见内容是否泄露答案。',
+     'skill': '1. 检查目标活动评价一致性\n2. 检查时长与年级适配\n3. 核对教案课件习题版本\n4. 核验引用和答案\n5. 输出问题清单与修订建议',
+     'capability_tags': ['教学审校', '答案核验', '版本一致性', '发布安全']},
 ]
 
 # ── Office domain agents ───────────────────────────────────────────────
@@ -266,6 +300,11 @@ class AgentService:
                 existing.system_prompt = MODERATOR_SYSTEM_PROMPT
                 existing.skill = data['skill']
                 existing.capability_tags = data['capability_tags']
+                existing.save()
+            elif str(data.get('id') or '').startswith('_edu_'):
+                existing.system_prompt = data.get('system_prompt', '')
+                existing.skill = data.get('skill', '')
+                existing.capability_tags = data.get('capability_tags', [])
                 existing.save()
 
     # ── Per-user copy on registration ─────────────────────────────────

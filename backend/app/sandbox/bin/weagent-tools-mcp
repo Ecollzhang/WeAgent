@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Expose an Agent's projected WeAgent tools as a local MCP stdio server.
+
+The bridge never owns authorization data. It reads the server-written capability
+projection, exposes only executable tools bound to the current Agent, and sends
+calls to the container-local Orchestrator. The Orchestrator remains responsible
+for permission checks, auditing, and the actual tool implementation.
+"""
+
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+
+def _safe_segment(value: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "").strip())
+    return text.strip(".-") or "item"
+
+
+def load_bound_tools(agent_id: str, workspace_root: str = "/workspace") -> dict:
+    """Return MCP tool definitions from this Agent's projected capabilities."""
+    path = os.path.join(
+        workspace_root,
+        ".weagent",
+        "agents",
+        _safe_segment(agent_id),
+        "capabilities.json",
+    )
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+    tools = {}
+    for capability in payload.get("capabilities") or []:
+        if capability.get("type") != "tool":
+            continue
+        if (capability.get("status") or "implemented") not in {
+            "implemented",
+            "partial",
+        }:
+            continue
+        manifest = capability.get("manifest") or {}
+        names = capability.get("tool_names") or manifest.get("tool_names") or []
+        schema = manifest.get("input_schema")
+        if not isinstance(schema, dict):
+            schema = {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            }
+        tool_meta = manifest.get("tool") or {}
+        description = (
+            capability.get("description")
+            or tool_meta.get("description")
+            or tool_meta.get("name")
+            or capability.get("name")
+            or "WeAgent bounded tool"
+        )
+        for name in names:
+            name = str(name or "").strip()
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+                continue
+            tools[name] = {
+                "name": name,
+                "description": str(description)[:2000],
+                "inputSchema": schema,
+            }
+    return tools
+
+
+def request_tool(payload: dict) -> dict:
+    """Call the container-local Orchestrator without crossing a trust boundary."""
+    port = os.environ.get("ORCHESTRATOR_PORT", "8080")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/tools/execute",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=125) as response:
+            body = response.read(500_000).decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        body = error.read(50_000).decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(body)
+        except ValueError:
+            parsed = {"error": body or str(error)}
+        return {"status": "error", "error": parsed.get("error") or str(error)}
+    except (OSError, urllib.error.URLError) as error:
+        return {"status": "error", "error": str(error)}
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return {"status": "error", "error": "Orchestrator returned invalid JSON"}
+    return parsed if isinstance(parsed, dict) else {
+        "status": "error",
+        "error": "Orchestrator returned an invalid tool response",
+    }
+
+
+def _response(request_id, result=None, error=None):
+    payload = {"jsonrpc": "2.0", "id": request_id}
+    if error is not None:
+        payload["error"] = error
+    else:
+        payload["result"] = result or {}
+    return payload
+
+
+def _tool_result(payload: dict) -> dict:
+    result = payload.get("result", payload)
+    if not isinstance(result, dict):
+        result = {"status": "ok", "result": result}
+    is_error = (
+        payload.get("status") == "error"
+        or result.get("status") == "error"
+        or bool(result.get("error") and result.get("status") != "ok")
+    )
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+            }
+        ],
+        "structuredContent": result,
+        "isError": is_error,
+    }
+
+
+def handle_request(
+    message: dict,
+    *,
+    agent_id: str,
+    workspace_root: str = "/workspace",
+):
+    """Handle one MCP JSON-RPC request; notifications intentionally return None."""
+    request_id = message.get("id")
+    method = message.get("method")
+    if method == "notifications/initialized":
+        return None
+    if method == "initialize":
+        requested = (message.get("params") or {}).get("protocolVersion")
+        return _response(
+            request_id,
+            {
+                "protocolVersion": requested or "2024-11-05",
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {
+                    "name": "weagent-tools",
+                    "version": "1.0.0",
+                },
+            },
+        )
+    if method == "ping":
+        return _response(request_id, {})
+
+    tools = load_bound_tools(agent_id, workspace_root)
+    if method == "tools/list":
+        return _response(request_id, {"tools": list(tools.values())})
+    if method == "tools/call":
+        params = message.get("params") or {}
+        name = str(params.get("name") or "").strip()
+        arguments = params.get("arguments") or {}
+        if name not in tools:
+            return _response(
+                request_id,
+                error={
+                    "code": -32602,
+                    "message": f"Tool is not bound to this Agent: {name}",
+                },
+            )
+        if not isinstance(arguments, dict):
+            return _response(
+                request_id,
+                error={"code": -32602, "message": "Tool arguments must be an object"},
+            )
+        payload = request_tool(
+            {
+                "agent_id": agent_id,
+                "tool_name": name,
+                "args": arguments,
+            }
+        )
+        return _response(request_id, _tool_result(payload))
+
+    return _response(
+        request_id,
+        error={"code": -32601, "message": f"Method not found: {method}"},
+    )
+
+
+def main() -> int:
+    agent_id = str(os.environ.get("WEAGENT_AGENT_ID") or "").strip()
+    if not agent_id:
+        print("WEAGENT_AGENT_ID is required", file=sys.stderr)
+        return 2
+    workspace_root = os.environ.get("WEAGENT_WORKSPACE_ROOT", "/workspace")
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+            if not isinstance(message, dict):
+                raise ValueError("request must be an object")
+            response = handle_request(
+                message,
+                agent_id=agent_id,
+                workspace_root=workspace_root,
+            )
+        except Exception as error:
+            response = _response(
+                None,
+                error={"code": -32603, "message": f"Internal error: {error}"},
+            )
+        if response is not None:
+            sys.stdout.write(
+                json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+                + "\n"
+            )
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
