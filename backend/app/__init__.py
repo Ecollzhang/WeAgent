@@ -218,6 +218,7 @@ def _migrate_grayscale_configs():
             'ui.sidebar.projects', 'ui.sidebar.repos', 'ui.sidebar.reviews', 'ui.sidebar.builds',
             'ui.sidebar.courses', 'ui.sidebar.assignments', 'ui.sidebar.resources',
             'ui.sidebar.grades', 'ui.sidebar.students',
+            'ui.sidebar.organization',
             'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
             'ui.sidebar.reports', 'ui.sidebar.schedules',
             # RD 领域卡片
@@ -376,6 +377,7 @@ def _seed_grayscale_configs():
             ('ui.sidebar.grades', '侧边栏-成绩管理', 'ui', 'edu', 1, 1),
             ('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1),
             # ===== 智慧办公 (office) =====
+            ('ui.sidebar.organization', '侧边栏-组织协同', 'ui', 'office', 1, 1),
             ('ui.sidebar.documents', '侧边栏-公文管理', 'ui', 'office', 1, 1),
             ('ui.sidebar.meetings', '侧边栏-会议管理', 'ui', 'office', 1, 1),
             ('ui.sidebar.approvals', '侧边栏-审批流程', 'ui', 'office', 1, 1),

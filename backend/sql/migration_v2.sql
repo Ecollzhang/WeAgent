@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS `grayscale_config` (
     `domain` VARCHAR(50) NOT NULL COMMENT 'rd / edu / office',
     `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '功能是否启用',
     `visible` TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'UI是否可见',
+    `domains` JSON NULL COMMENT 'common 域跨领域生效范围, e.g. ["rd","edu","office"]',
     `description` TEXT DEFAULT NULL COMMENT '配置说明',
     `metadata` JSON DEFAULT NULL COMMENT '扩展元数据',
     `created_at` DATETIME NOT NULL DEFAULT (now()),
@@ -61,123 +62,66 @@ ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `project_id` VARCHAR(36) DE
 
 -- ========================================
 -- 4. 灰度配置种子数据
+--   - domain='common' 的配置通过 domains JSON 字段控制跨领域生效范围
+--   - domain='rd'/'edu'/'office' 的配置仅在该领域生效
+--   - 侧边栏公共项 (agents/tools/favorites/knowledge) 已统一为 common+domains 模式
+--   - 与 backend/app/__init__.py _seed_grayscale_configs() 保持一致
 -- ========================================
 
--- ---------- 智能研发 (rd) ----------
+-- 4a. grayscale_config 表新增 domains 字段（兼容老表）
+ALTER TABLE `grayscale_config` ADD COLUMN IF NOT EXISTS `domains` JSON NULL COMMENT 'common 域跨领域生效范围, e.g. ["rd","edu","office"]' AFTER `visible`;
+
+-- ---------- 公共 (common)：跨领域共享的 UI 配置 ----------
+INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) VALUES
+-- 聊天功能
+('ui.chat.workspace', '聊天-工作目录', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.services', '聊天-预览服务', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.attachments', '聊天-上传文件', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+-- 聊天标签栏
+('ui.chat.tabs.agent_config', '聊天标签-Agent配置', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.artifacts', '聊天标签-产物', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.logs', '聊天标签-日志', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.workflow', '聊天标签-工作流图', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.tabs.knowledge_base', '聊天标签-知识库', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+-- 侧边栏公共项（原 per-domain 重复，现统一为 common）
+('ui.sidebar.agents', '侧边栏-我的Agent', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.sidebar.favorites', '侧边栏-我的收藏', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.sidebar.knowledge', '侧边栏-知识库', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+-- 聊天领域卡片
+('ui.chat.card.requirement', '聊天-需求卡片', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.card.bug', '聊天-缺陷卡片', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.card.iteration', '聊天-迭代卡片', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.card.project', '聊天-项目卡片', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
+('ui.chat.card.office', '聊天-办公卡片', 'ui', 'common', 1, 1, '["office"]')
+ON DUPLICATE KEY UPDATE config_name=VALUES(config_name), domains=VALUES(domains);
+
+-- ---------- 智能研发 (rd)：领域独有配置 ----------
 INSERT IGNORE INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
 -- UI 侧边栏
 ('ui.sidebar.projects', '侧边栏-项目管理', 'ui', 'rd', 1, 1),
 ('ui.sidebar.repos', '侧边栏-代码仓库', 'ui', 'rd', 1, 1),
 ('ui.sidebar.reviews', '侧边栏-代码审查', 'ui', 'rd', 1, 1),
-('ui.sidebar.builds', '侧边栏-构建历史', 'ui', 'rd', 0, 0),
--- UI 聊天工具栏
-('ui.chat.toolbar.project_init', '聊天工具栏-项目初始化', 'ui', 'rd', 1, 1),
-('ui.chat.toolbar.code_review', '聊天工具栏-代码审查', 'ui', 'rd', 1, 1),
--- UI 欢迎页
-('ui.workspace.welcome_rd', '工作空间首页-研发欢迎页', 'ui', 'rd', 1, 1),
--- 功能
-('feature.project.create', '功能-创建项目', 'feature', 'rd', 1, 1),
-('feature.repo.connect', '功能-连接外部仓库', 'feature', 'rd', 1, 1),
-('feature.review.auto', '功能-自动代码审查', 'feature', 'rd', 1, 1),
-('feature.cicd.status', '功能-CI/CD状态查询', 'feature', 'rd', 0, 0),
--- Agent 类别（已有功能 → 研发领域灰度）
-('agent.cat_code', 'Agent类别-编程', 'agent', 'rd', 1, 1),
-('agent.cat_doc', 'Agent类别-文档', 'agent', 'rd', 1, 1),
-('agent.cat_test', 'Agent类别-测试', 'agent', 'rd', 1, 1),
-('agent.cat_design', 'Agent类别-设计', 'agent', 'rd', 1, 1),
-('agent.cat_data', 'Agent类别-数据分析', 'agent', 'rd', 1, 1),
--- Agent
-('agent.architect', 'Agent-架构师', 'agent', 'rd', 1, 1),
-('agent.developer', 'Agent-开发工程师', 'agent', 'rd', 1, 1),
-('agent.tester', 'Agent-测试工程师', 'agent', 'rd', 1, 1),
-('agent.data_analyst', 'Agent-数据分析师', 'agent', 'rd', 1, 1),
-('agent.doc_writer_rd', 'Agent-技术文档助手', 'agent', 'rd', 1, 1),
--- 已有前端功能映射研发灰度
-('ui.sidebar.agents', '侧边栏-Agent管理', 'ui', 'rd', 1, 1),
-('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'rd', 1, 1),
-('ui.sidebar.favorites', '侧边栏-收藏', 'ui', 'rd', 1, 1),
--- 工具
-('tool.code_executor', '工具-代码执行器', 'tool', 'rd', 1, 1),
-('tool.dependency_analyzer', '工具-依赖分析器', 'tool', 'rd', 1, 1);
+('ui.sidebar.builds', '侧边栏-构建管理', 'ui', 'rd', 1, 1);
 
--- ---------- 智慧教育 (edu) ----------
+-- ---------- 智慧教育 (edu)：领域独有配置 ----------
 INSERT IGNORE INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
 -- UI 侧边栏
-('ui.sidebar.agents', '侧边栏-Agent管理', 'ui', 'edu', 1, 1),
-('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'edu', 1, 1),
-('ui.sidebar.favorites', '侧边栏-收藏', 'ui', 'edu', 1, 1),
 ('ui.sidebar.courses', '侧边栏-课程管理', 'ui', 'edu', 1, 1),
 ('ui.sidebar.assignments', '侧边栏-作业系统', 'ui', 'edu', 1, 1),
 ('ui.sidebar.resources', '侧边栏-教学资源', 'ui', 'edu', 1, 1),
 ('ui.sidebar.grades', '侧边栏-成绩管理', 'ui', 'edu', 1, 1),
-('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1),
--- UI 聊天工具栏
-('ui.chat.toolbar.courseware', '聊天工具栏-课件制作', 'ui', 'edu', 1, 1),
-('ui.chat.toolbar.exercise', '聊天工具栏-习题生成', 'ui', 'edu', 1, 1),
-('ui.chat.toolbar.analytics', '聊天工具栏-学情分析', 'ui', 'edu', 1, 1),
--- UI 欢迎页
-('ui.workspace.welcome_edu', '工作空间首页-教育欢迎页', 'ui', 'edu', 1, 1),
--- 功能
-('feature.course.create', '功能-创建课程', 'feature', 'edu', 1, 1),
-('feature.assignment.publish', '功能-发布作业', 'feature', 'edu', 1, 1),
-('feature.assignment.auto_grade', '功能-自动批改', 'feature', 'edu', 1, 1),
-('feature.analytics.report', '功能-学情报告', 'feature', 'edu', 1, 1),
-('feature.bridge.teaching_learning', '功能-教学学习数据桥', 'feature', 'edu', 0, 0),
--- Agent
-('agent.course_designer', 'Agent-课程设计师', 'agent', 'edu', 1, 1),
-('agent.courseware_maker', 'Agent-课件制作师', 'agent', 'edu', 1, 1),
-('agent.quiz_generator', 'Agent-习题生成器', 'agent', 'edu', 1, 1),
-('agent.learning_analyst', 'Agent-学情分析师', 'agent', 'edu', 1, 1),
-('agent.study_planner', 'Agent-学习规划师', 'agent', 'edu', 1, 1),
-('agent.practice_coach', 'Agent-练习教练', 'agent', 'edu', 1, 1),
--- 工具
-('tool.ppt_generator', '工具-PPT生成器', 'tool', 'edu', 1, 1),
-('tool.quiz_engine', '工具-题库引擎', 'tool', 'edu', 1, 1),
-('tool.knowledge_mapper', '工具-知识点映射器', 'tool', 'edu', 1, 1);
+('ui.sidebar.students', '侧边栏-学生画像', 'ui', 'edu', 1, 1);
 
--- ---------- 智慧办公 (office) ----------
+-- ---------- 智慧办公 (office)：领域独有配置 ----------
 INSERT IGNORE INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
 -- UI 侧边栏
-('ui.sidebar.agents', '侧边栏-Agent管理', 'ui', 'office', 1, 1),
-('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'office', 1, 1),
-('ui.sidebar.favorites', '侧边栏-收藏', 'ui', 'office', 1, 1),
+('ui.sidebar.organization', '侧边栏-组织协同', 'ui', 'office', 1, 1),
 ('ui.sidebar.documents', '侧边栏-公文管理', 'ui', 'office', 1, 1),
 ('ui.sidebar.meetings', '侧边栏-会议管理', 'ui', 'office', 1, 1),
 ('ui.sidebar.approvals', '侧边栏-审批流程', 'ui', 'office', 1, 1),
 ('ui.sidebar.reports', '侧边栏-报表服务', 'ui', 'office', 1, 1),
-('ui.sidebar.schedules', '侧边栏-日程管理', 'ui', 'office', 1, 1),
--- UI 聊天工具栏
-('ui.chat.toolbar.doc_draft', '聊天工具栏-公文起草', 'ui', 'office', 1, 1),
-('ui.chat.toolbar.meeting_mins', '聊天工具栏-会议纪要', 'ui', 'office', 1, 1),
-('ui.chat.toolbar.report_gen', '聊天工具栏-报表生成', 'ui', 'office', 1, 1),
--- UI 欢迎页
-('ui.workspace.welcome_office', '工作空间首页-办公欢迎页', 'ui', 'office', 1, 1),
--- 功能
-('feature.document.create', '功能-起草公文', 'feature', 'office', 1, 1),
-('feature.document.review', '功能-公文审核', 'feature', 'office', 1, 1),
-('feature.meeting.transcribe', '功能-会议转写', 'feature', 'office', 1, 1),
-('feature.approval.flow', '功能-审批流转', 'feature', 'office', 1, 1),
-('feature.report.template', '功能-报表模板', 'feature', 'office', 1, 1),
--- Agent
-('agent.doc_writer_office', 'Agent-公文撰写助手', 'agent', 'office', 1, 1),
-('agent.meeting_assistant', 'Agent-会议助理', 'agent', 'office', 1, 1),
-('agent.report_analyst', 'Agent-报表分析助手', 'agent', 'office', 1, 1),
-('agent.email_drafter', 'Agent-邮件起草助手', 'agent', 'office', 1, 1),
-('agent.schedule_manager', 'Agent-日程管理助手', 'agent', 'office', 1, 1),
--- 工具
-('tool.doc_template_engine', '工具-公文模板引擎', 'tool', 'office', 1, 1),
-('tool.format_checker', '工具-格式检查器', 'tool', 'office', 1, 1),
-('tool.transcript_parser', '工具-录音转写解析器', 'tool', 'office', 1, 1);
-
--- ---------- 公共 (common)：跨领域共享的 UI 配置 ----------
-INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) VALUES
--- UI 聊天标签栏
-('ui.chat.tabs.agent_config', '聊天标签-智能体配置', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
-('ui.chat.tabs.artifacts', '聊天标签-产物', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
-('ui.chat.tabs.logs', '聊天标签-日志', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
-('ui.chat.tabs.workflow', '聊天标签-工作流图', 'ui', 'common', 1, 1, '["rd","edu","office"]'),
-('ui.chat.tabs.knowledge_base', '聊天标签-知识库', 'ui', 'common', 1, 1, '["rd","edu","office"]')
-ON DUPLICATE KEY UPDATE config_name=VALUES(config_name), domains=VALUES(domains);
+('ui.sidebar.schedules', '侧边栏-日程管理', 'ui', 'office', 1, 1);
 
 -- ========================================
 -- 5. 已有数据迁移：老用户 → 默认研发空间

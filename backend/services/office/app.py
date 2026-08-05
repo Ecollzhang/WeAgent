@@ -67,6 +67,22 @@ def api_spec():
     return jsonify(_build_office_spec())
 
 if __name__ == '__main__':
+    # 自动创建数据库（首次启动无需手动跑 init.sql）
+    import pymysql
+    from config import Config as cfg
+    try:
+        conn = pymysql.connect(
+            host=cfg.MYSQL_HOST, port=cfg.MYSQL_PORT,
+            user=cfg.MYSQL_USER, password=cfg.MYSQL_PASSWORD, charset='utf8mb4',
+        )
+        conn.cursor().execute(
+            "CREATE DATABASE IF NOT EXISTS `weagent_office` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci"
+        )
+        conn.close()
+    except Exception as e:
+        print(f'[Office] 数据库连接失败（请确认 MySQL 已启动）: {e}')
+        sys.exit(1)
+
     with app.app_context():
         import models  # noqa: F401
         db.create_all()

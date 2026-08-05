@@ -1150,6 +1150,11 @@ export default {
 
 <style scoped>
 .office-page {
+  --ink: #1f2f46;
+  --muted: #7587a1;
+  --line: #dfe8f5;
+  --soft-blue: #edf5ff;
+  --blue: #377ff0;
   display: flex;
   height: 100vh;
   box-sizing: border-box;
@@ -1157,14 +1162,17 @@ export default {
   padding: 12px;
   gap: 12px;
   background: #f3f6fb;
+  font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
 }
 .main {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 18px;
+  padding: 20px;
+  border: 1px solid #edf1f7;
+  border-radius: 16px;
   background: #fff;
-  border-radius: 12px;
+  box-shadow: 0 8px 26px rgba(37, 67, 112, 0.045);
 }
 .head,
 .panel-head,
@@ -1554,25 +1562,6 @@ export default {
     flex-direction: column;
     gap: 8px;
   }
-}
-/* Visual system: compact office workspace rather than default component panels. */
-.office-page {
-  --ink: #1f2f46;
-  --muted: #7587a1;
-  --line: #dfe8f5;
-  --soft-blue: #edf5ff;
-  --blue: #377ff0;
-  padding: 14px;
-  gap: 14px;
-  background: #f3f6fb;
-  font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
-}
-.main {
-  padding: 20px;
-  border: 1px solid #edf1f7;
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 8px 26px rgba(37, 67, 112, 0.045);
 }
 .head {
   min-height: 54px;

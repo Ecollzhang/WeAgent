@@ -100,7 +100,7 @@ const DOMAIN_NAV = {
     ],
   },
   office: [
-    { key: 'organization', label: '组织协同', route: '/organization', activePath: '/organization', iconClass: 'el-icon-s-custom' },
+    { key: 'ui.sidebar.organization', label: '组织协同', route: '/organization', activePath: '/organization', iconClass: 'el-icon-s-custom' },
     { key: 'ui.sidebar.meetings', label: '\u4f1a\u8bae\u4efb\u52a1', route: '/meetings', activePath: '/meetings', iconClass: 'el-icon-date' },
     { key: 'ui.sidebar.documents', label: '公文审批', route: '/documents', activePath: '/documents', iconClass: 'el-icon-document' },
   ],
@@ -172,16 +172,20 @@ export default {
 <style scoped>
 .sidebar {
   width: 150px;
+  min-width: 150px;
+  max-width: 150px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-radius: 12px;
   background: linear-gradient(180deg, #e8f0ff 0%, #f0f5ff 100%);
-  transition: width 0.25s ease;
+  transition: width 0.25s ease, min-width 0.25s ease, max-width 0.25s ease;
 }
 
 .sidebar.collapsed {
   width: 64px;
+  min-width: 64px;
+  max-width: 64px;
 }
 
 .sidebar-header {
