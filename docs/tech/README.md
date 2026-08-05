@@ -15,12 +15,13 @@
 
 ## 推荐阅读顺序
 
-1. `00_agenthub_rules.md`：总体规则、范围和技术边界。
-2. `01_problem_scope.md`：问题拆解、MVP 范围和优先级。
-3. `02_architecture_overview.md`：整体架构、主链路和数据流。
-4. `03_module_index.md`：模块索引和上下游关系。
-5. `modules/`：具体模块方案。
-6. `appendices/`：API、事件、数据库、演示脚本、风险兜底等补充资料。
+1. `WeAgent 技术文档.md`：当前 v2.4 总体技术文档，包含 Education 领域扩展与真实验收边界。
+2. `00_agenthub_rules.md`：总体规则、范围和技术边界。
+3. `01_problem_scope.md`：问题拆解、MVP 范围和优先级。
+4. `02_architecture_overview.md`：整体架构、主链路和数据流。
+5. `03_module_index.md`：模块索引和上下游关系。
+6. `modules/`：具体模块方案。
+7. `appendices/`：API、事件、数据库、演示脚本、风险兜底等补充资料。
 
 如果旧文档中仍出现 `AgentHub`、`FastAPI`、`Vue 3` 等早期方案名称，请以当前代码和根 README 为准。当前项目名称为 `WeAgent`，主技术栈是 Flask + Vue 2。
 
@@ -28,6 +29,8 @@
 
 ```text
 docs/tech/
+├─ WeAgent 技术文档.md
+├─ 图片和附件/
 ├─ 00_agenthub_rules.md
 ├─ 01_problem_scope.md
 ├─ 02_architecture_overview.md

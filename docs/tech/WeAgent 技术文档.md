@@ -1,6 +1,13 @@
-﻿# WeAgent 技术文档 v2\.3
+# WeAgent 技术文档 v2.4
 
-更新日期：2026\-06\-10
+更新日期：2026-08-06
+
+v2.4 迭代内容：
+
+- 以《WeAgent 技术文档.zip》中的 Markdown 和 15 张本地附件为图文基线，移除会过期的内部图片链接。
+- 补全创建会话、单/多 Agent、Sandbox Event、产物恢复、文件、HTML、工作流和能力投影数据流图。
+- 新增 Education 领域扩展章节，记录已完成的教师—学生闭环、可信 Agent 工具、课程级 RAG、业务卡片、灰度隔离和真实 UAT 边界。
+- 记录近期会话绑定与 `edu.student_insight.refresh` 一致性修复，明确完成状态必须来自可审计业务写入。
 
 ## 1. 项目与文档范围
 
@@ -28,6 +35,7 @@ WeAgent 是面向 AI 协作任务的多端 Agent 工作台。用户可以在会�
 |多类型产物|支持文本、代码、文件、图片、表格、HTML、diff、workflow、service 等消息元素和工作台预览编辑。|
 |服务预览|容器内服务通过后端 Service Proxy 暴露给客户端，前端不直接访问容器端口。|
 |刷新恢复与故障定位|消息元素、Raw Output、AgentRun、文件 API 和服务 API 共同支持刷新恢复和问题定位。|
+|领域扩展|通过 domain、灰度、Agent 服务视角和独立领域服务接入 RD、Education 与 Office；Education 已完成 Web 端教师—学生真实闭环。|
 
 ### 1.3 本文档说明范围
 
@@ -49,7 +57,7 @@ WeAgent 是面向 AI 协作任务的多端 Agent 工作台。用户可以在会�
 
 ### 1.6 核心术语速览
 
-首次阅读时，应先对齐以下核心术语。第 10 章提供完整术语表，本节只用于建立最小上下文。
+首次阅读时，应先对齐以下核心术语。第 11 章提供完整术语表，本节只用于建立最小上下文。
 
 |术语|最小理解|
 |---|---|
@@ -91,8 +99,9 @@ Web、桌面端和 Android 都通过 REST API 与后端交互，并通过 Socket
 |身份认证|Flask\-JWT\-Extended|处理登录态、访问令牌和受保护接口。|
 |数据库迁移|Flask\-Migrate|支持数据库结构演进。|
 |业务组织|controllers、services、models|把路由、业务服务和数据模型分层组织。|
+|领域服务|独立 Flask App、SQLAlchemy|Education 与 RAG 以独立进程、独立数据库和受控服务间协议接入核心控制面。|
 
-关键入口包括 `backend/run.py`、`backend/app/__init__.py`、`backend/app/controllers/`、`backend/app/services/` 和 `backend/app/socket/events.py`。
+关键入口包括 `backend/run.py`、`backend/app/__init__.py`、`backend/app/controllers/`、`backend/app/services/`、`backend/app/socket/events.py`、`backend/services/edu/` 和 `backend/services/rag/`。
 
 ### 2\.3 沙盒与 Agent 运行技术
 
@@ -125,9 +134,10 @@ WeAgent 的基础设施负责保存状态、支持实时运行和提供隔离环
 
 |范围|关键技术|作用|
 |---|---|---|
-|持久化数据|MySQL 8\.0|保存用户、模型配置、Agent、会话、消息、产物和能力数据。|
+|持久化数据|MySQL 8\.0|Core 保存用户、Agent、会话和消息；Education 与 RAG 分别使用 `weagent_edu`、`weagent_rag` 保存领域对象和检索元数据。|
 |辅助服务|Redis|作为后端辅助基础设施。|
 |容器运行|Docker Desktop|构建和运行 `weagent-sandbox:latest` 容器镜像。|
+|领域文件|持久卷或对象存储|保存 Education 上传的 PDF、Word、图片等原文件；不能只存在于会话 Sandbox。|
 |前端构建|Node\.js / npm|构建 Web、桌面端和 Android 客户端。|
 |移动端构建|Android Studio / Gradle|构建和调试 Android 客户端。|
 
@@ -141,7 +151,7 @@ WeAgent 的系统架构围绕“任务从用户输入到 Agent 执行，再到�
 
 WeAgent 采用 **“多端客户端 + Flask 后端 + Docker Sandbox + Provider Adapter + 数据层”** 的分层架构。各层通过 REST API、Socket.IO、Sandbox Host Proxy、容器内控制接口和 Docker volume 协同工作，形成从用户任务、后端调度、容器执行到产物展示的闭环。这个结构将用户交互、业务状态、执行环境和外部执行引擎分开管理，使系统能够在保持多端统一协议的同时，把高风险的文件写入、命令执行和服务启动限制在容器边界内。
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MDU3Zjg3MWU3NmFkYzRlNTRiZDkyNmNkN2JmOTY0NTdfMWU0MTEyZmUwZGVkZTExODY0OGEzYzRhMjM5OGZkOWNfSUQ6NzY0OTQ1NDAxMTU4MTY4MDU4N18xNzgxMDU3NjE4OjE3ODExNDQwMThfVjM)
+![WeAgent 系统架构](图片和附件/Gqcm9l4G.png)
 
 **图：WeAgent 系统架构**
 
@@ -153,10 +163,12 @@ WeAgent 采用 **“多端客户端 + Flask 后端 + Docker Sandbox + Provider A
 | Desktop 客户端 | Electron 桌面应用，连接用户配置的外部后端，迁移 Web 主要工作台能力。 | `clients/desktop/` | REST API、Socket.IO、本地 `serverUrl` |
 | Android 客户端 | Capacitor + WebView，承载移动端主流程。 | `clients/android/` | REST API、WebView 网络、后端地址配置 |
 | Flask 后端 | 认证、会话、消息、Agent、能力、产物、Socket 推送和沙箱代理控制面。 | `backend/app/` | HTTP API、Socket.IO |
+| Education Service | 课程、课时、课件、知识、作业、提交、学情、可信工具授权与审计。 | `backend/services/edu/` | HTTP API、内部 RunGrant |
+| RAG Service | 文档、chunk、Embedding、课程范围检索和访问校验。 | `backend/services/rag/` | 内部 HTTP API、受控 RAG scope |
 | Sandbox Host | 宿主侧 Docker session 管理和容器 API 代理。 | `backend/app/sandbox/host/`、`backend/app/sandbox/api/` | HTTP proxy、Docker API |
 | Container Runtime | 容器内 Agent 调度、工具运行、文件读写、服务管理和事件上报。 | `backend/app/sandbox/container/` | Container API、workspace 文件 |
 | Provider Adapter | 统一 Claude Code、Codex、OpenCode 的命令、环境、输出和错误。 | `backend/app/sandbox/container/providers/` | CLI process、stdout/stderr |
-| Data Layer | 保存业务状态和容器工作区状态。 | MySQL、Docker volume、`/workspace` | ORM、Docker volume |
+| Data Layer | 保存 Core 状态、领域业务对象、RAG 元数据、上传原文件和容器工作区状态。 | Core MySQL、`weagent_edu`、`weagent_rag`、持久卷、`/workspace` | ORM、文件存储、Docker volume |
 
 ### 3.2 多端工程边界
 
@@ -328,7 +340,7 @@ WeAgent 采用 REST API 与 Socket.IO 并行的通信模型。REST API 处理登
 
 会话创建不只是数据库中新增一条 Conversation。对于需要 Agent 执行的会话，后端还要准备沙箱运行边界，把会话参与者、Agent 配置、能力投影和工作区绑定到一个 sandbox session。这样后续消息才能在同一个容器上下文中持续执行，并保留文件、服务、日志和运行状态。
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YTI1NmM1MDg0NTFjNjIyNDY3ZjAyOThhMDdlNWU1MmJfOWY0Y2JhZTU0YzJkZjdiNzM4ODRjNmM5OGZiZWJmYzNfSUQ6NzY0OTQ1NDAyODg1Nzk2OTYyMV8xNzgxMDU3NjE4OjE3ODExNDQwMThfVjM)
+![WeAgent Docker Sandbox 内部边界](图片和附件/vhe68mzu.png)
 
 **图：WeAgent Docker Sandbox 内部边界**
 
@@ -354,7 +366,7 @@ WeAgent 采用 REST API 与 Socket.IO 并行的通信模型。REST API 处理登
 
 Agent 执行链路的设计目标是把一次任务拆成可持久化、可追踪、可恢复的状态变化。消息用于承载用户输入和 Agent 输出，AgentRun 用于记录一次具体执行，结构化元素用于描述进度、结果和产物。后端不会等待外部 Provider 一次性返回完整文本，而是先创建 Agent 占位消息和 AgentRun，再把执行委托给容器。
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=ZTYxZDY1Y2ZlYjZjN2FhOTZkZGIzMGIxYzhjNmM3YzhfMTYxYzQwZTRmMDE0Nzc1YzM0NGE2ZGI1ZjFiYmYxYmZfSUQ6NzY0OTQ1NDA0OTkwMDY2MTcwNV8xNzgxMDU3NjE4OjE3ODExNDQwMThfVjM)
+![WeAgent Agent 执行系统](图片和附件/Pip6lRoe.png)
 
 **图：WeAgent Agent 执行系统**
 
@@ -414,7 +426,7 @@ Adapter 适配器是 WeAgent 支持多种底层 AI Coding 引擎的关键机制�
 
 沙箱文件系统负责承载 Agent 的真实工作结果，服务代理负责把容器内启动的应用安全地暴露给用户预览。前端不直接访问 Docker 文件系统，也不直接访问容器端口；所有文件读取、写入、下载、HTML 预览、服务日志和服务代理都经过后端 API，再由后端转发到容器控制面。
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=ZjkxMGU5NzFjMmFmMjgwMzdiYTM1YzFiZjgwMDQ4NWFfZjQzZTcyNDMxMmRhNjk4ZDEwODQxMmUyN2VmYzdjMTdfSUQ6NzY0OTQ1NDA5ODk3ODIxMjgzNV8xNzgxMDU3NjE4OjE3ODExNDQwMThfVjM)
+![WeAgent Service 服务预览链路](图片和附件/JvwQeHHt.png)
 
 **图：WeAgent Service 服务预览链路**
 
@@ -435,7 +447,7 @@ Adapter 适配器是 WeAgent 支持多种底层 AI Coding 引擎的关键机制�
 
 WeAgent 的产物系统不是单一数据库表，也不是普通附件列表。运行时产物主要来自 `Message.elements`、`Message.raw_output`、容器文件系统、服务状态和部分可复用 Artifact 记录。前端根据产物类型选择不同展示方式，并在需要编辑时进入工作台，把修改通过文件 API 写回容器。
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NDBhMWRlZWFiYzRmZDJkYjNkYzQ4ZTBiYTIyNmFhYjdfYjRkNjQxZDFlZjE5NzE5MzllYjM5NjA2MjJhOGQ1OTVfSUQ6NzY0OTQ1NDA4MTM5MzIwMDEwMF8xNzgxMDU3NjE4OjE3ODExNDQwMThfVjM)
+![WeAgent Artifact 与 Workbench 文件闭环](图片和附件/SdNh7wuI.png)
 
 **图：WeAgent Artifact / Workbench 文件闭环**
 
@@ -474,7 +486,7 @@ WeAgent 的产物系统不是单一数据库表，也不是普通附件列表。
 
 能力 / 工具系统把 Skill、Tool、MCP 和 Plugin 管理为可导入、可审查、可版本化、可绑定和可投影的运行能力。平台侧保存能力元数据、版本、绑定关系和调用记录；会话创建或恢复时，后端把当前 Agent 可用能力投影到容器内的 `.weagent` 目录，AgentRuntime 读取的是这个会话局部能力视图。
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NjRlZjRiYWMxMTQwYTMxYjAxN2YyOTg3YjRhYzIxMzBfNjU2NWVkNWM5OTY5MjE5NGJlZDNjNmQ1NjhjYzU1NzdfSUQ6NzY0OTQ1NDA2NTcwNDc4MjgwNV8xNzgxMDU3NjE4OjE3ODExNDQwMThfVjM)
+![WeAgent Capability 与 Toolset 能力投影](图片和附件/mZ6FBFsr.png)
 
 **图：WeAgent Capability / Toolset 能力投影**
 
@@ -537,6 +549,8 @@ WeAgent 的安全设计目标是在允许 Agent 执行真实任务的同时，�
 
 流程如下：
 
+![创建会话数据流](图片和附件/image%205.png)
+
 ```plantuml
 @startuml
 actor User as U
@@ -581,6 +595,8 @@ Client -> API: 拉取会话列表 / 进入详情
 单 Agent 消息执行链路用于处理用户明确选择一个 Agent 或会话只有一个 worker Agent 的场景。设计重点是把用户消息、Agent 占位消息、执行记录和容器运行解耦：发送消息 API 不直接返回最终答案，而是触发一个可追踪的异步执行过程。
 
 流程如下：
+
+![单 Agent 消息执行数据流](图片和附件/image.png)
 
 ```plantuml
 @startuml
@@ -632,6 +648,8 @@ Socket --> Client: 实时渲染 Agent 回复
 
 流程如下：
 
+![多 Agent 协作数据流](图片和附件/image%207.png)
+
 ```plantuml
 @startuml
 actor User as U
@@ -682,6 +700,8 @@ Sandbox event 是容器执行状态进入后端消息系统的核心通道。设
 
 流程如下：
 
+![Sandbox Event 回传数据流](图片和附件/image%208.png)
+
 ```plantuml
 @startuml
 participant "ProviderRunner / AgentRuntime" as Runtime
@@ -723,6 +743,8 @@ Client -> DB: 刷新时通过 API 重新读取持久化状态
 
 流程如下：
 
+![产物生成与刷新恢复数据流](图片和附件/image%203.png)
+
 ```plantuml
 @startuml
 participant "Agent / Provider" as Agent
@@ -763,6 +785,8 @@ WB -> Files: 通过后端文件 API 读取 / 写回
 文件预览与写回链路负责把容器工作区文件安全地暴露给前端编辑器。设计重点是前端不直接访问容器路径，所有读写都经过后端文件 API；工作台编辑后的内容也必须写回当前 sandbox session 的工作区，才能被后续 Agent 继续读取。
 
 流程如下：
+
+![文件预览与写回数据流](图片和附件/image%202.png)
 
 ```plantuml
 @startuml
@@ -809,6 +833,8 @@ HTML 预览链路是文件预览的特殊场景。设计重点是解决 Agent �
 
 流程如下：
 
+![HTML 预览数据流](图片和附件/image%206.png)
+
 ```plantuml
 @startuml
 actor User as U
@@ -852,6 +878,8 @@ Preview --> U: 展示页面效果
 
 流程如下：
 
+![工作流预览与复用数据流](图片和附件/image%201.png)
+
 ```plantuml
 @startuml
 actor User as U
@@ -893,6 +921,8 @@ MS -> Moderator: 将 selected workflow 注入调度上下文
 能力投影数据流用于说明 Skill、Tool、MCP 和 Plugin 如何从平台能力库进入容器运行时。设计重点是 Agent 执行时不直接读取全局能力库，而是读取当前会话、当前 Agent 可见的投影视图。这样可以支持不同 Agent、不同会话拥有不同能力边界，并为工具调用审计提供基础。
 
 流程如下：
+
+![能力投影数据流](图片和附件/image%204.png)
 
 ```plantuml
 @startuml
@@ -1289,6 +1319,7 @@ socket.on('conversation_message_element_stream', (payload) => {
 |---|---|---|
 |完整 smoke|待确认|需要在目标机器上重新验证后端、Web、Desktop、Android、Docker Sandbox 和 Provider CLI。|
 |Web 主流程|需环境验证|登录、创建会话、发送消息、产物查看、工作流预览和文件写回依赖后端与沙箱。|
+|Education Web 闭环|已完成固定环境 UAT|2026-08-06 已验证教师/学生角色、课件、知识库、作业、弱点、模拟考试、思维导图、学情与 Agent 双向跳转；目标部署仍需重新 smoke。|
 |Desktop 主流程|需环境验证|桌面端依赖用户配置的 `serverUrl`，需要验证 REST API 和 Socket.IO 使用同一后端地址。|
 |Android 主流程|端侧差异|Android 当前按移动端主流程迁移，能力范围不等同于 Web 或 Desktop。|
 |Docker Sandbox|强依赖|Agent 执行依赖 Docker Desktop 和 `weagent-sandbox:latest` 镜像。|
@@ -1321,8 +1352,248 @@ socket.on('conversation_message_element_stream', (payload) => {
 |avatar base64 写入过长|把 base64 图片直接写入 `avatar_url`，超过数据库字段长度。|查看后端异常是否为 `Data too long for column 'avatar_url'`。|头像应先上传为文件，再把 URL 写入用户资料。|
 |桌面端连不上后端|`serverUrl` 错误，或 REST API 和 Socket.IO 地址不一致。|在桌面端 ServerSetup 测试 `/api/health`。|填写同一个可访问后端地址，并重新进入会话。|
 |文件打开 Network Error|文件路径、编码、代理 URL 或容器 session 状态异常。|检查文件元素中的 path、后端 files/raw 响应和容器文件树。|优先确认文件是否存在；若是内联产物，应从元素内容展示。|
+|EDU 会话提示上下文不存在|Core conversation 已创建，但 Education Binding 尚未提交或已经失效。|检查 `edu_conversation_bindings`、课程成员关系和 runtime preflight 顺序。|先持久化 Binding 再 preflight；绑定失败时清理或停用无上下文会话。|
+|Education Agent 只回复文本，没有业务产物|缺少必需的 `education_action`，或工具调用未通过授权、schema、幂等校验。|检查 `EducationAgentRun`、`EducationToolGrant` 和 `EducationToolCall`。|保持 partial；把精确错误返回指定 Agent 修复，不能把聊天文本改判为成功。|
+|Education 工具成功但页面仍显示失败|grant 轮换后产品运行与工具审计关联不一致，或长事务看不到外部 finalizer 提交。|核对 `agent_run_id`、`tool_grant_id`、`conversation_id`、必需动作和 designated agent。|修复 grant 关联，结束旧读事务，并仅用同课程同会话的成功审计调用进行安全协调。|
+|课程 HTML 预览返回 Missing Authorization Header|受保护 URL 被无认证 iframe 直接打开。|检查预览组件是否使用认证请求或短期签名资源。|使用 `SafeHtmlPreview`、Blob 或签名 URL，不向前端暴露内部 token。|
 
-## 10. 关键术语表
+## 10. Education 领域扩展与可信 Agent 闭环
+
+本章是 v2.4 新增内容，说明智慧教育如何复用 WeAgent 的会话、Agent、Sandbox、Capability 和消息元素基础设施，同时保持独立的课程业务、角色权限、RAG 范围和持久化边界。Education 不是在研发领域中增加几张页面，也不是让模型直接调用任意课程接口；它是一个独立领域服务，通过受控会话绑定、短期运行授权、可信工具写入和业务卡片接入通用聊天控制面。
+
+关键代码入口：
+
+- Education 服务：`backend/services/edu/`
+- RAG 服务：`backend/services/rag/`
+- 核心会话与运行上下文：`backend/app/services/conversation_service.py`
+- 可信 Education 卡片：`backend/app/sandbox/container/education_cards.py`
+- Education 前端页面：`frontend/src/views/education/`
+- Education 前端组件：`frontend/src/components/education/`
+
+### 10.1 当前实现范围与验证状态
+
+本章区分“已有代码入口”和“已经在固定真实数据上完成 UAT”。Web 端教师/学生闭环已经验证；Desktop 和 Android 仍复用平台协议，但本轮没有把 Education 页面迁移与端侧验收写成已完成。
+
+|能力|实现状态|事实依据|
+|---|---|---|
+|真实课程与成员角色|已实现并完成 Web UAT|`CourseMembership` 决定教师/学生角色；前端不提供手工角色切换器。|
+|Education 会话|已实现并完成 Web UAT|课程绑定、历史恢复、业务页到聊天及聊天返回业务页均有持久化关联。|
+|可信 Education Agent|已实现|9 个系统 Agent 按角色过滤，并按 Agent 计算 `edu/rag` 服务视角。|
+|课程与课时|已实现并完成 Web UAT|课程、课时、教案版本、发布状态及成员关系写入 `weagent_edu`。|
+|PPT 与课件|已实现并完成 Web UAT|结构化课件版本、HTML 预览、PPTX/HTML/PDF 等导出入口和逐页检查已接入业务对象。|
+|课程知识中心|已实现并完成真实 PDF UAT|题库、试卷库、知识库按课程组织；真实 PDF 已完成上传、索引和课程范围检索。|
+|作业与反馈|已实现并完成教师/学生 UAT|发布、草稿、正式提交、百分制反馈、弱点证据和班级学情已形成闭环。|
+|模拟考试与思维导图|已实现并完成 Web UAT|多题型模拟卷、考试记录、可编辑导图、版本历史和导出已验证。|
+|跨领域灰度|已实现并有自动化测试|EDU、RD、Office 卡片和服务视角按 `domain/domains` 隔离。|
+|Desktop / Android Education 页面|未纳入本轮完成范围|本章不把 Web UAT 外推为三端均已完成。|
+
+### 10.2 服务拓扑与持久化边界
+
+Education 采用“核心控制面 + 独立领域服务 + 独立 RAG 服务 + 通用 Sandbox”的组合。默认开发端口分别为 Core `5002`、Education `5102`、RAG `5104`、Web `8080`；端口可以通过环境变量覆盖，不应硬编码到客户端业务逻辑中。
+
+```mermaid
+flowchart LR
+    Web["Web / Education UI"] --> Core["Core Flask<br/>会话、消息、Agent、灰度"]
+    Web --> Edu["Education Service<br/>课程、课时、课件、作业、学情"]
+    Core --> Edu
+    Core --> Sandbox["Docker Sandbox<br/>多 Agent 临时执行空间"]
+    Sandbox --> Edu
+    Sandbox --> Rag["RAG Service<br/>课程范围索引与检索"]
+    Edu --> Rag
+    Core --> CoreDB[("Core MySQL")]
+    Edu --> EduDB[("weagent_edu")]
+    Rag --> RagDB[("weagent_rag")]
+    Edu --> Uploads["Education Upload Folder<br/>原始文件"]
+```
+
+|状态或产物|权威存储|Docker 删除后的行为|
+|---|---|---|
+|用户、会话、消息、消息元素|Core MySQL|仍可读取；需要执行时创建或恢复 Sandbox。|
+|课程、课时、教案、课件源、作业、提交、反馈、学情|`weagent_edu`|仍然存在，是 Education 业务事实来源。|
+|知识文档元数据、分块和索引映射|`weagent_rag`|仍然存在；向量后端和原文件必须按部署策略备份。|
+|上传的 PDF、Word、图片等原文件|`EDUCATION_UPLOAD_FOLDER`，元数据在 Education DB|不依赖会话容器，但部署时必须将上传目录做持久卷或外部对象存储。|
+|Agent 私有工作区和协作中间文件|Sandbox `/workspace/agents/*`|不是业务事实来源；未写回业务对象的临时文件不能作为完成结果。|
+|Education 会话与课程关系|`EducationConversationBinding`|独立于旧 Sandbox，可重新校验成员权限后恢复。|
+|工具调用与授权审计|`EducationToolGrant`、`EducationToolCall`|保留谁、在哪门课、以哪个 Agent 调用了什么动作。|
+
+因此，“一会话一容器”描述的是执行隔离，不表示课程数据存放在容器里。课程文件柜、题库、试卷、作业、提交和学情必须落入领域数据库或持久化上传目录；Sandbox 只负责生成、检验和协作。
+
+### 10.3 EDU 会话创建、绑定与角色确定
+
+新建 EDU 会话时，用户选择课程，可选课时，不选择教师或学生角色，也不手工勾选微服务。服务端按下面的顺序建立可信上下文：
+
+```text
+用户 JWT + course_id + 可选 lesson_id + agent_ids
+    → Education 校验 CourseMembership
+    → 从实时成员关系解析 teacher/student
+    → 校验 lesson 属于当前课程
+    → 按角色过滤可信 Education Agent
+    → 计算每个 Agent 的服务视角
+    → 签发短期 RunGrant
+    → Core 创建 conversation
+    → 持久化 EducationConversationBinding
+    → Core runtime-preflight
+    → 创建或恢复 Sandbox 并投影能力
+```
+
+`EducationConversationBinding` 保存 `conversation_id`、`actor_user_id`、`course_id`、可选 `lesson_id`、角色快照、材料策略、Agent 服务视角、来源业务路由和状态。`membership_role_snapshot` 只用于审计和 UI；每次可执行请求仍会重新读取实时 `CourseMembership`，避免用户退课或角色变化后继续使用旧权限。
+
+绑定必须在 Core 的 `runtime-preflight` 之前可见。`CoreRuntimeClient.start_workflow()` 通过 `on_conversation_created` 回调先写入 Binding 和 grant 的 `conversation_id`；如果持久化失败，则删除刚创建的 Core 会话或将 Binding 标记为失败，避免产生“有聊天、无课程上下文”的 EDU 会话。
+
+### 10.4 Education Agent 与独立服务视角
+
+可信系统 Agent 由 `backend/services/edu/agent_policy.py` 定义。用户在 EDU 会话中看到的是服务端按课程角色过滤后的清单，不是用户自建 Agent UUID 与系统清单的前端交集。
+
+|Agent|角色|默认服务视角|主要职责|
+|---|---|---|---|
+|课程设计师 `_edu_1`|教师|`edu`，按策略可用 `rag`|课程读取、课时与教案写入、课程知识检索。|
+|课件制作师 `_edu_2`|教师|`edu`，按策略可用 `rag`|课件读取、结构化课件与版本写入。|
+|习题生成器 `_edu_3`|教师|`edu`，按策略可用 `rag`|题库写入、按题组卷和课程知识检索。|
+|学情分析师 `_edu_4`|教师|`edu`|成绩读取、学情刷新和学生画像分析。|
+|学习规划师 `_edu_5`|学生|`edu`|学习证据读取和计划建议。|
+|练习教练 `_edu_6`|学生|`edu`|练习、弱点分析和模拟测评。|
+|笔记整理师 `_edu_7`|学生|`edu`，按策略可用 `rag`|课程知识检索和思维导图写入。|
+|资料研究员 `_edu_8`|教师|`edu + rag`|课程资料读取、检索、来源整理和资料采纳。|
+|教学审校员 `_edu_9`|教师|`edu`|目标—活动—评价一致性和内容审校。|
+
+服务视角按以下交集计算：
+
+```text
+Agent manifest 声明
+∩ Education 领域允许服务
+∩ 当前课程角色与材料策略
+∩ 本轮灰度和服务健康状态
+= AgentAllowedServices
+```
+
+`conversation.services` 和 `sandbox_agent_service_views` 可以保存团队服务并集与快照，但不能反向扩大单个 Agent 的权限。`list_services` 返回当前执行 Agent 的授权服务；`call_service_api` 还会按 `session_id + agent_id + service_name` 再校验。EDU 会话不会自动获得 RD 或 Office 服务。
+
+### 10.5 RunGrant、可信工具与业务写回
+
+模型不能在参数中指定 `course_id`、`actor_user_id`、`role`、JWT 或 token 来扩大权限。Education 在启动运行时签发短期 `EducationToolGrant`，把用户、课程、角色、课时、允许 Agent、允许动作、会话和过期时间绑定在服务端。每次调用写入 `EducationToolCall`，记录动作、参数摘要、结果、状态和幂等键。
+
+通用 Agent 工具分为四类：
+
+|工具|边界|
+|---|---|
+|`list_services`|只列出当前 Agent 的可见服务，不返回内部 URL、密钥或其他 Agent 的服务。|
+|`call_service_api`|只调用服务规范声明为可读的受控端点；Education 写接口会要求改用 `education_action`。|
+|`rag_search`|由服务端注入 `domain=edu`、课程、用户、角色和文档范围，模型不能扩大。|
+|`education_action`|Education 业务写入和敏感读取的唯一入口，服务端注入授权范围并执行幂等校验。|
+
+可信写回链路如下：
+
+```text
+自然语言用户意图
+→ Agent 读取课程上下文
+→ Agent 生成候选内容
+→ schema / 业务规则校验
+→ education_action
+→ ToolGateway 校验 RunGrant、Agent、动作、幂等键
+→ 写入 canonical Education object
+→ 记录 EducationToolCall
+→ 从工具结果构建 education_card
+→ 前端展示并允许返回业务页面
+```
+
+课件等大对象采用固定 finalizer。课件制作 Agent 只在私有工作区生成白名单文件 `slide_document.json` 和 `preview.html`；可信服务读取、校验结构与视觉规则后，以指定课件 Agent 身份调用 `edu.courseware.create`。模型自行声称“已保存”、只回复文件路径或生成 JavaScript 文件，都不能成为完成结果。
+
+产品型 Agent 运行在 `REQUIRED_PRODUCT_WRITE_TOOL` 中声明必须完成的业务写动作，例如学情分析必须出现成功的 `edu.student_insight.refresh`。如果 Agent 团队结束但没有对应审计调用，运行状态只能是 `partial`，不能显示“已完成”。
+
+### 10.6 课程级 RAG 与外部资料边界
+
+Education 上传资料后，由领域服务完成文件校验、文本提取和 RAG 入库。RAG 服务使用独立数据库保存文档、chunk 和索引映射，Embedding Provider 默认可使用本地实现，也可通过环境配置切换。
+
+```text
+教师上传 PDF / Word / 文本
+→ EducationAsset 持久化原文件与元数据
+→ 文档抽取与清洗
+→ Education → RAG ingestion
+→ 按 course_id / visibility / owner 写入文档和 chunk
+→ Agent rag_search
+→ RAG access_scope 二次校验
+→ 返回来源、文档、片段和定位
+```
+
+教师可读取当前课程授权的教师资料和已发布资料；学生只能读取课程已发布范围及本人允许的 private 数据。课程 A 的 RunGrant、`course_id` 或文档筛选不能用于读取课程 B 的内容。
+
+联网补充资料遵循分离管线：`SearchProvider` 只返回候选 URL、标题和摘要；`ContentFetcher / WebPageReader` 再抓取与清洗正文；最后由 Retriever/Reranker 交给 Agent。搜索结果中的 `content` 只是摘要或描述，不能冒充网页全文或 RAG 证据。
+
+2026-08-06 的真实 UAT 使用 `gift-of-the-magi-reading-writing-assignment.pdf` 完成上传、索引和检索，RAG 返回 3 个命中 chunk；该结果验证的是固定课程范围内的 Web 演示环境，不等同于生产规模性能测试。
+
+### 10.7 Education 业务卡片、预览与双向跳转
+
+`education_card` 是通用消息元素的一种领域变体。模型不能直接构造可信业务卡片；`backend/app/sandbox/container/education_cards.py` 只从成功工具 envelope 中提取 canonical reference、对象类型、标题、摘要、状态和业务元数据。
+
+首批卡片对象包括课程、课时、教案、课件、作业、题库、试卷、知识资源、学情和思维导图。前端主要组件：
+
+- `EducationChatContext.vue`：会话级课程、课时、角色、运行进度和返回入口。
+- `EducationCard.vue`：消息级业务对象卡片。
+- `ProductAgentRunPanel.vue`：业务页面中的最新运行、Agent 节点、状态和协作历史。
+- `SafeHtmlPreview.vue`：通过认证请求加载 HTML，避免 iframe 直接访问受保护 URL 导致 `Missing Authorization Header`。
+- `EmbeddedAgentRecord.vue`：在课程、课件、知识中心和学情页面展示最近运行并回到聊天。
+
+双向关联依赖数据库中的 `conversation_id`、`EducationConversationBinding.source_route` 和产品运行的 canonical object，不依赖浏览器临时状态：
+
+```text
+Education 业务页面
+→ 发起 Agent 运行
+→ Core 聊天与 education_card
+→ 预览业务产物
+→ 返回业务页面
+→ 协作历史
+→ 找回原聊天
+```
+
+打开历史卡片或预览时，服务端重新校验当前课程成员关系和对象可见范围。删除旧 Sandbox 不会删除聊天绑定或 Education 对象；只有尚未写回的临时文件会失去业务可用性。
+
+### 10.8 教师—学生数据闭环
+
+Education Web 端围绕同一 `course_id` 组织教师和学生的不同视图，不把两种角色做成可切换的前端模式。
+
+|阶段|教师侧对象与动作|学生侧对象与动作|数据回流|
+|---|---|---|---|
+|备课|课程、课时、教案版本、课程资料|只读取已发布材料|课时与教案成为课件、题目和作业的正式来源。|
+|课件|AI 生成或上传课件，维护结构化版本和可见性|下载学生可见课件与材料|下载和使用对象保持同一课程、课时关联。|
+|作业|发布百分制作业、查看提交、教师最终反馈|保存草稿、正式提交阅读与写作内容|提交版本进入教师批改和 Agent 分析。|
+|评估|按作业查看最高、最低、平均、中位数、提交率、分布和趋势|查看自己的成绩、反馈和作业弱点|`edu.student_insight.refresh` 生成课程学情快照。|
+|个性学习|教师维护题库、试卷库和知识库|模拟考试、弱点分析、课程思维导图|考试记录、弱点证据和导图版本继续沉淀在课程中。|
+
+业务页发起 Agent 时，用户可见 Prompt 只保留自然需求，例如“根据当前教案生成 PPT”。课程 ID、角色、工具白名单、schema、finalizer 协议和安全边界由服务端执行上下文注入，不伪装成用户聊天内容。
+
+### 10.9 一致性、失败与恢复
+
+Education 链路跨 Core、领域数据库、Sandbox 和 RAG，完成状态必须以可审计业务写入为准，而不是以最后一条自然语言回复为准。
+
+|症状|根因或判定|恢复与修复策略|
+|---|---|---|
+|`Education conversation context not found`|Core 在 Binding 提交前执行 runtime preflight。|会话创建后先通过回调持久化 Binding 和 grant，再执行 preflight；失败时清理无上下文会话。|
+|Agent 团队结束但缺少业务产物|没有成功的必需工具调用，或调用属于错误 Agent/课程。|保持 `partial`，展示精确缺失动作；让指定 Agent 修复并重新调用。|
+|工具实际成功却误报缺少 `edu.student_insight.refresh`|运行时轮换 grant 后没有回写 `agent_run_id/tool_grant_id`，且数据库事务看不到外部 finalizer 的新提交。|轮换时关联产品运行；同步前结束旧读事务；按同会话、用户、课程、动作和指定 Agent 的审计调用安全重建 adopted object。|
+|HTML 预览返回 `Missing Authorization Header`|无认证 iframe 直接打开受保护接口。|使用前端认证请求、Blob/安全预览或短期签名资源，不暴露内部 token。|
+|RAG 不可用|独立服务超时、索引未完成或灰度关闭。|回退到当前课程结构化资料并明确标记 fallback；不得把搜索摘要冒充全文证据。|
+|Docker 被停止或重建|旧临时工作区不可用。|从 Core 消息、Education Binding、canonical object 和 RAG 元数据恢复；必要时创建新 Sandbox。|
+|卡片存在但成员权限已变化|历史卡片快照不能代表当前权限。|再次打开时重新校验 CourseMembership；无权限时不返回对象标题和摘要。|
+
+`EducationAgentRun.tool_grant_id`、`EducationToolGrant.agent_run_id` 和 `EducationToolCall.grant_id` 构成产品运行到工具审计的关联。历史兼容恢复只能接受同一 conversation、actor、course、required tool 和 designated agent 的成功调用，不能仅按标题或时间猜测。
+
+### 10.10 测试与验收证据
+
+截至 2026-08-06，本机固定 Web UAT 环境完成以下验证：
+
+- 教师账号与学生账号进入同一真实高中英语课程，角色由成员关系自动确定。
+- 课程包含三个课时、真实英文作业、百分制反馈、两项弱点、七题模拟考试、十四节点思维导图和班级成绩趋势。
+- 真实 PDF 完成上传、RAG 入库、3 个 chunk 命中和来源验证。
+- 教师业务页、Agent 聊天、业务卡片、HTML 预览和返回业务页完成双向验证。
+- `edu.student_insight.refresh` 成功工具调用与产品运行状态完成一致性回归。
+- 后端完整测试在该提交状态下为 `535 passed`；Education 聚焦套件为 `53 passed`。
+- Core `5002`、Education `5102`、RAG `5104`、Web `8080` 在验收时均处于监听状态。
+
+固定课程为“高一英语·叙事阅读与写作（真实案例）”。账号密码、JWT、Provider Key 和 RAG 内部密钥不写入技术文档或 Git。
+
+本轮证据不覆盖生产高并发、跨机器容器编排、对象存储容灾、Desktop Education 页面和 Android Education 页面；这些能力仍需在目标部署环境单独验证。
+
+## 11. 关键术语表
 
 本章统一全文使用的核心概念。术语表不重复实现细节，只解释概念边界，便于技术评审、后续维护者和协作者在讨论功能时使用同一套词汇。
 
@@ -1348,6 +1619,9 @@ socket.on('conversation_message_element_stream', (payload) => {
 |Service Proxy|后端把容器内服务代理成用户可访问 URL 的机制，负责 session、service 和 token 校验。|
 |`weagent-report`|容器内结构化上报命令，用于把进度、结果、文件、表格、服务、错误等提交给容器控制面。|
 |`weagent-service`|容器内服务管理命令，用于启动长运行服务并上报 service 类型产物。|
+|EducationConversationBinding|把 Core 会话持久关联到 Education 用户、课程、课时、角色快照、材料策略、Agent 服务视角和来源业务路由的领域记录。|
+|RunGrant|服务端签发的短期运行授权，约束用户、课程、角色、Agent、动作、会话和有效期；不是模型可自行填写的业务参数。|
+|Agent Service View|单个 Agent 在当前领域、课程、角色、材料策略和灰度条件下可见的服务集合。|
+|Canonical Education Object|已经通过可信工具校验并写入 Education 数据库的课程、课时、课件、作业、学情等业务对象。|
+|education_card|由成功工具结果生成的 Education 消息卡片，保存 canonical reference，并在读取时重新校验课程权限。|
 |Workbench|前端用于查看、编辑、比较和迁移产物的工作台能力。|
-
-
