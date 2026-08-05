@@ -217,26 +217,33 @@ def test_teacher_starts_visible_agent_run_through_core_sandbox_seam(education_ap
             authorization,
             title,
             prompt,
-                agent_ids,
-                workflow,
-                education_run_grant=None,
-                visible_prompt=None,
-                workspace_role=None,
-                services=None,
-                agent_service_views=None,
-            ):
+            agent_ids,
+            workflow,
+            education_run_grant=None,
+            visible_prompt=None,
+            workspace_role=None,
+            services=None,
+            agent_service_views=None,
+            on_conversation_created=None,
+        ):
+            conversation = {
+                "id": "core-conversation-1",
+                "sandbox_session_id": "sandbox-session-1",
+            }
+            if on_conversation_created:
+                on_conversation_created(conversation)
             self.started = {
                 "authorization": authorization,
                 "title": title,
                 "prompt": prompt,
                 "agent_ids": agent_ids,
                 "workflow": workflow,
-                    "education_run_grant": education_run_grant,
-                    "visible_prompt": visible_prompt,
-                    "workspace_role": workspace_role,
-                    "services": services,
-                    "agent_service_views": agent_service_views,
-                }
+                "education_run_grant": education_run_grant,
+                "visible_prompt": visible_prompt,
+                "workspace_role": workspace_role,
+                "services": services,
+                "agent_service_views": agent_service_views,
+            }
             return {
                 "conversation_id": "core-conversation-1",
                 "sandbox_session_id": "sandbox-session-1",

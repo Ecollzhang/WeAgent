@@ -24,7 +24,11 @@ from .product_agent_runs import (
 from .runtime_client import CoreRuntimeError
 from .tool_gateway import ToolGatewayError, issue_tool_grant
 from .tool_models import EducationToolCall, EducationToolGrant
-from .workflow_models import EducationAgentRun, EducationWorkflow
+from .workflow_models import (
+    EducationAgentRun,
+    EducationWorkflow,
+    adopted_object_from_tool_result,
+)
 from .workflow_models import EducationConversationBinding
 from .agent_policy import resolve_agent_service_views, union_services
 
@@ -118,6 +122,40 @@ def _attach_tool_calls(run):
     return run
 
 
+def _required_product_write_call(run):
+    required = REQUIRED_PRODUCT_WRITE_TOOL.get(run.workflow_code)
+    if not required or not run.tool_grant_id:
+        return None
+    direct = EducationToolCall.query.filter_by(
+        grant_id=run.tool_grant_id,
+        tool_name=required,
+        agent_id=REQUIRED_PRODUCT_WRITE_AGENT.get(run.workflow_code),
+        status="completed",
+    ).first()
+    if direct or not run.conversation_id:
+        return direct
+    # Runtime-grant rotation historically created a new conversation-scoped
+    # grant without updating the product run. Recover only an audited write
+    # from the same actor, course and conversation.
+    return (
+        EducationToolCall.query.join(
+            EducationToolGrant,
+            EducationToolGrant.id == EducationToolCall.grant_id,
+        )
+        .filter(
+            EducationToolGrant.conversation_id == run.conversation_id,
+            EducationToolGrant.actor_user_id == run.requested_by,
+            EducationToolGrant.course_id == run.course_id,
+            EducationToolCall.tool_name == required,
+            EducationToolCall.agent_id
+            == REQUIRED_PRODUCT_WRITE_AGENT.get(run.workflow_code),
+            EducationToolCall.status == "completed",
+        )
+        .order_by(EducationToolCall.created_at.desc())
+        .first()
+    )
+
+
 def _missing_required_product_write(run):
     """Return the required write action when Agents produced only chat output.
 
@@ -128,12 +166,7 @@ def _missing_required_product_write(run):
     required = REQUIRED_PRODUCT_WRITE_TOOL.get(run.workflow_code)
     if not required or not run.tool_grant_id:
         return required
-    adopted = EducationToolCall.query.filter_by(
-        grant_id=run.tool_grant_id,
-        tool_name=required,
-        agent_id=REQUIRED_PRODUCT_WRITE_AGENT.get(run.workflow_code),
-        status="completed",
-    ).first()
+    adopted = _required_product_write_call(run)
     return None if adopted else required
 
 
@@ -173,9 +206,42 @@ def _attach_recoverable_draft(run, required_tool):
 
 def _reconcile_product_completion(run):
     """Repair historical optimistic statuses using the durable write audit."""
-    if run.status != "completed":
+    required = REQUIRED_PRODUCT_WRITE_TOOL.get(run.workflow_code)
+    if not required:
         return False
     missing_write = _missing_required_product_write(run)
+    adopted_object = (run.output or {}).get("adopted_object")
+    adopted_call = (
+        _required_product_write_call(run) if not missing_write else None
+    )
+    if adopted_call and adopted_call.grant_id != run.tool_grant_id:
+        run.tool_grant_id = adopted_call.grant_id
+    if run.status == "partial" and adopted_call and not adopted_object:
+        if adopted_call:
+            adopted_object = adopted_object_from_tool_result(
+                workflow_code=run.workflow_code,
+                tool_name=adopted_call.tool_name,
+                result=adopted_call.result_json,
+                course_id=run.course_id,
+                lesson_id=run.lesson_id,
+                tool_call_id=adopted_call.id,
+            )
+            if adopted_object:
+                run.output = {
+                    **(run.output or {}),
+                    "adopted_object": adopted_object,
+                }
+    if (
+        run.status == "partial"
+        and not missing_write
+        and required in str(run.error_summary or "")
+        and isinstance(adopted_object, dict)
+    ):
+        run.status = "completed"
+        run.error_summary = None
+        return True
+    if run.status != "completed":
+        return False
     if not missing_write:
         return False
     run.status = "partial"
@@ -348,6 +414,10 @@ def _sync_run(run, authorization):
         authorization=authorization,
         conversation_id=run.conversation_id,
     )
+    # Trusted finalizers run through the core service and commit their audited
+    # Education tool calls while this request is waiting on the runtime. End
+    # the earlier read transaction so MySQL REPEATABLE READ can see them.
+    db.session.commit()
     latest_by_agent = {}
     for item in snapshot.get("agent_runs", []):
         if item.get("agent_id"):
@@ -549,6 +619,34 @@ def _start_core_run(
                 **workflow,
                 "education_context": {"course_id": run.course_id},
             }
+
+            def persist_conversation_context(conversation):
+                run.conversation_id = conversation["id"]
+                run.sandbox_session_id = conversation.get("sandbox_session_id")
+                grant = EducationToolGrant.query.filter_by(
+                    id=run.tool_grant_id
+                ).first()
+                if grant:
+                    grant.conversation_id = run.conversation_id
+                binding = EducationConversationBinding.query.filter_by(
+                    conversation_id=run.conversation_id
+                ).first()
+                if not binding:
+                    binding = EducationConversationBinding(
+                        conversation_id=run.conversation_id,
+                        actor_user_id=run.requested_by,
+                        course_id=run.course_id,
+                        lesson_id=run.lesson_id,
+                        membership_role_snapshot=workspace_role,
+                        binding_mode="product",
+                        material_policy="authorized_knowledge",
+                        agent_service_views=agent_service_views,
+                        source_route=run.to_dict().get("business_route"),
+                        status="active",
+                    )
+                    db.session.add(binding)
+                db.session.commit()
+
             started = app.extensions["education_runtime_client"].start_workflow(
                 authorization=authorization,
                 title=title,
@@ -560,6 +658,7 @@ def _start_core_run(
                 education_run_grant=education_run_grant,
                 services=union_services(agent_service_views),
                 agent_service_views=agent_service_views,
+                on_conversation_created=persist_conversation_context,
             )
             run.status = "running"
             run.conversation_id = started["conversation_id"]
@@ -576,28 +675,17 @@ def _start_core_run(
             ).first()
             if grant:
                 grant.conversation_id = run.conversation_id
-            binding = EducationConversationBinding.query.filter_by(
-                conversation_id=run.conversation_id
-            ).first()
-            if not binding:
-                binding = EducationConversationBinding(
-                    conversation_id=run.conversation_id,
-                    actor_user_id=run.requested_by,
-                    course_id=run.course_id,
-                    lesson_id=run.lesson_id,
-                    membership_role_snapshot=workspace_role,
-                    binding_mode="product",
-                    material_policy="authorized_knowledge",
-                    agent_service_views=agent_service_views,
-                    source_route=run.to_dict().get("business_route"),
-                    status="active",
-                )
-                db.session.add(binding)
         except CoreRuntimeError as exc:
             run.status = "failed"
             run.error_summary = str(exc)
             run.finished_at = datetime.utcnow()
             _revoke_tool_grant(run)
+            if run.conversation_id:
+                binding = EducationConversationBinding.query.filter_by(
+                    conversation_id=run.conversation_id
+                ).first()
+                if binding:
+                    binding.status = "failed"
         finally:
             db.session.commit()
             db.session.remove()

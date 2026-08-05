@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS `grayscale_config` (
     `domain` VARCHAR(50) NOT NULL COMMENT 'rd / edu / office',
     `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '功能是否启用',
     `visible` TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'UI是否可见',
-    `domains` JSON NULL COMMENT 'common 域跨领域生效范围, e.g. ["rd","edu","office"]',
+    `domains` JSON DEFAULT NULL COMMENT 'common 域跨领域生效范围, e.g. ["rd","edu","office"]',
     `description` TEXT DEFAULT NULL COMMENT '配置说明',
     `metadata` JSON DEFAULT NULL COMMENT '扩展元数据',
     `created_at` DATETIME NOT NULL DEFAULT (now()),
@@ -72,7 +72,7 @@ ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `project_id` VARCHAR(36) DE
 -- ========================================
 
 -- 4a. grayscale_config 表新增 domains 字段（兼容老表）
-ALTER TABLE `grayscale_config` ADD COLUMN IF NOT EXISTS `domains` JSON NULL COMMENT 'common 域跨领域生效范围, e.g. ["rd","edu","office"]' AFTER `visible`;
+ALTER TABLE `grayscale_config` ADD COLUMN IF NOT EXISTS `domains` JSON DEFAULT NULL COMMENT 'common 域跨领域生效范围, e.g. ["rd","edu","office"]' AFTER `visible`;
 
 -- ---------- 公共 (common)：跨领域共享的 UI 配置 ----------
 INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible, domains) VALUES

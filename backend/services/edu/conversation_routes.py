@@ -547,9 +547,12 @@ def rotate_conversation_runtime_grant(conversation_id):
             agent_ids=list(views),
             lesson_id=binding.lesson_id,
             conversation_id=conversation_id,
+            agent_run_id=linked_run.id if linked_run else None,
             grant_mode="course_bootstrap" if course_bootstrap else None,
             confirmed_actions=confirmed_actions,
         )
+        if linked_run:
+            linked_run.tool_grant_id = grant.id
         binding.membership_role_snapshot = membership_role
         binding.agent_service_views = views
         db.session.commit()

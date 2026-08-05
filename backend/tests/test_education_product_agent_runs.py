@@ -97,8 +97,15 @@ class FakeProductRuntime:
         education_run_grant=None,
         services=None,
         agent_service_views=None,
+        on_conversation_created=None,
     ):
         index = len(self.started) + 1
+        conversation = {
+            "id": f"product-conversation-{index}",
+            "sandbox_session_id": f"product-sandbox-{index}",
+        }
+        if on_conversation_created:
+            on_conversation_created(conversation)
         self.started.append(
             {
                 "authorization": authorization,
@@ -559,7 +566,6 @@ def test_product_run_is_private_to_requesting_member(education_app):
             "options": {},
         },
     ).get_json()
-
     owner_view = client.get(
         f"/api/edu/product-agent-runs/{created['id']}",
         headers=student,
@@ -1030,3 +1036,74 @@ def test_legacy_completed_product_run_is_reconciled_when_write_is_missing(
 
     assert refreshed.status_code == 200
     assert refreshed.get_json()["status"] == "partial"
+
+
+def test_partial_product_run_is_reconciled_when_trusted_write_arrives(
+    education_app,
+):
+    from services.edu.workflow_models import EducationAgentRun
+
+    runtime = FakeProductRuntime()
+    education_app.extensions["education_runtime_client"] = runtime
+    client = education_app.test_client()
+    course, _, teacher, _, _ = seed_course(education_app)
+    created = client.post(
+        "/api/edu/product-agent-runs",
+        headers=teacher,
+        json={
+            "course_id": course["id"],
+            "product_code": "student_insight",
+            "options": {},
+        },
+    ).get_json()
+    with education_app.app_context():
+        original_grant_id = EducationAgentRun.query.filter_by(
+            id=created["id"]
+        ).first().tool_grant_id
+    with education_app.app_context():
+        service_token = create_access_token(
+            identity="weagent-core-runtime",
+            additional_claims={
+                "service": "core",
+                "actor_user_id": "teacher",
+            },
+            expires_delta=timedelta(minutes=2),
+        )
+    rotated = client.post(
+        f"/api/edu/conversations/{created['conversation_id']}/runtime-grant",
+        headers={"Authorization": f"Bearer {service_token}"},
+    )
+    assert rotated.status_code == 201
+    raw_grant = rotated.get_json()["run_grant"]
+    tool_response = client.post(
+        "/api/edu/tools/edu.student_insight.refresh/invoke",
+        headers={"X-Education-Run-Grant": raw_grant},
+        json={
+            "agent_id": "_edu_4",
+            "idempotency_key": "student-insight-trusted-finalizer-v1",
+            "arguments": {},
+        },
+    )
+    with education_app.app_context():
+        stored = EducationAgentRun.query.filter_by(id=created["id"]).first()
+        assert stored.tool_grant_id == rotated.get_json()["grant_id"]
+        stored.tool_grant_id = original_grant_id
+        stored.status = "partial"
+        stored.error_summary = (
+            "Agent team ended without a durable edu.student_insight.refresh write"
+        )
+        stored.output = {}
+        db.session.commit()
+
+    refreshed = client.get(
+        f"/api/edu/product-agent-runs/{created['id']}",
+        headers=teacher,
+    )
+
+    assert tool_response.status_code == 200
+    assert refreshed.status_code == 200
+    assert refreshed.get_json()["status"] == "completed"
+    assert refreshed.get_json()["error_summary"] is None
+    assert refreshed.get_json()["output"]["adopted_object"]["object_type"] == (
+        "student_insight_report"
+    )

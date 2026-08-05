@@ -359,6 +359,7 @@ class CoreRuntimeClient:
         education_run_grant=None,
         services=None,
         agent_service_views=None,
+        on_conversation_created=None,
     ):
         education_context = (
             workflow.get("education_context")
@@ -396,6 +397,21 @@ class CoreRuntimeClient:
                 "agent_configs": agent_configs,
             },
         )
+        if on_conversation_created:
+            try:
+                on_conversation_created(conversation)
+            except Exception as exc:
+                try:
+                    self._request(
+                        "DELETE",
+                        f"/api/conversations/{conversation['id']}",
+                        authorization,
+                    )
+                except CoreRuntimeError:
+                    pass
+                raise CoreRuntimeError(
+                    "Education conversation context persistence failed"
+                ) from exc
         preflight = self._request(
             "GET",
             f"/api/conversations/{conversation['id']}/runtime-preflight",

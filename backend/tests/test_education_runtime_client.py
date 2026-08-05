@@ -94,6 +94,52 @@ def test_education_runtime_selects_codex_adapter_for_deepseek_team(monkeypatch):
     assert started["runtime_generation"] == 3
 
 
+def test_education_runtime_persists_context_before_tool_preflight(monkeypatch):
+    order = []
+
+    def fake_request(method, url, **kwargs):
+        if url.endswith("/api/conversations"):
+            order.append("conversation_created")
+            return FakeResponse(
+                {
+                    "code": 201,
+                    "data": {
+                        "id": "conversation-1",
+                        "sandbox_session_id": "sandbox-1",
+                    },
+                },
+                201,
+            )
+        if url.endswith("/runtime-preflight"):
+            order.append("runtime_preflight")
+            return FakeResponse({"code": 200, "data": {"ready": True}})
+        order.append("message_dispatched")
+        return FakeResponse({"code": 201, "data": {"id": "message-1"}}, 201)
+
+    monkeypatch.setattr("services.edu.runtime_client.requests.request", fake_request)
+    client = CoreRuntimeClient(base_url="http://core")
+
+    client.start_workflow(
+        authorization="Bearer token",
+        title="Student insight run",
+        prompt="Analyze the class",
+        workspace_role="teacher",
+        agent_ids=["_edu_4"],
+        workflow={"id": "student_insight"},
+        education_run_grant="opaque-run-grant-1234567890",
+        on_conversation_created=lambda conversation: order.append(
+            f"context_persisted:{conversation['id']}"
+        ),
+    )
+
+    assert order == [
+        "conversation_created",
+        "context_persisted:conversation-1",
+        "runtime_preflight",
+        "message_dispatched",
+    ]
+
+
 def test_education_runtime_keeps_visible_intent_separate_from_execution_context(
     monkeypatch,
 ):
