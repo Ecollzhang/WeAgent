@@ -104,6 +104,15 @@ class WorkspaceService:
         db.session.commit()
         return {'archived': True}, None
 
+    def delete(self, workspace_id, user_id):
+        """永久删除工作空间（硬删除）."""
+        ws = Workspace.query.filter_by(id=workspace_id, user_id=user_id).first()
+        if not ws:
+            return None, 'Workspace not found'
+        db.session.delete(ws)
+        db.session.commit()
+        return {'deleted': True}, None
+
     def add_member(self, workspace_id, owner_id, member_user_id):
         workspace = Workspace.query.filter_by(id=workspace_id, user_id=owner_id, status='active').first()
         if not workspace:

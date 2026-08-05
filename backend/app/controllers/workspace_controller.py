@@ -65,6 +65,17 @@ def archive_workspace(workspace_id):
     return success_response(result, message='Workspace archived')
 
 
+@workspace_bp.route('/api/workspaces/<workspace_id>/permanent', methods=['DELETE'])
+@jwt_required()
+def delete_workspace(workspace_id):
+    """永久删除工作空间."""
+    user_id = get_jwt_identity()
+    result, error = workspace_service.delete(workspace_id, user_id)
+    if error:
+        return error_response(error, code=400)
+    return success_response(result, message='Workspace deleted')
+
+
 @workspace_bp.route('/api/workspaces/<workspace_id>/members', methods=['POST'])
 @jwt_required()
 def add_workspace_member(workspace_id):

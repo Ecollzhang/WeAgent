@@ -31,11 +31,16 @@
         :class="{ active: activeWorkspaceId === ws.id }"
         @click="switchWorkspace(ws)"
       >
-        <span class="ws-icon">{{ ws.icon === 'default' ? '📁' : ws.icon }}</span>
-        <span class="ws-name">{{ ws.name }}</span>
+        <span class="ws-icon">📁</span>
+        <el-tooltip :content="ws.name" :disabled="ws.name.length <= 12" placement="top">
+          <span class="ws-name">{{ ws.name }}</span>
+        </el-tooltip>
         <el-tag v-if="ws.sub_role" size="mini" class="ws-sub-tag">
           {{ ws.sub_role === 'teacher' ? '教师' : '学生' }}
         </el-tag>
+        <span class="ws-delete" @click.stop="handleDelete(ws)" title="删除空间">
+          <i class="el-icon-close"></i>
+        </span>
       </div>
     </div>
 
@@ -205,6 +210,31 @@ export default {
       }
     },
 
+    async handleDelete(ws) {
+      try {
+        await this.$confirm(
+          `删除空间「${ws.name}」后，关联的对话记录仍会保留。确认删除？`,
+          '删除工作空间',
+          { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+        )
+        await this.$store.dispatch('workspace/deleteWorkspace', ws.id)
+        this.$message.success('空间已删除')
+        if (this.activeWorkspaceId === ws.id) {
+          const remaining = this.$store.getters['workspace/workspacesByDomain'](ws.domain)
+          if (remaining.length > 0) {
+            this.switchWorkspace(remaining[0])
+          } else {
+            this.$store.dispatch('workspace/selectWorkspace', { id: null, domain: ws.domain, name: '' })
+            this.$router.push('/dashboard').catch(() => {})
+          }
+        }
+      } catch (err) {
+        if (err !== 'cancel') {
+          this.$message.error('删除失败')
+        }
+      }
+    },
+
     async handleCreate() {
       if (!this.newWs.name.trim()) {
         this.$message.warning('请输入空间名称')
@@ -321,6 +351,29 @@ export default {
   padding: 0 4px;
   height: 18px;
   line-height: 18px;
+}
+
+.ws-delete {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 12px;
+  transition: all 0.15s;
+  margin-left: auto;
+}
+
+.ws-item:hover .ws-delete {
+  display: flex;
+}
+
+.ws-delete:hover {
+  background: rgba(239,68,68,0.12);
+  color: #ef4444;
 }
 
 .ws-create {

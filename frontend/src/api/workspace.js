@@ -21,3 +21,7 @@ export function updateWorkspace(id, data) {
 export function archiveWorkspace(id) {
   return axios.delete(`/workspaces/${id}`)
 }
+
+export function deleteWorkspace(id) {
+  return axios.delete(`/workspaces/${id}/permanent`)
+}

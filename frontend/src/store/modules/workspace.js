@@ -1,4 +1,4 @@
-import { getWorkspaces, createWorkspace, updateWorkspace, archiveWorkspace } from '../../api/workspace'
+import { getWorkspaces, createWorkspace, updateWorkspace, archiveWorkspace, deleteWorkspace } from '../../api/workspace'
 
 // localStorage keys
 const ACTIVE_WS_KEY = 'active_workspace'
@@ -104,6 +104,17 @@ export default {
 
     async archiveWorkspace({ commit, state }, id) {
       const res = await archiveWorkspace(id)
+      if (res.code === 200) {
+        commit('REMOVE_WORKSPACE', id)
+        if (state.activeWorkspace?.id === id) {
+          commit('SET_ACTIVE_WORKSPACE', null)
+        }
+      }
+      return res
+    },
+
+    async deleteWorkspace({ commit, state }, id) {
+      const res = await deleteWorkspace(id)
       if (res.code === 200) {
         commit('REMOVE_WORKSPACE', id)
         if (state.activeWorkspace?.id === id) {
