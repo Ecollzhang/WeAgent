@@ -9,10 +9,10 @@ const service = axios.create({
 // Request interceptor - attach JWT token
 service.interceptors.request.use(
   config => {
+    const token = sessionStorage.getItem('access_token')
     const body = config.data ? (typeof config.data === 'string' ? config.data : JSON.stringify(config.data)) : ''
-    console.log('[axios-req]', config.method?.toUpperCase(), config.url, 'token:', !!localStorage.getItem('access_token'), 'body:', body.substring(0, 200))
-    const isAuthRequest = config.url.includes('/auth/login') || config.url.includes('/auth/register')
-    const token = localStorage.getItem('access_token')
+    console.log('[axios-req]', config.method?.toUpperCase(), config.url, 'token:', !!token, 'body:', body.substring(0, 200))
+    const isAuthRequest = config.url && (config.url.includes('/auth/login') || config.url.includes('/auth/register'))
     if (token && !isAuthRequest) {
       config.headers.Authorization = `Bearer ${token}`
     }
@@ -44,9 +44,9 @@ service.interceptors.response.use(
             Message.error(data?.message || '用户名或密码错误')
           } else {
             // Token expired or invalid
-            localStorage.removeItem('access_token')
-            localStorage.removeItem('refresh_token')
-            localStorage.removeItem('user')
+            sessionStorage.removeItem('access_token')
+            sessionStorage.removeItem('refresh_token')
+            sessionStorage.removeItem('user')
             window.location.href = '/login'
             Message.error('Login expired, please login again')
           }
@@ -66,7 +66,7 @@ service.interceptors.response.use(
           Message.error(data?.message || 'Validation error')
           break
         case 500:
-          Message.error('Server error')
+          Message.error(data?.message || '服务端处理失败，请稍后重试')
           break
         default:
           Message.error(data?.message || 'Request failed')

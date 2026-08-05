@@ -64,7 +64,7 @@ ALTER TABLE `conversations` ADD COLUMN IF NOT EXISTS `project_id` VARCHAR(36) DE
 -- ========================================
 
 -- ---------- 智能研发 (rd) ----------
-INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
+INSERT IGNORE INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
 -- UI 侧边栏
 ('ui.sidebar.projects', '侧边栏-项目管理', 'ui', 'rd', 1, 1),
 ('ui.sidebar.repos', '侧边栏-代码仓库', 'ui', 'rd', 1, 1),
@@ -101,7 +101,7 @@ INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enab
 ('tool.dependency_analyzer', '工具-依赖分析器', 'tool', 'rd', 1, 1);
 
 -- ---------- 智慧教育 (edu) ----------
-INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
+INSERT IGNORE INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
 -- UI 侧边栏
 ('ui.sidebar.agents', '侧边栏-Agent管理', 'ui', 'edu', 1, 1),
 ('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'edu', 1, 1),
@@ -136,7 +136,7 @@ INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enab
 ('tool.knowledge_mapper', '工具-知识点映射器', 'tool', 'edu', 1, 1);
 
 -- ---------- 智慧办公 (office) ----------
-INSERT INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
+INSERT IGNORE INTO grayscale_config (config_key, config_name, config_type, domain, enabled, visible) VALUES
 -- UI 侧边栏
 ('ui.sidebar.agents', '侧边栏-Agent管理', 'ui', 'office', 1, 1),
 ('ui.sidebar.tools', '侧边栏-工具集', 'ui', 'office', 1, 1),

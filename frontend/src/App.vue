@@ -19,7 +19,7 @@ export default {
 
 html, body, #app {
   height: 100%;
-  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", Arial, sans-serif;
 }
 
 /* ── 极细滚动条 (Chrome / Edge) ────────────────────────── */

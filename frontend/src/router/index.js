@@ -159,33 +159,31 @@ const routes = [
   {
     path: '/documents',
     name: 'documents',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/OfficeDocumentsDense.vue'),
     meta: { requiresAuth: true },
   },
   {
     path: '/meetings',
     name: 'meetings',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/OfficeMeetingTasks.vue'),
     meta: { requiresAuth: true },
   },
   {
     path: '/approvals',
     name: 'approvals',
-    component: () => import('../views/DomainPlaceholder.vue'),
-    meta: { requiresAuth: true },
-  },
-  {
-    path: '/reports',
-    name: 'reports',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/OfficeWorkspace.vue'),
     meta: { requiresAuth: true },
   },
   {
     path: '/schedules',
     name: 'schedules',
-    component: () => import('../views/DomainPlaceholder.vue'),
+    component: () => import('../views/OfficeWorkspace.vue'),
     meta: { requiresAuth: true },
   },
+  { path: '/reports', redirect: '/meetings' },
+  { path: '/tasks', redirect: '/meetings' },
+  { path: '/organization', name: 'organization', component: () => import('../views/OfficeOrganizationCompact.vue'), meta: { requiresAuth: true } },
+  { path: '/notifications', name: 'notifications', component: () => import('../views/OfficeNotifications.vue'), meta: { requiresAuth: true } },
   // ── 管理页面 ───────────────────────────────────────
   {
     path: '/admin/grayscale',

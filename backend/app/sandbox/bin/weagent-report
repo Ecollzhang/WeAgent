@@ -15,7 +15,7 @@ import urllib.request
 
 LOG_DIR = "/workspace/.session/logs"
 SCRIPT_LOG = os.path.join(LOG_DIR, "weagent-report.log")
-REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service", "requirement_card", "bug_card", "iteration_card", "project_card"}
+REPORT_TYPES = {"progress", "result", "summary", "text", "table", "image", "code", "file", "error", "service", "requirement_card", "bug_card", "iteration_card", "project_card", "office_card"}
 REPORT_STATUSES = {"running", "done", "error", "stopped", "starting", "stopping", "failed", "exited"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
@@ -63,7 +63,7 @@ def validate_payload(payload: object) -> list[str]:
         data = {}
     data = data or {}
 
-    DOMAIN_CARD_TYPES = {"requirement_card", "bug_card", "iteration_card", "project_card"}
+    DOMAIN_CARD_TYPES = {"requirement_card", "bug_card", "iteration_card", "project_card", "office_card"}
 
     title = payload.get("title")
     if not isinstance(title, str) or not title.strip():

@@ -1,9 +1,9 @@
 import { login, register, getProfile } from '../../api/auth'
 
 const state = {
-  user: JSON.parse(localStorage.getItem('user') || 'null'),
-  accessToken: localStorage.getItem('access_token') || '',
-  refreshToken: localStorage.getItem('refresh_token') || '',
+  user: JSON.parse(sessionStorage.getItem('user') || 'null'),
+  accessToken: sessionStorage.getItem('access_token') || '',
+  refreshToken: sessionStorage.getItem('refresh_token') || '',
 }
 
 const getters = {
@@ -15,21 +15,21 @@ const getters = {
 const mutations = {
   SET_USER(state, user) {
     state.user = user
-    localStorage.setItem('user', JSON.stringify(user))
+    sessionStorage.setItem('user', JSON.stringify(user))
   },
   SET_TOKENS(state, { accessToken, refreshToken }) {
     state.accessToken = accessToken
     state.refreshToken = refreshToken
-    localStorage.setItem('access_token', accessToken)
-    localStorage.setItem('refresh_token', refreshToken)
+    sessionStorage.setItem('access_token', accessToken)
+    sessionStorage.setItem('refresh_token', refreshToken)
   },
   CLEAR_AUTH(state) {
     state.user = null
     state.accessToken = ''
     state.refreshToken = ''
-    localStorage.removeItem('user')
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
+    sessionStorage.removeItem('user')
+    sessionStorage.removeItem('access_token')
+    sessionStorage.removeItem('refresh_token')
   },
 }
 

@@ -185,6 +185,27 @@
               </div>
             </div>
 
+            <!-- Smart Office Card -->
+            <div v-else-if="el.type === 'office_card'" class="domain-card project-card office-card" @click="navigateToDomain(el)">
+              <div class="dc-header">
+                <span class="dc-domain-tag">智慧办公</span>
+                <span class="dc-type-tag office-type-tag">{{ officeCardKindLabel(el) }}</span>
+                <span class="dc-status-tag">{{ officeCardStatusLabel(el) }}</span>
+              </div>
+              <div class="dc-body">
+                <div class="dc-title">{{ cardTitle(el) }}</div>
+                <div class="dc-summary" v-if="cardSummary(el)">{{ cardSummary(el) }}</div>
+              </div>
+              <div class="dc-meta" v-if="officeCardMetaItems(el).length">
+                <span v-for="m in officeCardMetaItems(el)" :key="m.label" class="dc-meta-item">
+                  <i :class="m.icon"></i> {{ m.label }}: {{ m.value }}
+                </span>
+              </div>
+              <div class="dc-actions">
+                <el-button size="mini" type="primary" @click.stop="navigateToDomain(el)">查看办公事项 →</el-button>
+              </div>
+            </div>
+
           </div>
         </template>
       </div>
@@ -571,6 +592,7 @@ export default {
       if (checkVisible(s, domain, 'ui.chat.card.bug')) visible.add('bug_card')
       if (checkVisible(s, domain, 'ui.chat.card.iteration')) visible.add('iteration_card')
       if (checkVisible(s, domain, 'ui.chat.card.project')) visible.add('project_card')
+      if (checkVisible(s, domain, 'ui.chat.card.office')) visible.add('office_card')
       return visible
     },
     cardGroupedElements() {
@@ -642,7 +664,7 @@ export default {
       return merged
     },
     contentElements() {
-      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card']
+      const domainCardTypes = ['requirement_card', 'bug_card', 'iteration_card', 'project_card', 'office_card']
       const allowedCards = this.visibleDomainCards
       const isDomainCard = type => domainCardTypes.includes(type)
 
@@ -2221,6 +2243,27 @@ export default {
       if (d.meta?.progress !== undefined && d.meta?.progress !== null) return Number(d.meta.progress) || 0
       return null
     },
+    officeCardKindLabel(el) {
+      const kind = this.cardData(el).kind || this.cardData(el).meta?.kind || ''
+      return ({ meeting: '会议', action_item: '行动项', document: '公文', approval: '审批', schedule: '日程' })[kind] || '办公事项'
+    },
+    officeCardStatusLabel(el) {
+      const status = this.cardStatus(el)
+      return ({ scheduled: '待召开', ongoing: '进行中', completed: '已完成', pending: '待处理', in_progress: '处理中', done: '已完成', draft: '草稿', reviewing: '审批中', approved: '已批准', published: '已发布', rejected: '已驳回' })[status] || status || '待处理'
+    },
+    officeCardMetaItems(el) {
+      const d = this.cardData(el)
+      const meta = d.meta || {}
+      const items = []
+      const pushIf = (icon, label, value) => {
+        if (value !== undefined && value !== null && value !== '') items.push({ icon, label, value })
+      }
+      pushIf('el-icon-user', '负责人', meta.assignee || meta.organizer || d.assignee)
+      pushIf('el-icon-date', '时间', meta.start_time || meta.due_date || d.start_time || d.due_date)
+      pushIf('el-icon-document', '类型', meta.document_type || d.document_type)
+      pushIf('el-icon-location', '地点', meta.location || d.location)
+      return items
+    },
     navigateToDomain(el) {
       const d = this.cardData(el)
       const projectId = d.project_id || d.meta?.project_id || ''
@@ -2239,6 +2282,10 @@ export default {
         }
       } else if (type === 'project_card') {
         route = { name: 'projectDetail', params: { id: itemId } }
+      } else if (type === 'office_card') {
+        const kind = d.kind || d.meta?.kind
+        const targetName = kind === 'document' || kind === 'approval' ? 'documents' : 'meetings'
+        route = { name: targetName }
       }
       if (route.name) {
         this.$router.push(route).catch(() => {})

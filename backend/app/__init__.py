@@ -221,7 +221,7 @@ def _migrate_grayscale_configs():
             'ui.sidebar.documents', 'ui.sidebar.meetings', 'ui.sidebar.approvals',
             'ui.sidebar.reports', 'ui.sidebar.schedules',
             # RD 领域卡片
-            'ui.chat.card.requirement', 'ui.chat.card.bug', 'ui.chat.card.iteration', 'ui.chat.card.project',
+            'ui.chat.card.requirement', 'ui.chat.card.bug', 'ui.chat.card.iteration', 'ui.chat.card.project', 'ui.chat.card.office',
             # 聊天标签页
             'ui.chat.tabs.agent_config', 'ui.chat.tabs.artifacts', 'ui.chat.tabs.logs',
             'ui.chat.tabs.workflow', 'ui.chat.tabs.knowledge_base',
@@ -295,6 +295,7 @@ def _migrate_grayscale_configs():
             ('ui.chat.card.bug', '聊天-缺陷卡片'),
             ('ui.chat.card.iteration', '聊天-迭代卡片'),
             ('ui.chat.card.project', '聊天-项目卡片'),
+            ('ui.chat.card.office', '聊天-办公卡片'),
         ]
         for key, name in card_keys:
             exists = conn.execute(_text(
@@ -362,6 +363,7 @@ def _seed_grayscale_configs():
             ('ui.chat.card.bug', '聊天-缺陷卡片', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.chat.card.iteration', '聊天-迭代卡片', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
             ('ui.chat.card.project', '聊天-项目卡片', 'ui', 'common', 1, 1, ['rd', 'edu', 'office']),
+            ('ui.chat.card.office', '聊天-办公卡片', 'ui', 'common', 1, 1, ['office']),
             # ===== 智能研发 (rd) =====
             ('ui.sidebar.projects', '侧边栏-项目管理', 'ui', 'rd', 1, 1),
             ('ui.sidebar.repos', '侧边栏-代码仓库', 'ui', 'rd', 1, 1),
@@ -503,6 +505,8 @@ def create_app(config_name=None):
     from app.controllers.workspace_controller import workspace_bp
     from app.controllers.grayscale_controller import grayscale_bp
     from app.controllers.domain_proxy_controller import domain_proxy_bp
+    from app.controllers.office_ai_controller import office_ai_bp
+    from app.controllers.user_directory_controller import user_directory_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
@@ -518,6 +522,8 @@ def create_app(config_name=None):
     app.register_blueprint(workspace_bp)
     app.register_blueprint(grayscale_bp)
     app.register_blueprint(domain_proxy_bp)
+    app.register_blueprint(office_ai_bp, url_prefix='/api/office-ai')
+    app.register_blueprint(user_directory_bp)
 
     # Register sandbox blueprint (optional, for testing)
     try:
