@@ -15,8 +15,16 @@ const getters = {
 
 const mutations = {
   SET_USER(state, user) {
+    // Normalize avatar from avatar_url (backend uses avatar_url, frontend uses avatar)
+    if (user && !user.avatar && user.avatar_url) {
+      user = { ...user, avatar: user.avatar_url }
+    }
     state.user = user
     sessionStorage.setItem('user', JSON.stringify(user))
+    // Also cache avatar in localStorage for fallback across sessions
+    if (user && (user.avatar || user.avatar_url)) {
+      localStorage.setItem('user_avatar', user.avatar || user.avatar_url)
+    }
   },
   SET_TOKENS(state, { accessToken, refreshToken }) {
     state.accessToken = accessToken

@@ -31,6 +31,7 @@ class IterationService:
             sort_order=data.get('sort_order', 0),
         )
         db.session.add(iteration)
+        db.session.flush()  # ensure iteration.id is populated before _log
         self._log(db.session, project_id, 'iteration', iteration.id,
                   'created', user_id, new_value={'name': data['name']})
         db.session.commit()

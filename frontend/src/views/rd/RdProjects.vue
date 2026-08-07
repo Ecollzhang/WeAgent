@@ -26,9 +26,25 @@
             <div class="card-cover" :class="'cover-' + coverColors[pidx % 4]"></div>
             <div class="card-header">
               <h3 class="project-name">{{ project.name }}</h3>
-              <el-tag size="mini" :type="project.status === 'active' ? 'success' : 'info'" effect="plain">
-                {{ project.status === 'active' ? '进行中' : '已归档' }}
-              </el-tag>
+              <div class="card-header-right">
+                <el-tag size="mini" :type="project.status === 'active' ? 'success' : 'info'" effect="plain">
+                  {{ project.status === 'active' ? '进行中' : '已归档' }}
+                </el-tag>
+                <el-popconfirm
+                  title="确定删除该项目吗？此操作不可逆"
+                  confirm-button-text="删除"
+                  cancel-button-text="取消"
+                  confirm-button-type="danger"
+                  @confirm="handleDelete(project, pidx)"
+                  @click.stop
+                >
+                  <template #reference>
+                    <span class="card-delete-btn" @click.stop title="删除项目">
+                      <i class="el-icon-delete"></i>
+                    </span>
+                  </template>
+                </el-popconfirm>
+              </div>
             </div>
 
             <p class="project-desc" v-if="project.description">
@@ -118,7 +134,7 @@ export default {
     this.loadProjects()
   },
   methods: {
-    ...mapActions('rd', ['fetchProjects', 'createProject']),
+    ...mapActions('rd', ['fetchProjects', 'createProject', 'deleteProject']),
 
     async loadProjects() {
       // 1. 先加载演示数据，保证页面立即有内容
@@ -171,6 +187,17 @@ export default {
     goToProject(id) {
       this.$router.push(`/projects/${id}`)
     },
+    async handleDelete(project, pidx) {
+      try {
+        await this.deleteProject(project.id)
+        this.projects.splice(pidx, 1)
+        this.$message.success('项目已删除')
+      } catch (e) {
+        this.$message.error('删除失败，请稍后重试')
+        console.error('delete project error:', e)
+      }
+    },
+
     async handleCreate(formData) {
       try {
         const res = await this.createProject({
@@ -276,6 +303,27 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 18px 22px 0;
+}
+.card-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.card-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: #c0c4cc;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.card-delete-btn:hover {
+  color: #f56c6c;
+  background: rgba(245, 108, 108, 0.1);
 }
 .project-name {
   margin: 0;

@@ -531,6 +531,7 @@ import MessageBubble from '../MessageBubble/index.vue'
 import KbDocumentSelector from '../KbDocumentSelector/index.vue'
 import { checkVisible } from '../../store/modules/grayscale'
 import { listServices, getServiceLogs, restartService, stopService } from '../../api/sandbox'
+import { getProject } from '../../api/rd'
 
 export default {
   name: 'ChatWindow',
@@ -843,6 +844,9 @@ export default {
   mounted() {
     this.ensureSessionAgentConfigs()
     this.loadSavedWorkflows()
+    if (this.conversation?.project_id) {
+      this.fetchProjectName(this.conversation.project_id)
+    }
     const container = this.$refs.messagesContainer
     if (container) {
       container.addEventListener('scroll', this.handleMessagesScroll, { passive: true })
@@ -1687,13 +1691,12 @@ export default {
       if (!projectId) return
       this.projectNameLoading = true
       try {
-        const { getProject } = await import('../../api/rd')
         const res = await getProject(projectId)
         if (res.code === 200 && res.data) {
           this.projectName = res.data.name || ''
         }
       } catch (e) {
-        // Silently fail — will show truncated ID instead
+        console.error('Failed to fetch project name:', e)
       } finally {
         this.projectNameLoading = false
       }

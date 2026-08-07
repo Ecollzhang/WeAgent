@@ -16,10 +16,11 @@ import simple_websocket
 from app.services.conversation_service import conversation_service
 
 try:
-    from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+    from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request, decode_token
 except Exception:  # pragma: no cover - optional in isolated sandbox tests
     get_jwt_identity = None
     verify_jwt_in_request = None
+    decode_token = None
 
 sandbox_bp = Blueprint("sandbox", __name__)
 
@@ -223,6 +224,36 @@ def _require_session_access(session_id: str):
     if _session_access_allowed(session_id, user_id):
         return None
     return jsonify({"code": 404, "message": "Session not found"}), 404
+
+
+def _resolve_user_for_raw_file(session_id: str):
+    """Try JWT from Authorization header, then from ?token query param.
+
+    Query-param tokens enable <img> / <iframe> tags to load protected
+    files without custom headers.  Returns (user_id, error_tuple) where
+    error_tuple is (json_response, status_code) or None on success.
+    """
+    # 1. Standard JWT via Authorization header
+    try:
+        verify_jwt_in_request(optional=True)
+        user_id = get_jwt_identity()
+        if user_id and _session_access_allowed(session_id, user_id):
+            return user_id, None
+    except Exception:
+        pass
+
+    # 2. Query-param token (for browser resource requests that can't set headers)
+    token = request.args.get("token", "").strip()
+    if token and decode_token:
+        try:
+            payload = decode_token(token)
+            user_id = payload.get("sub") or payload.get("identity") or ""
+            if user_id and _session_access_allowed(session_id, str(user_id)):
+                return str(user_id), None
+        except Exception:
+            pass
+
+    return None, (jsonify({"code": 404, "message": "Session not found"}), 404)
 
 
 def _preview_token_from_request() -> tuple[str, str]:
@@ -564,10 +595,14 @@ def read_agent_file(session_id: str, agent_id: str):
 
 @sandbox_bp.route("/sessions/<session_id>/agents/<agent_id>/files/raw", methods=["GET"])
 def read_agent_raw_file(session_id: str, agent_id: str):
-    """Serve raw file content with proper MIME type for browser rendering."""
-    denied = _require_session_access(session_id)
-    if denied:
-        return denied
+    """Serve raw file content with proper MIME type for browser rendering.
+
+    Accepts ?token= as an alternative to the Authorization header so
+    <img> / <iframe> tags can load protected resources.
+    """
+    _, error = _resolve_user_for_raw_file(session_id)
+    if error:
+        return error
     path = request.args.get("path", "")
     if not path:
         return jsonify({"code": 400, "message": "path query parameter required"}), 400
@@ -607,11 +642,15 @@ def file_tree(session_id: str):
 
 @sandbox_bp.route("/sessions/<session_id>/files/raw", methods=["GET"])
 def read_session_raw_file(session_id: str):
-    """Serve raw workspace file content with proper MIME type."""
+    """Serve raw workspace file content with proper MIME type.
+
+    Accepts ?token= as an alternative to the Authorization header so
+    <img> / <iframe> tags can load protected resources.
+    """
     started_at = time.perf_counter()
-    denied = _require_session_access(session_id)
-    if denied:
-        return denied
+    _, error = _resolve_user_for_raw_file(session_id)
+    if error:
+        return error
     path = request.args.get("path", "")
     if not path:
         return _with_timing_headers(jsonify({"code": 400, "message": "path query parameter required"}), "files/raw", started_at), 400
@@ -689,14 +728,17 @@ def serve_workspace_file(session_id: str, filepath: str):
     This endpoint supports relative URL resolution so that HTML pages
     can reference CSS/JS/images via relative paths.
 
+    Accepts ?token= as an alternative to the Authorization header so
+    <img> / <iframe> tags can load protected resources.
+
     Example:
       GET /api/sandbox/sessions/{sid}/workspace/index.html
       GET /api/sandbox/sessions/{sid}/workspace/css/style.css
     """
     started_at = time.perf_counter()
-    denied = _require_session_access(session_id)
-    if denied:
-        return denied
+    _, error = _resolve_user_for_raw_file(session_id)
+    if error:
+        return error
     mgr = _mgr()
     session = mgr.get_session(session_id)
     if not session:
@@ -865,6 +907,12 @@ def _inject_html_base(content: bytes, session_id: str, workspace_path: str) -> b
     else:
         base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/"
 
+    # Preserve ?token= query param so relative assets loaded by the browser
+    # also pass authentication.
+    token = request.args.get("token", "").strip()
+    if token:
+        base_href = base_href + ("&" if "?" in base_href else "?") + "token=" + quote(token, safe="")
+
     html = re.sub(r"<base\s[^>]*>", "", html, flags=re.IGNORECASE)
     html = _rewrite_workspace_root_paths(html, base_href)
     base_tag = f'<base href="{base_href}">'
@@ -933,6 +981,11 @@ def _rewrite_workspace_css(content: bytes, session_id: str, workspace_path: str)
         base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/{encoded_dir}/"
     else:
         base_href = f"/api/sandbox/sessions/{encoded_session}/workspace/"
+
+    token = request.args.get("token", "").strip()
+    if token:
+        base_href = base_href + ("&" if "?" in base_href else "?") + "token=" + quote(token, safe="")
+
     return _rewrite_workspace_root_paths(css, base_href).encode("utf-8")
 
 

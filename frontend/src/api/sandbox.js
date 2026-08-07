@@ -106,10 +106,20 @@ export function readAgentFile(sessionId, agentId, path) {
   })
 }
 
-// Build URL for raw file serving (browser-renderable)
+// Build URL for raw file serving (browser-renderable).
+// Appends the JWT access token so <img>/<iframe> tags can load protected files
+// without custom headers.
+function _appendToken(url) {
+  const token = sessionStorage.getItem('access_token')
+  if (!token) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(token)}`
+}
+
 export function getAgentFileUrl(sessionId, agentId, path) {
   const base = '/api/sandbox/sessions'
-  return `${base}/${sessionId}/agents/${agentId}/files/raw?path=${encodeURIComponent(path)}`
+  const url = `${base}/${sessionId}/agents/${agentId}/files/raw?path=${encodeURIComponent(path)}`
+  return _appendToken(url)
 }
 
 // Build workspace URL for proper path resolution (CSS/JS relative to HTML)
@@ -117,7 +127,8 @@ export function getWorkspaceFileUrl(sessionId, filepath) {
   // Strip /workspace/ prefix for the URL path
   const clean = filepath.replace(/^\/?workspace\//, '')
   const encoded = clean.split('/').map(encodeURIComponent).join('/')
-  return `/api/sandbox/sessions/${sessionId}/workspace/${encoded}`
+  const url = `/api/sandbox/sessions/${sessionId}/workspace/${encoded}`
+  return _appendToken(url)
 }
 
 export function getFileTree(sessionId, root = '/workspace') {
@@ -148,7 +159,8 @@ export function migrateFiles(sourceConversationId, payload) {
 }
 
 export function getSessionRawFileUrl(sessionId, path) {
-  return `/api/sandbox/sessions/${sessionId}/files/raw?path=${encodeURIComponent(path)}`
+  const url = `/api/sandbox/sessions/${sessionId}/files/raw?path=${encodeURIComponent(path)}`
+  return _appendToken(url)
 }
 
 // Raw sandbox files are protected by the same bearer-token boundary as the
@@ -163,7 +175,8 @@ export function readSessionRawFile(sessionId, path, responseType = 'text') {
 }
 
 export function getSessionDownloadUrl(sessionId, path) {
-  return `/api/sandbox/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`
+  const url = `/api/sandbox/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`
+  return _appendToken(url)
 }
 
 export function getSessionZipExportUrl(sessionId, path, mode = 'auto', selectedPaths = []) {
@@ -173,7 +186,8 @@ export function getSessionZipExportUrl(sessionId, path, mode = 'auto', selectedP
   ;(selectedPaths || []).forEach(item => {
     if (item) params.append('selected_paths', item)
   })
-  return `/api/sandbox/sessions/${sessionId}/files/export-zip?${params.toString()}`
+  const url = `/api/sandbox/sessions/${sessionId}/files/export-zip?${params.toString()}`
+  return _appendToken(url)
 }
 
 // ===== Custom tools =====

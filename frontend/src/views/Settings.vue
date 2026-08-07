@@ -730,7 +730,7 @@ export default {
     if (user) {
       this.profile.username = user.username || ''
       this.profile.email = user.email || ''
-      this.profile.avatar = user.avatar || localStorage.getItem('user_avatar') || ''
+      this.profile.avatar = user.avatar || user.avatar_url || localStorage.getItem('user_avatar') || ''
     }
   },
   methods: {

@@ -1394,7 +1394,6 @@ import {
 } from './demoData'
 import * as rdApi from '@/api/rd'
 import { getUsers } from '@/api/auth'
-import { getConversations } from '@/api/conversation'
 
 export default {
   name: 'RdProjectDetail',
@@ -2228,27 +2227,11 @@ export default {
       return (this.requirements || []).filter(r => r.iteration_id === iterId && r.start_date && r.due_date)
     },
 
-    async startConversation() {
-      const domain = this.$store.getters['workspace/activeDomain'] || 'rd'
-      try {
-        const response = await getConversations()
-        const linkedConversation = (response?.data || []).find(
-          conversation =>
-            conversation.project_id === this.project.id &&
-            Array.isArray(conversation.services) &&
-            conversation.services.includes('rd')
-        )
-        if (linkedConversation) {
-          this.$router.push({
-            path: '/dashboard',
-            query: { conversation_id: linkedConversation.id, domain },
-          })
-          return
-        }
-      } catch (error) {
-        // The create-conversation flow below remains available if history fails.
-      }
-      this.$router.push({ path: '/dashboard', query: { project_id: this.project.id, domain } })
+    startConversation() {
+      // Use sessionStorage to pass project ID to Dashboard
+      // — avoids URL query race conditions with workspace switching
+      sessionStorage.setItem('weagent.pendingProjectId', this.project.id)
+      this.$router.push({ path: '/dashboard' })
     },
 
     // ── 项目编辑 ──

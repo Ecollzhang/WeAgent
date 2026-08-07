@@ -70,11 +70,11 @@ def update_project(project_id):
 @project_bp.route('/api/rd/projects/<project_id>', methods=['DELETE'])
 @jwt_required()
 def delete_project(project_id):
-    """归档项目."""
+    """删除项目."""
     ok = project_service.delete_project(project_id, _get_user_id())
     if not ok:
         return _error('项目不存在', 404)
-    return _ok({'id': project_id}, '项目已归档')
+    return _ok({'id': project_id}, '项目已删除')
 
 
 # ── 项目文件管理 ─────────────────────────────────────

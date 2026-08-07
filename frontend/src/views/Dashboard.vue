@@ -671,6 +671,7 @@ export default {
         command: 'npm run dev -- --host 0.0.0.0 --port 5173',
       },
       messageRefreshTimer: null,
+      conversationListRefreshTimer: null,
     }
   },
   computed: {
@@ -794,29 +795,45 @@ export default {
       const active = this.$store.getters['workspace/activeWorkspace']
       if (requestedWorkspace) {
         this.$store.dispatch('workspace/selectWorkspace', requestedWorkspace)
+        // Clean domain from URL after processing so it doesn't stick on refresh
+        if (this.$route.query.domain) {
+          const q = { ...this.$route.query }
+          delete q.domain
+          this.$router.replace({ query: q }).catch(() => {})
+        }
       } else if (!active || !active.id) {
-        this.$store.dispatch('workspace/selectWorkspace', workspaces[0])
+        // Prefer a workspace from the last remembered domain
+        const lastDomain = localStorage.getItem('last_domain')
+        const preferred = lastDomain
+          ? workspaces.find(w => w.domain === lastDomain)
+          : null
+        this.$store.dispatch('workspace/selectWorkspace', preferred || workspaces[0])
       }
       const domain = this.$store.getters['workspace/activeDomain']
       await this.$store.dispatch('grayscale/loadDomainConfig', domain)
     }
 
     const wsId = this.$store.getters['workspace/activeWorkspaceId']
-    await Promise.all([
-      this.$store.dispatch('conversation/fetchConversations', wsId),
-      this.$store.dispatch('agent/fetchAgents'),
-    ])
+    // Always fetch conversations on initial load (watcher only fires on change)
+    if (wsId) {
+      await this.$store.dispatch('conversation/fetchConversations', wsId)
+    }
+    await this.$store.dispatch('agent/fetchAgents')
     await this.selectConversationFromRoute()
     if (!this.currentConversation) {
       this.restoreConversationSelection(wsId)
     }
-    this.handleProjectFromRoute()
+    await this.handleProjectFromRoute()
   },
     beforeDestroy() {
       if (this.currentConversation?.id) {
         socketClient.leaveConversation(this.currentConversation.id)
       }
       this.stopMessageRefresh()
+      if (this.conversationListRefreshTimer) {
+        clearTimeout(this.conversationListRefreshTimer)
+        this.conversationListRefreshTimer = null
+      }
       this.unregisterSocketHandlers()
     },
   watch: {
@@ -925,24 +942,24 @@ export default {
     },
 
     async handleProjectFromRoute() {
-      const projectId = this.$route.query.project_id
+      // Read from sessionStorage (set by RdProjectDetail.startConversation)
+      // This avoids URL query race conditions with workspace switching
+      const projectId = sessionStorage.getItem('weagent.pendingProjectId')
       if (!projectId) return
-      // Clear the query so it doesn't re-trigger on refresh
-      if (this.$route.query.project_id) {
-        const q = { ...this.$route.query }
-        delete q.project_id
-        this.$router.replace({ query: q }).catch(() => {})
-      }
-      // Pre-fetch projects so the name shows in preview
+      sessionStorage.removeItem('weagent.pendingProjectId')
+
+      // Pre-fetch projects so the name shows in the dialog dropdown
       await this.fetchProjects()
-      if (!this.projectList.find(p => p.id === projectId)) {
-        this.$message.warning('未找到该项目，请确认项目存在')
-        return
-      }
-      // Pre-fill: RD service + project, domain from active workspace
+
+      // Always open the dialog with RD service + project pre-filled
       this.newConversation.services = ['rd']
       this.newConversation.projectId = projectId
       this.showCreateDialog = true
+
+      // Warn if project not found in the fetched list (but dialog stays open)
+      if (this.projectList.length > 0 && !this.projectList.find(p => p.id === projectId)) {
+        this.$message.warning('未找到该项目，请确认项目存在')
+      }
     },
 
     handleSelectConversation(conversation) {
@@ -1124,8 +1141,11 @@ export default {
           conversationId: convId,
           message,
         })
-        this.isAgentResponding = this.hasStreamingMessages(convId)
-        this.$store.dispatch('conversation/fetchConversations', this.activeWorkspaceId)
+        // Only update responding state for agent messages — user messages don't have streaming status
+        if (message.sender_type === 'agent') {
+          this.isAgentResponding = ['pending', 'streaming'].includes(message.status)
+        }
+        this.scheduleConversationListRefresh()
       }
       const onDelta = (event) => {
         const patch = {
@@ -1197,9 +1217,9 @@ export default {
           patch,
         })
         this.isAgentResponding = this.hasStreamingMessages(event.conversation_id)
-        this.$store.dispatch('conversation/fetchConversations', this.activeWorkspaceId)
         if (!this.isAgentResponding) {
           this.stopMessageRefresh()
+          this.scheduleConversationListRefresh()
         }
       }
 
@@ -1234,7 +1254,11 @@ export default {
         }
         await this.$store.dispatch('message/fetchMessages', { conversationId })
         this.isAgentResponding = this.hasStreamingMessages(conversationId)
-        if (!this.isAgentResponding || ticks >= 120) {
+        // Don't stop early — agent might not have started responding yet (first 3 ticks are warm-up)
+        if (!this.isAgentResponding && ticks >= 3) {
+          this.stopMessageRefresh()
+          this.scheduleConversationListRefresh()
+        } else if (ticks >= 120) {
           this.stopMessageRefresh()
         }
       }, 2000)
@@ -1245,6 +1269,14 @@ export default {
         clearInterval(this.messageRefreshTimer)
         this.messageRefreshTimer = null
       }
+    },
+
+    scheduleConversationListRefresh() {
+      if (this.conversationListRefreshTimer) return
+      this.conversationListRefreshTimer = setTimeout(() => {
+        this.conversationListRefreshTimer = null
+        this.$store.dispatch('conversation/fetchConversations', this.activeWorkspaceId)
+      }, 2000)
     },
 
     async handlePinMessage(messageId) {

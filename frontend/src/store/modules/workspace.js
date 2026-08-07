@@ -2,21 +2,35 @@ import { getWorkspaces, createWorkspace, updateWorkspace, archiveWorkspace, dele
 
 // localStorage keys
 const ACTIVE_WS_KEY = 'active_workspace'
+const LAST_DOMAIN_KEY = 'last_domain'
 
 function loadActiveWs() {
   try {
     const raw = localStorage.getItem(ACTIVE_WS_KEY)
-    return raw ? JSON.parse(raw) : null
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    // Discard corrupted entries with no valid workspace id
+    if (!data || !data.id) {
+      localStorage.removeItem(ACTIVE_WS_KEY)
+      localStorage.removeItem(LAST_DOMAIN_KEY)
+      return null
+    }
+    return data
   } catch { return null }
 }
 
 function saveActiveWs(ws) {
-  if (ws) {
+  if (ws && ws.id) {
     localStorage.setItem(ACTIVE_WS_KEY, JSON.stringify({
       id: ws.id, domain: ws.domain, name: ws.name, sub_role: ws.sub_role || '',
     }))
-  } else {
-    localStorage.removeItem(ACTIVE_WS_KEY)
+    // Only remember domain when a real workspace is selected
+    localStorage.setItem(LAST_DOMAIN_KEY, ws.domain)
+  } else if (!ws || !ws.id) {
+    // Don't persist empty-domain browsing — keep previous active workspace
+    if (!ws) {
+      localStorage.removeItem(ACTIVE_WS_KEY)
+    }
   }
 }
 
@@ -32,7 +46,7 @@ export default {
   getters: {
     allWorkspaces: state => state.workspaces,
     activeWorkspace: state => state.activeWorkspace,
-    activeDomain: state => state.activeWorkspace?.domain || 'rd',
+    activeDomain: state => state.activeWorkspace?.domain || localStorage.getItem(LAST_DOMAIN_KEY) || 'rd',
     activeWorkspaceId: state => state.activeWorkspace?.id || null,
     activeSubRole: state => state.activeWorkspace?.sub_role || '',
     isLoading: state => state.loading,

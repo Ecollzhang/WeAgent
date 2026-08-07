@@ -113,7 +113,7 @@ export default {
       return this.$store.state.user.user
     },
     userAvatar() {
-      return this.currentUser?.avatar || localStorage.getItem('user_avatar') || ''
+      return this.currentUser?.avatar || this.currentUser?.avatar_url || localStorage.getItem('user_avatar') || ''
     },
     activeDomain() {
       return this.$store.getters['workspace/activeDomain']

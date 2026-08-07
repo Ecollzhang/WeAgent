@@ -18,7 +18,15 @@
       "Bash(curl:*)",
       "Bash(taskkill //PID 39056 //F)",
       "Bash(taskkill //PID 49476 //F)",
-      "Bash(find \"D:/myWork/研究生/competition/字节全栈挑战赛/WeAgent/backend/services/rag\" -type d -name \"__pycache__\" -exec rm -rf {} +)"
+      "Bash(find \"D:/myWork/研究生/competition/字节全栈挑战赛/WeAgent/backend/services/rag\" -type d -name \"__pycache__\" -exec rm -rf {} +)",
+      "Bash(npx eslint:*)",
+      "Bash(node -e ':*)",
+      "Bash(cmd:*)",
+      "Bash(python run.py)",
+      "Bash(taskkill //PID 2080 //F)",
+      "Bash(nohup python:*)",
+      "Bash(echo \"New PID: $!\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('total:', d.get\\('data',{}\\).get\\('total', 'N/A'\\)\\)\")"
     ]
   }
 }

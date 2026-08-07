@@ -1680,11 +1680,22 @@ export default {
     resolveFileUrl(value) {
       if (!value) return ''
       const text = String(value)
-      if (/^(data:|blob:|https?:\/\/|\/api\/)/i.test(text)) return text
+      if (/^(data:|blob:|https?:\/\/)/i.test(text)) return text
       if (text.startsWith('/workspace') || text.startsWith('workspace/')) {
         if (!this.sessionId) return text
         const path = this.normalizeWorkspacePath(text)
-        return `/api/sandbox/sessions/${encodeURIComponent(this.sessionId)}/files/raw?path=${encodeURIComponent(path)}`
+        let url = `/api/sandbox/sessions/${encodeURIComponent(this.sessionId)}/files/raw?path=${encodeURIComponent(path)}`
+        const token = sessionStorage.getItem('access_token')
+        if (token) url += `&token=${encodeURIComponent(token)}`
+        return url
+      }
+      // Sandbox file URLs from backend — inject auth token for <img> tags
+      if (/^\/api\/sandbox\/sessions\/[^/]+\/(files\/raw|workspace\/|agents\/[^/]+\/files\/raw)/i.test(text)) {
+        const token = sessionStorage.getItem('access_token')
+        if (token) {
+          const sep = text.includes('?') ? '&' : '?'
+          return `${text}${sep}token=${encodeURIComponent(token)}`
+        }
       }
       return text
     },

@@ -109,11 +109,11 @@ class ProjectService:
         }
 
     def delete_project(self, project_id, user_id):
-        """归档项目（软删除）."""
+        """删除项目（硬删除，级联删除所有关联数据）."""
         project = RdProject.query.filter_by(id=project_id, user_id=user_id).first()
         if not project:
             return False
-        project.status = 'archived'
+        db.session.delete(project)
         db.session.commit()
         return True
 

@@ -1,33 +1,77 @@
 # WeAgent
 
-WeAgent 是一个面向多 Agent 协作的任务平台。用户可以像使用 IM 一样创建会话、选择 Agent、发送任务，并在同一个会话中查看 Agent 回复、执行进度、工作流、产物、容器文件和运行日志。
+WeAgent 是一站式智能协作平台，将 AI Agent 能力深度融入真实工作场景，覆盖智能研发、智慧教育、协同办公三大领域。平台以"工作空间 + 领域隔离"架构为核心，每个空间可独立配置多个协作 Agent，实现上下文感知的智能对话与任务执行。
 
-当前项目同时包含 Web 端、Electron 桌面端、Capacitor Android 端和 Flask 后端。Web 端作为主功能入口，桌面端做全量迁移，Android 端优先迁移登录、会话、Agent 和个人设置等主要功能。
+## 平台预览
 
-## 功能预览
+<!-- TODO: 替换为实际截图 -->
 
-| 登录 | 模型设置 |
+| 智能研发 - 项目管理 | 智能研发 - 代码审查 |
 |---|---|
-| ![登录](frontend/src/assets/登录.png) | ![模型设置](frontend/src/assets/模型设置.png) |
+| ![智能研发-项目管理](static/image/rd_preoject_overview.png) | ![智能研发-代码审查](static/image/rd_code_review.png) |
 
-| Agent 配置 | 会话 |
+| 智慧教育 - 课程空间 | 智慧教育 - 作业批改 |
 |---|---|
-| ![我的 Agent](frontend/src/assets/我的Agent.png) | ![对话](frontend/src/assets/对话.png) |
+| ![智慧教育-课程空间](static/image/edu_course_space.png) | ![智慧教育-作业批改](static/image/edu_homeworkd.png) |
 
-| 主持人 Agent |
-|---|
-| ![主持人 Agent](frontend/src/assets/主持人Agent.png) |
+| 协同办公 - 会议管理 | 协同办公 - 公文审批 |
+|---|---|
+| ![协同办公-会议管理](static/image/metting_manager.png) | ![协同办公-公文审批](static/image/公文审批.png) |
+
+| 多 Agent 协作 | 知识库检索 |
+|---|---|
+| ![多Agent协作](static/image/mul_agent_collarate.png) | ![知识库检索](static/image/rag_service.png) |
 
 ## 核心能力
 
-- 多 Agent 会话：支持单 Agent 和多 Agent 会话，多 Agent 会自动引入主持人 Agent 做任务拆解和调度。
-- 结构化消息：支持进度、进度历史、结果、表格、文件、Raw Output、工作流等消息元素。
-- 产物工作台：支持查看容器文件、HTML 预览、代码查看和编辑、图片查看、表格查看、Diff/工作流预览。
-- 我的 Agent：支持 Agent 新建、编辑、头像颜色、能力标签、系统提示词、Skill、工具集能力绑定。
-- 工具集能力：支持 Skill、Tool、Plugin、MCP 等能力导入、分类、审计、配置和绑定。
-- 我的收藏：支持收藏会话、过滤收藏、取消收藏、从收藏进入会话。
-- 多端客户端：Web、桌面端和 Android 端连接同一个后端服务。
-- 沙箱容器：每个 Agent 会话创建独立 Docker 容器，Agent 在 `/workspace` 下生成和管理产物。
+### 领域架构
+- **工作空间 + 领域隔离**：每个领域独立配置 Agent、工具集、灰度开关，切换空间自动刷新上下文。
+- **灰度控制**：按领域按功能灵活开启/关闭特性，支持公共配置跨领域复用。
+- **领域服务总线**：统一 `/spec` 和 `/health` 规范，Agent 通过 `call_service_api` 工具跨领域调用。
+
+### 智能研发
+- 项目管理、需求追踪、迭代规划、缺陷管理全生命周期支持。
+- 甘特图可视化、项目成员协作、活动日志追溯。
+- 代码仓库对接（GitHub OAuth），文件树浏览与代码高亮查看。
+- AI 代码审查（安全/规范/逻辑/性能四维度），支持脚本审查与 LLM 审查双模式。
+- CI/CD 构建管理，对接 GitHub Actions 触发与状态同步。
+- Agent 自动感知项目上下文，推送需求/缺陷/迭代等结构化卡片通知。
+
+### 智慧教育
+- 教师端：自定义课程体系搭建、课件编辑与导出、作业批改工作流。
+- 学生端：引导式对话学习、AI 一对一辅导、知识点薄弱项诊断。
+- 班级花名册管理与课程成员邀请，角色感知导航（教师/学生差异化视图）。
+- 版本化教学循环，课件与作业按版本独立发布与回溯。
+- Agent 辅助生成可编辑课件、演示文稿、学情报告。
+
+### 协同办公
+- 会议管理：创建/参会确认/纪要自动生成，行动项拆解与进度跟踪。
+- 公文审批：直属领导并行审批 + 部门经理逐级审批，双栏布局清晰呈现流转状态。
+- 任务派发：会议行动项转任务卡片，责任人指派与状态闭环。
+- 组织协同：组织架构管理，跨团队任务分配，团队成员关系维护。
+- Agent 自动生成会议纪要、跟踪任务闭环、辅助审批流转。
+
+### Agent 与沙箱
+- 多 Agent 会话，主持人 Agent 自动拆解任务与调度成员。
+- 支持 @ 指定 Agent 执行特定任务。
+- Docker 沙箱隔离，每个会话独立容器环境。
+- 适配 Claude Code / Codex / OpenCode 多种执行引擎。
+- 自定义工作流图可视化多 Agent 协作路径。
+
+### RAG 知识库
+- 文档解析、向量化存储与语义检索。
+- 对话内精准知识召回，Agent 回答基于您的私有数据。
+- 支持按知识库域名与文档 ID 过滤检索范围。
+
+### 多端支持
+- Web 端（Vue 2.7 + Element UI）。
+- Electron 桌面端（Windows/macOS/Linux）。
+- Capacitor Android 端。
+
+### 结构化消息
+- 支持 Markdown、表格、代码、图片、文件、HTML 预览。
+- 进度条、工作流图、产物卡片、领域卡片（需求/缺陷/迭代/会议/审批）。
+- 收藏、搜索、对话历史定位。
 
 ## 技术栈
 
@@ -39,57 +83,64 @@ WeAgent 是一个面向多 Agent 协作的任务平台。用户可以像使用 I
 | 桌面端 | Electron 29, Vite, Vue 2.7, electron-builder |
 | Android 端 | Capacitor 6, Vite, Vue 2.7, Android Studio |
 | 沙箱 | Docker, Python 3.11, Node.js 20, Claude Code, Codex, OpenCode |
+| RAG | Flask, sentence-transformers, faiss-cpu, markitdown |
 
 ## 目录结构
 
 ```text
 WeAgent/
-├─ backend/                  # Flask 后端与沙箱服务
-│  ├─ app/
-│  │  ├─ controllers/         # API 控制器
-│  │  ├─ services/            # 业务逻辑
-│  │  ├─ models/              # SQLAlchemy 模型
-│  │  ├─ repositories/        # 数据访问层
-│  │  ├─ sandbox/             # Docker 沙箱和容器端 orchestrator
-│  │  └─ socket/              # Socket.IO 事件
-│  ├─ sql/init.sql
+├─ backend/
+│  ├─ app/                       # 主后端：认证、会话、Agent、消息、沙箱
+│  │  ├─ controllers/            # API 控制器
+│  │  ├─ services/               # 业务逻辑
+│  │  ├─ models/                 # SQLAlchemy 模型
+│  │  ├─ repositories/           # 数据访问层
+│  │  ├─ sandbox/                # Docker 沙箱和容器端 orchestrator
+│  │  └─ socket/                 # Socket.IO 事件
+│  ├─ services/
+│  │  ├─ rd/                     # 智能研发领域服务
+│  │  ├─ edu/                    # 智慧教育领域服务
+│  │  ├─ office/                 # 协同办公领域服务
+│  │  └─ rag/                    # RAG 知识库服务
+│  ├─ sql/init.sql               # 数据库初始化脚本
+│  ├─ requirements.txt
 │  └─ run.py
-├─ frontend/                 # Web 客户端
+├─ frontend/                     # Web 客户端
+│  └─ src/
+│     ├─ views/
+│     │  ├─ rd/                  # 研发页面
+│     │  ├─ education/           # 教育页面
+│     │  └─ *.vue                # 办公页面 (Office*.vue)
+│     ├─ components/             # 共享组件
+│     ├─ store/                  # Vuex 状态管理
+│     └─ api/                    # API 调用层
 ├─ clients/
-│  ├─ desktop/                # Electron 桌面端
-│  └─ android/                # Capacitor Android 端
-├─ toolset/                  # 工具集导入 UAT 示例
-├─ AI协作文档/               # AI 协作规则、资产和沉淀材料
-│  ├─ 1-AI仓库规则/           # AI 参与开发前必须阅读和理解的仓库规则
-│  └─ 2-AI协作友好/           # SKILL、RULE、SPEC、案例产物和协作技巧沉淀
+│  ├─ desktop/                   # Electron 桌面端
+│  └─ android/                   # Capacitor Android 端
 ├─ docs/
-│  ├─ tech/                   # 技术方案文档
-│  └─ ai-collab/              # AI 协作归档文档
+│  ├─ tech/                      # 技术方案文档
+│  └─ ai-collab/                 # AI 协作归档文档
+├─ AI协作文档/                    # AI 协作规则、资产和沉淀材料
+├─ 开发迭代&版本线.md             # 版本演进历史
 └─ README.md
 ```
 
-## 更多 README 入口
+## 领域服务 README
+
+- [智能研发 (RD)](backend/services/rd/README.md)
+- [智慧教育 (Education)](backend/services/edu/README.md)
+- [协同办公 (Office)](backend/services/office/README.md)
+- [RAG 知识库](backend/services/rag/README.md)
+
+## 更多文档入口
 
 - [多端客户端说明](clients/README.md)
 - [沙箱容器说明](backend/app/sandbox/README.md)
-- [工具集 UAT 示例](toolset/README.md)
 - [技术文档索引](docs/tech/README.md)
 - [AI 协作归档说明](docs/ai-collab/README.md)
 - [AI 仓库规则](AI协作文档/1-AI仓库规则/ai-entry-overview.md)
 - [AI 协作友好资产](AI协作文档/2-AI协作友好/)
-
-## AI 协作文档
-
-本项目引入了专门的 AI 协作文档体系，用于沉淀 AI 参与项目开发时必须遵守的规则、协作流程和可复用资产。它既是 AI 开发前的上下文入口，也是展示本项目 AI 协作过程、协作规范和工程经验的材料集合。
-
-`AI协作文档/1-AI仓库规则/` 是 AI 参与开发前必须阅读和理解的规则层。这里记录仓库级约束、技术栈边界、模块边界、协作流程和代码风格要求。AI 在处理新需求、修改代码、设计方案或进行回归测试前，应先理解这些规则，避免破坏既有架构、模块边界和协作约定。
-
-`AI协作文档/2-AI协作友好/` 是本项目在 AI 协作开发过程中沉淀的资产层。这里集中保存 SKILL、RULE、SPEC、协作案例、阶段总结、归档方法、提示技巧和其它可复用材料，用于让后续 AI 或开发者快速理解项目如何通过结构化需求、测试驱动、分阶段迭代和协作归档完成复杂功能。
-
-简单来说：
-
-- `1-AI仓库规则`：偏“进入项目前必须遵守什么”。
-- `2-AI协作友好`：偏“项目过程中沉淀了什么、如何复用这些经验”。
+- [开发迭代 & 版本线](开发迭代&版本线.md)
 
 ## 环境要求
 
@@ -101,7 +152,9 @@ WeAgent/
 - 桌面端打包需要 Windows/macOS/Linux 对应构建环境
 - Android 端需要 Android Studio、Android SDK、Gradle 可用
 
-## 后端启动
+## 快速开始
+
+### 1. 后端启动
 
 ```powershell
 cd backend
@@ -109,12 +162,13 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
+# 编辑 .env 配置 MySQL、Redis、JWT、模型等参数
 python run.py
 ```
 
-后端默认端口由 `PORT` 环境变量控制，当前开发中常用 `5002`。请确认 `.env` 中 MySQL、Redis、JWT、模型配置相关变量正确。
+后端默认端口由 `PORT` 环境变量控制，当前开发中常用 `5002`。领域服务（RD/Education/Office/RAG）作为独立 Flask 应用，由主后端通过代理路由转发。
 
-### 数据库初始化
+### 2. 数据库初始化
 
 ```sql
 CREATE DATABASE IF NOT EXISTS weagent DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -131,16 +185,14 @@ cd backend
 flask db upgrade
 ```
 
-## 构建沙箱镜像
+各领域服务有独立的数据库初始化脚本：
+- RD: `backend/services/rd/` — 首次启动自动建表
+- Office: `backend/services/office/sql/init.sql`
+- RAG: `backend/services/rag/` — 首次启动自动建表
 
-正式 Agent 会话依赖 `weagent-sandbox:latest`。首次运行或修改 `backend/app/sandbox/container/`、`backend/app/sandbox/Dockerfile` 后需要重建镜像。
+### 3. 构建沙箱镜像
 
-```powershell
-cd backend
-python -c "from app.sandbox import build_image; build_image()"
-```
-
-等价 Docker 命令：
+正式 Agent 会话依赖 `weagent-sandbox:latest`：
 
 ```powershell
 cd backend
@@ -154,9 +206,9 @@ docker images weagent-sandbox:latest
 docker ps --filter name=weagent
 ```
 
-如果创建会话时报容器接口 404，通常是旧镜像没有新接口。优先重建镜像并重启后端。
+如果创建会话时报容器接口 404，通常是旧镜像没有新接口，优先重建镜像并重启后端。
 
-## Web 端启动
+### 4. Web 端启动
 
 ```powershell
 cd frontend
@@ -170,7 +222,7 @@ npm run serve
 npm run build
 ```
 
-## 桌面端启动与打包
+### 5. 桌面端启动与打包
 
 ```powershell
 cd clients/desktop
@@ -184,11 +236,9 @@ npm run dev
 npm run electron:build
 ```
 
-产物输出在 `clients/desktop/release/`。桌面端应用名为 `WeAgent`，图标来自 `clients/desktop/logo.png`，打包脚本会生成 `logo.ico`。
+产物输出在 `clients/desktop/release/`。应用名为 `WeAgent`。桌面端不内置后端，首次进入需配置后端地址。
 
-桌面端不内置后端，首次进入需要配置外部后端地址。本机测试可填 `http://127.0.0.1:5002`，局域网测试请填后端机器 IP，例如 `http://192.168.1.100:5002`。
-
-## Android 端启动
+### 6. Android 端启动
 
 ```powershell
 cd clients/android
@@ -198,9 +248,11 @@ npm run cap:sync
 npm run cap:open
 ```
 
-真机调试时，后端地址不能填 `localhost`。请填写后端电脑在局域网中的地址，例如 `http://192.168.1.100:5002`。调试阶段已允许明文 HTTP，生产部署建议切换 HTTPS。
+真机调试时请填写后端电脑在局域网中的地址，例如 `http://192.168.1.100:5002`。
 
 ## API 概览
+
+### 主后端
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -213,11 +265,55 @@ npm run cap:open
 | GET | `/api/messages/conversation/<id>` | 会话消息历史 |
 | GET/POST | `/api/agents` | Agent 列表/创建 Agent |
 | PUT/DELETE | `/api/agents/<id>` | 更新/删除 Agent |
-| GET/POST | `/api/toolsets/categories` | 工具集分类 |
 | GET/POST | `/api/capabilities` | 能力库 |
-| POST | `/api/upload` | 上传图片文件 |
-| GET | `/api/sandbox/sessions/<id>/files/tree` | 查看容器文件树 |
+| POST | `/api/upload` | 上传文件 |
 | GET | `/api/health` | 健康检查 |
+
+### 智能研发 (RD)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET/POST | `/api/rd/projects` | 项目列表/创建项目 |
+| GET/PUT/DELETE | `/api/rd/projects/<id>` | 项目详情/更新/删除 |
+| GET/POST | `/api/rd/projects/<id>/files` | 项目文件列表/添加文件 |
+| GET/POST | `/api/rd/projects/<id>/iterations` | 迭代列表/创建迭代 |
+| GET/POST | `/api/rd/projects/<id>/requirements` | 需求列表/创建需求 |
+| GET/POST | `/api/rd/projects/<id>/bugs` | 缺陷列表/创建缺陷 |
+| GET/POST | `/api/rd/projects/<id>/reviews` | 审查列表/提交审查 |
+| GET/POST | `/api/rd/projects/<id>/builds` | 构建列表/触发构建 |
+| GET/POST | `/api/rd/projects/<id>/members` | 成员列表/添加成员 |
+| GET | `/api/rd/projects/<id>/gantt` | 甘特图数据 |
+| GET/POST | `/api/rd/repos` | 仓库列表/关联仓库 |
+
+### 智慧教育 (Education)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET/POST | `/api/edu/courses` | 课程列表/创建课程 |
+| PUT/DELETE | `/api/edu/courses/<id>` | 更新/删除课程 |
+| GET/POST | `/api/edu/assignments` | 作业列表/创建作业 |
+| GET/POST | `/api/edu/submissions` | 提交列表/提交作业 |
+| GET/POST | `/api/edu/knowledge` | 知识库内容管理 |
+| GET | `/api/edu/insights` | 学情数据分析 |
+
+### 协同办公 (Office)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET/POST | `/api/office/meetings` | 会议列表/创建会议 |
+| GET/POST | `/api/office/documents` | 公文列表/创建公文 |
+| POST | `/api/office/approvals` | 提交审批 |
+| GET/POST | `/api/office/action-items` | 行动项管理 |
+| GET/POST | `/api/office/organizations` | 组织架构管理 |
+
+### RAG 知识库
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET/POST | `/api/rag/documents` | 文档列表/上传文档 |
+| DELETE | `/api/rag/documents/<id>` | 删除文档 |
+| POST | `/api/rag/search` | 知识库检索 |
+| GET | `/api/rag/status` | 服务状态 |
 
 ## 实时事件
 
@@ -225,8 +321,7 @@ npm run cap:open
 
 常用事件：
 
-- `join`
-- `leave`
+- `join` / `leave`
 - `send_message`
 - `conversation_message_created`
 - `conversation_message_element_stream`
@@ -242,12 +337,6 @@ npm run cap:open
 cd backend
 python -m py_compile app/services/auth_service.py
 python -m pytest tests
-```
-
-如果当前环境没有安装 `pytest`：
-
-```powershell
-pip install pytest
 ```
 
 前端：
@@ -270,3 +359,4 @@ npm run build
 - 已完成且验证通过的阶段建议先提交，再进入下一个需求。
 - 合并远程分支前先分析改动范围和功能冲突，再处理代码冲突。
 - 涉及后端、消息渲染、沙箱、Agent 或工具集的改动，需要做受影响功能的回归测试。
+- 领域服务各自独立，修改某个领域服务不影响其他领域的运行。
