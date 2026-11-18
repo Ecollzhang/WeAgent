@@ -1,0 +1,49 @@
+{
+  "markdown_lines": 2228,
+  "figure_count": 24,
+  "missing_images": [],
+  "repo_path_candidates": 60,
+  "invalid_repo_paths": [],
+  "key_files": {
+    "backend/app/controllers/domain_proxy_controller.py": true,
+    "backend/app/services/conversation_service.py": true,
+    "backend/app/models/workspace.py": true,
+    "backend/services/rd/main.py": true,
+    "backend/services/rd/config.py": true,
+    "backend/services/edu/app.py": true,
+    "backend/services/edu/config.py": true,
+    "backend/services/office/app.py": true,
+    "backend/services/office/config.py": true,
+    "backend/services/rag/app.py": true,
+    "backend/services/rag/config.py": true,
+    "backend/services/rag/services/simple_vector_store.py": true,
+    "backend/services/edu/agent_policy.py": true,
+    "backend/services/edu/workflow_models.py": true,
+    "frontend/src/router/index.js": true
+  },
+  "stale_validation_details": [],
+  "ports_present": {
+    "5002": true,
+    "5101": true,
+    "5102": true,
+    "5103": true,
+    "5104": true
+  },
+  "vector_store_truth": {
+    "SimpleVectorStore_mentions": 11,
+    "Chroma_as_current": true
+  },
+  "chapter_headings": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11"
+  ]
+}

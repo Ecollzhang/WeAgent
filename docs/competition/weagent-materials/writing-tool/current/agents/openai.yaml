@@ -1,0 +1,4 @@
+interface:
+  display_name: "Write Technical Document"
+  short_description: "Write one verified Chinese technical doc."
+  default_prompt: "Use $write-technical-document to gather requirements, verify facts, choose a fitting template, and draft one Markdown technical document."

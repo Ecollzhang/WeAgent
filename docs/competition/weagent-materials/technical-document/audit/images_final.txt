@@ -1,0 +1,28 @@
+IMAGE KINDS
+- inline: 24
+
+ROWS (part | kind | size | target)
+- word/document.xml | inline | 6.69 x 3.77 | media/rId41.png
+- word/document.xml | inline | 6.69 x 5.40 | media/rId47.png
+- word/document.xml | inline | 6.69 x 3.77 | media/rId56.png
+- word/document.xml | inline | 6.69 x 1.64 | media/rId66.png
+- word/document.xml | inline | 6.69 x 3.77 | media/rId83.png
+- word/document.xml | inline | 6.69 x 3.77 | media/rId89.png
+- word/document.xml | inline | 6.69 x 3.77 | media/rId93.png
+- word/document.xml | inline | 6.69 x 3.72 | media/rId98.png
+- word/document.xml | inline | 6.69 x 3.77 | media/rId101.png
+- word/document.xml | inline | 6.69 x 3.72 | media/rId105.png
+- word/document.xml | inline | 6.69 x 3.72 | media/rId109.png
+- word/document.xml | inline | 6.69 x 3.12 | media/rId116.png
+- word/document.xml | inline | 6.69 x 3.04 | media/rId121.png
+- word/document.xml | inline | 6.69 x 3.44 | media/rId127.png
+- word/document.xml | inline | 6.69 x 2.42 | media/rId131.png
+- word/document.xml | inline | 6.69 x 2.00 | media/rId135.png
+- word/document.xml | inline | 6.69 x 3.72 | media/rId144.png
+- word/document.xml | inline | 6.69 x 3.72 | media/rId162.png
+- word/document.xml | inline | 6.69 x 3.72 | media/rId173.png
+- word/document.xml | inline | 6.69 x 3.72 | media/rId184.png
+- word/document.xml | inline | 6.69 x 4.16 | media/rId198.png
+- word/document.xml | inline | 6.69 x 3.90 | media/rId206.png
+- word/document.xml | inline | 6.69 x 4.16 | media/rId215.png
+- word/document.xml | inline | 6.69 x 4.02 | media/rId227.png
