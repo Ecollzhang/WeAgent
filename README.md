@@ -74,6 +74,7 @@ WeAgent/
 - [沙箱容器说明](backend/app/sandbox/README.md)
 - [工具集 UAT 示例](toolset/README.md)
 - [技术文档索引](docs/tech/README.md)
+- [Seedance 赛题探索原型与竞品研究报告](docs/competition/seedance-prototype/)（在该目录运行 `npm ci` 后，用 `npx vite` 预览）
 - [AI 协作归档说明](docs/ai-collab/README.md)
 - [AI 仓库规则](AI协作文档/1-AI仓库规则/ai-entry-overview.md)
 - [AI 协作友好资产](AI协作文档/2-AI协作友好/)
